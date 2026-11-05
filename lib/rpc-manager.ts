@@ -59,6 +59,7 @@ import { generateSessionTitle } from "./session-title";
 import { isAutoTitleEnabled } from "./session-title-settings";
 import { resolveShellTools } from "./powershell-settings";
 import { CHAT_ONLY_RESOURCE_LOADER_OPTIONS, contextFilesSystemPrompt } from "./chat-only";
+import { isLeanMode, LEAN_RESOURCE_LOADER_OPTIONS, LEAN_TOOL_NAMES } from "./lean-mode";
 import { createExactSystemPromptExtension } from "./exact-system-prompt";
 import { createArtifactGuideExtension } from "./artifact-guide-extension";
 import { createPiWebBuiltinExtensions, createSubagentBuiltinExtensions, snapshotWantsSubagentExtensions } from "./builtin-extensions";
@@ -2925,6 +2926,9 @@ export async function startRpcSession(
     chatOnly: selectedToolNames?.length === 0 && !subagentLoadsResources,
   });
   const chatOnly = sessionPolicy.kind === "chat-only";
+  // 全局极简档只管普通项目会话：chat 有自己的策略扩展，chat-only 本来就什么都不加载，
+  // 子会话由 lib/subagent-runtime.ts 按 profile / 请求自己决定。
+  const lean = !chatWorkspace && !chatOnly && !subagentResources && isLeanMode();
   const finishStartingSession = trackStartingSession(sessionCwd);
   const starting = (async () => {
     // Some extensions access the SDK's global theme even outside the terminal UI.
@@ -2944,18 +2948,23 @@ export async function startRpcSession(
       // tools (and activate extension tools); we narrow the ACTIVE set below.
       toolsOption = selectedToolNames.length === 0 ? [] : undefined;
     }
+    // 极简档直接把编码工具当成白名单：SDK 只注册这些，扩展与 MCP 的工具名连注册都进不来。
+    // 用户若另外钉了一个更小的预设，下面 setActiveToolsByName 那一步仍然会把它收窄。
+    if (lean) toolsOption = [...LEAN_TOOL_NAMES];
 
     // Build services first so extension-registered providers are available
     // before the SDK restores the saved model from the session file.
     // Gate untrusted project extensions so opening a repository does not run
     // its .pi/extensions code automatically (see lib/project-trust.ts, #236).
-    const trustReloadOptions = subagentResources
-      ? subagentLoadsResources
-        ? projectTrustReloadOptions(sessionCwd, agentDir)
-        : undefined
-      : chatOnly || chatWorkspace
-        ? undefined
-        : projectTrustReloadOptions(sessionCwd, agentDir);
+    const trustReloadOptions = lean
+      ? undefined
+      : subagentResources
+        ? subagentLoadsResources
+          ? projectTrustReloadOptions(sessionCwd, agentDir)
+          : undefined
+        : chatOnly || chatWorkspace
+          ? undefined
+          : projectTrustReloadOptions(sessionCwd, agentDir);
     // The chat policy reads the session's own skills and cwd, which exist only once the
     // session does, so the extension reaches them through this ref.
     // Reading a file the user names and saving to Downloads act on this computer, so they
@@ -2977,7 +2986,8 @@ export async function startRpcSession(
     // which MCP servers the session connects (ADR 0006). A resumed subagent session gets
     // the member set instead (plus pi-lsp / pi-team) — but only if its snapshot carries
     // member-extension tools, so a session created before that change stays as it was.
-    const builtins = chatOnly
+    // Lean loads none of them, and therefore builds no MCP host either.
+    const builtins = chatOnly || lean
       ? undefined
       : subagentResources
         ? snapshotWantsSubagentExtensions(subagentResources.tools)
@@ -2988,7 +2998,9 @@ export async function startRpcSession(
       cwd: sessionCwd,
       agentDir,
       settingsManager,
-      resourceLoaderOptions: subagentResources
+      resourceLoaderOptions: lean
+        ? { ...LEAN_RESOURCE_LOADER_OPTIONS }
+        : subagentResources
         ? {
             noExtensions: !subagentResources.loadExtensions,
             noSkills: !subagentResources.loadSkills,

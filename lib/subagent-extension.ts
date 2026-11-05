@@ -61,6 +61,12 @@ export interface StartSubagentRequest {
    */
   loadSkills?: boolean;
   loadExtensions?: boolean;
+  /**
+   * 极简档（对齐 cc-haha 的 lean）：这个成员不加载任何扩展、技能与上下文文件，工具收敛到
+   * 内置编码工具。缺省时不生效（保持既有行为）。与 loadSkills/loadExtensions 一起给时
+   * **lean 优先** —— 它是"整体收窄"，不是又一层局部开关。
+   */
+  lean?: boolean;
   /** 团队名：团队成员身份注入的上下文（PI_TEAM_NAME）。缺省时不注入团队上下文。 */
   teamName?: string;
   /** 成员名（PI_AGENT_NAME）：团队成员身份注入。缺省时按 team-lead 处理（保持既有行为）。 */

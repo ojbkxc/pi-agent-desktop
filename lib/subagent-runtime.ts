@@ -39,6 +39,7 @@ import { resolveShellTools } from "./powershell-settings";
 import { isBuiltInSubagentsEnabled, readSubagentSettings } from "./subagent-settings";
 import { SubagentQueue } from "./subagent-queue";
 import { createSubagentBuiltinExtensions } from "./builtin-extensions";
+import { LEAN_TOOL_NAMES } from "./lean-mode";
 import type { McpHost } from "./mcp-host";
 import { addWorktree, removeWorktree } from "./worktree";
 import { randomUUID } from "node:crypto";
@@ -230,13 +231,21 @@ export function createSubagentController(
       // 请求可以覆盖资源策略：团队派发的成员用它把权限开到最大（技能与扩展都加载）。
       // 覆写发生在**解析处**，下游一律照旧读 `profile.*` —— 这样「策略由 profile 流向
       // 会话」这条链路（以及钉住它的哨兵）保持成立，而 preference 只是被提前合进来。
-      const profile = (request.loadSkills === undefined && request.loadExtensions === undefined)
-        ? resolvedProfile
-        : {
+      // 极简档（request.lean）是整体收窄，优先级高于 loadSkills/loadExtensions。
+      const profile = request.lean
+        ? {
             ...resolvedProfile,
-            ...(request.loadSkills !== undefined ? { loadSkills: request.loadSkills } : {}),
-            ...(request.loadExtensions !== undefined ? { loadExtensions: request.loadExtensions } : {}),
-          };
+            tools: [...LEAN_TOOL_NAMES],
+            loadSkills: false,
+            loadExtensions: false,
+          }
+        : (request.loadSkills === undefined && request.loadExtensions === undefined)
+          ? resolvedProfile
+          : {
+              ...resolvedProfile,
+              ...(request.loadSkills !== undefined ? { loadSkills: request.loadSkills } : {}),
+              ...(request.loadExtensions !== undefined ? { loadExtensions: request.loadExtensions } : {}),
+            };
 
       const runInBackground = request.runInBackground ?? profile.runInBackground;
       const isolation = profile.isolation === "off" ? undefined : request.isolation ?? profile.isolation;
@@ -276,7 +285,7 @@ export function createSubagentController(
       if (!chatOnly) initTheme();
       // 团队成员拿到的内置扩展（codemode / tool-search / mcp / pi-lsp / pi-team）。
       // 与 rpc-manager 的恢复路径必须装配同一批，否则「跑一次→重开」行为不一致。
-      const memberBuiltins = await createSubagentBuiltinExtensions({ agentDir });
+      const memberBuiltins = await createSubagentBuiltinExtensions({ agentDir, lean: request.lean === true });
       const services = await createAgentSessionServices({
         cwd: childCwd,
         agentDir,
