@@ -114,47 +114,37 @@ jobs:
           tagName: v__VERSION__
           releaseName: pi-agent-desktop v__VERSION__
           releaseBody: |
-            ## Pi Agent Desktop 0.8.2
+            ## Pi Agent Desktop 0.8.3 (fork)
+
+            This is the **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2.
 
             ### New
 
-            - **Archive single sessions.** Right-click a project session, or use its "…" menu, and choose "Archive". It moves out of the project's list into a "Show archived (n)" fold under that project; search still finds it, and "Unarchive" brings it back.
-            - **Name sessions automatically.** Settings › General › "Name sessions automatically" (off by default). After the first reply, the session's model writes a title for an unnamed session, at the cost of one extra short request per session.
+            - **Built-in cross-end extensions.** `lsp-mcp` (one `lsp` tool with 12 actions, plus diagnostics woven in after write/edit) and `pi-team` (team agent orchestration: 10 `team_*` tools, mailbox, lifecycle, four `/team*` commands) now load alongside codemode / tool-search / mcp, wired through `lib/pi-extension-builtins.ts` and `lib/pi-team-host.ts`.
+            - **Agent team swimlane view.** A `?view=teams` page that projects team runs into swimlanes (`lib/agent-teams-swimlane.ts`, `components/AgentTeams/`).
 
-            ### Improved
+            ### Notes
 
-            - **Session switching is fast again.** 0.8.1 released loaded sessions once more than 4 were idle, so switching back to one had to load it from scratch. Idle sessions are now released only when they add up to more than 256 MiB.
-            - **Lower GPU use in the sidebar**, most noticeable on Windows: the sidebar no longer blurs its (opaque) background, and the running and unread indicators use lighter animations that stop when reduced motion is on.
-            - **pi 1.5.0.** Adds GPT-6.1 Terra (OpenAI, Azure OpenAI and OpenAI Codex), handles large streamed tool calls with far less CPU and memory, lets tool search find tools from Chinese and other non-English queries, and signs in to more MCP servers that use OAuth.
-            - **A quieter chat.** Assistant messages no longer show their cost and token counts, and the new-session screen no longer shows starter suggestion chips.
-
-            ### Fixed
-
-            - A scheduled task's time limit now covers the whole run, so a run whose session never starts or whose prompt is never accepted can no longer hold a scheduler slot forever.
-            - Renaming a session while it is open now updates its title right away and keeps it in the session's history.
+            - The two extensions resolve from their Git sources, so a plain `clone` + `npm ci` is enough — no sibling checkout required.
+            - Updates point at **this fork's** releases.
 
             Bundled components: pi 1.5.0, pi-web 0.10.0.
 
             ---
 
-            ## Pi Agent Desktop 0.8.2
+            ## Pi Agent Desktop 0.8.3（fork）
+
+            这是 pi-agent-desktop 的 **ojbkxc fork**，基于上游 0.8.2 构建。
 
             ### 新增
 
-            - **单个会话也能归档。** 右键项目里的会话或点它的“…”菜单，选择“归档”，会话会从项目列表移到该项目下的“显示已归档（n）”折叠区；搜索仍能找到它，选择“取消归档”即可恢复。
-            - **自动命名会话。** “设置 › 通用 › 自动命名会话”（默认关闭）。第一轮回复结束后，用当前会话的模型为未命名的会话生成标题，每个会话多一次简短请求。
+            - **内置跨端扩展。** `lsp-mcp`（单个 `lsp` 工具、12 个 action，write/edit 后自动织入诊断）与 `pi-team`（团队 agent 编排：10 个 `team_*` 工具、邮箱、生命周期、4 个 `/team*` 命令）现在与 codemode / tool-search / mcp 一起作为内置扩展加载，接线在 `lib/pi-extension-builtins.ts` 与 `lib/pi-team-host.ts`。
+            - **团队泳道图。** 新增 `?view=teams` 页面，把团队运行投影成泳道（`lib/agent-teams-swimlane.ts`、`components/AgentTeams/`）。
 
-            ### 改进
+            ### 说明
 
-            - **切换会话重新变快。** 0.8.1 在闲置会话超过 4 个时就会释放它们，切回去时需要重新加载。现在只有闲置会话合计超过 256 MiB 时才会释放。
-            - **侧栏 GPU 占用更低**，Windows 上最明显：侧栏不再对（不透明的）背景做模糊，运行中和未读标记改用更轻的动画，开启“减少动态效果”时会停止。
-            - **pi 1.5.0。** 新增 GPT-6.1 Terra（OpenAI、Azure OpenAI 和 OpenAI Codex）；流式输出大型工具调用时 CPU 和内存占用大幅降低；工具搜索支持中文等非英文查询；可以登录更多使用 OAuth 的 MCP 服务器。
-            - **对话界面更清爽。** 助手消息下方不再显示费用和 token 数，新会话页面也不再显示建议提示。
-
-            ### 修复
-
-            - 定时任务的时间限制现在覆盖整个运行过程：会话始终没有启动、或提示始终没有被接收的运行，不会再一直占用调度名额。
-            - 会话打开时重命名，标题会立即更新，并正确记录在会话历史中。
+            - 两个扩展的依赖走 Git 源，clone 后 `npm ci` 即可，**不需要三仓并列**。
+            - 更新源指向**本 fork** 的 Release。
 
             内置组件版本：pi 1.5.0、pi-web 0.10.0。
           releaseDraft: true
@@ -252,6 +242,11 @@ jobs:
   # release-workflows.test.mjs slices the manifest job up to `notify:`.
   homebrew:
     needs: manifest
+    # The cask lives in the upstream's own Homebrew tap: its url/homepage point at
+    # abcwyc/pi-agent-desktop, so a fork running this job would rewrite
+    # Casks/pi-agent.rb to a version the upstream has never released and then push
+    # that broken cask to main.
+    if: github.repository == 'abcwyc/pi-agent-desktop'
     runs-on: ubuntu-latest
     steps:
       - name: Check out pi-agent-desktop
