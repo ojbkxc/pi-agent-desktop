@@ -220,8 +220,18 @@ export function createSubagentController(
 
     let isolatedWorktree: { path: string; branch: string } | undefined;
     try {
-      const profile = resolveSubagentProfile(parent.cwd, request.profile);
-      if (!profile) throw new Error(`Unknown or disabled subagent profile: ${request.profile}`);
+      const resolvedProfile = resolveSubagentProfile(parent.cwd, request.profile);
+      if (!resolvedProfile) throw new Error(`Unknown or disabled subagent profile: ${request.profile}`);
+      // 请求可以覆盖资源策略：团队派发的成员用它把权限开到最大（技能与扩展都加载）。
+      // 覆写发生在**解析处**，下游一律照旧读 `profile.*` —— 这样「策略由 profile 流向
+      // 会话」这条链路（以及钉住它的哨兵）保持成立，而 preference 只是被提前合进来。
+      const profile = (request.loadSkills === undefined && request.loadExtensions === undefined)
+        ? resolvedProfile
+        : {
+            ...resolvedProfile,
+            ...(request.loadSkills !== undefined ? { loadSkills: request.loadSkills } : {}),
+            ...(request.loadExtensions !== undefined ? { loadExtensions: request.loadExtensions } : {}),
+          };
 
       const runInBackground = request.runInBackground ?? profile.runInBackground;
       const isolation = profile.isolation === "off" ? undefined : request.isolation ?? profile.isolation;
@@ -230,9 +240,6 @@ export function createSubagentController(
       }
       const childCwd = isolatedWorktree?.path ?? parent.cwd;
       const inheritContext = request.inheritContext ?? profile.inheritContext;
-      // 能力可被请求覆盖（团队派发的成员用它们把权限开到最大）。缺省仍走 profile。
-      const loadSkills = request.loadSkills ?? profile.loadSkills;
-      const loadExtensions = request.loadExtensions ?? profile.loadExtensions;
       const maxTurns = request.maxTurns ?? profile.maxTurns;
       if (maxTurns !== undefined && (!Number.isFinite(maxTurns) || maxTurns < 0)) {
         throw new Error("max_turns must be a non-negative number");
@@ -253,8 +260,8 @@ export function createSubagentController(
       const promptPlan = buildSubagentPromptPlan({
         profileSystemPrompt: profile.systemPrompt,
         tools: profile.tools,
-        loadSkills,
-        loadExtensions,
+        loadSkills: profile.loadSkills,
+        loadExtensions: profile.loadExtensions,
         promptMode: profile.promptMode,
         task: appendSubagentInputFiles(request.task, inputFiles),
         inheritedParentContext,
@@ -268,8 +275,8 @@ export function createSubagentController(
         modelRuntime: parentModelRuntime,
         settingsManager,
         resourceLoaderOptions: {
-          noExtensions: !loadExtensions,
-          noSkills: !loadSkills,
+          noExtensions: !profile.loadExtensions,
+          noSkills: !profile.loadSkills,
           noPromptTemplates: true,
           noThemes: true,
           noContextFiles: true,
@@ -285,12 +292,12 @@ export function createSubagentController(
             ? { extensionFactories: [createExactSystemPromptExtension(() => promptPlan.exactSystemPrompt)] }
             : {}),
         },
-        ...((loadExtensions || loadSkills)
+        ...((profile.loadExtensions || profile.loadSkills)
           ? { resourceLoaderReloadOptions: projectTrustReloadOptions(childCwd, agentDir) }
           : {}),
       });
 
-      const extensionToolNames = loadExtensions
+      const extensionToolNames = profile.loadExtensions
         ? profile.extensionTools?.length
           ? selectSubagentExtensionTools(
             services.resourceLoader.getExtensions().extensions,
@@ -322,8 +329,8 @@ export function createSubagentController(
           version: 1,
           appendSystemPrompt: [...appendSystemPrompt],
           tools: [...activeTools],
-          loadSkills,
-          loadExtensions,
+          loadSkills: profile.loadSkills,
+          loadExtensions: profile.loadExtensions,
         ...(promptPlan.exactSystemPrompt !== undefined ? { exactSystemPrompt: promptPlan.exactSystemPrompt } : {}),
         },
         ...(isolatedWorktree ? { worktreePath: isolatedWorktree.path, worktreeBranch: isolatedWorktree.branch } : {}),

@@ -18,8 +18,19 @@ export const AGENT_TEAM_REQUEST_INSTRUCTION =
 
 const REQUEST_BLOCK = new RegExp(`${OPEN_TAG}[\\s\\S]*?${CLOSE_TAG}\\n*`);
 
-/** 把消息包成「请用 Agent Team 处理」。用户原文保持在块之后。 */
+/**
+ * 命令类消息不包装：`/`（扩展 / 内置斜杠命令）与 `!`（shell）必须在消息**开头**，
+ * 服务端和 useAgentSession 都靠首字符判定；一旦被团队块顶开就会被当成普通提示词发给模型，
+ * 扩展对话框、bash 命令都会静默失效（e2e/extension-dialog.mjs 就是这么抓到的）。
+ */
+export function isAgentTeamCommand(text: string): boolean {
+  const trimmed = text.trimStart();
+  return trimmed.startsWith("/") || trimmed.startsWith("!");
+}
+
+/** 把消息包成「请用 Agent Team 处理」。用户原文保持在块之后。命令类消息原样返回。 */
 export function withAgentTeamRequest(content: string): string {
+  if (isAgentTeamCommand(content)) return content;
   const block = `${OPEN_TAG}\n${AGENT_TEAM_REQUEST_INSTRUCTION}\n${CLOSE_TAG}`;
   return content ? `${block}\n\n${content}` : block;
 }
