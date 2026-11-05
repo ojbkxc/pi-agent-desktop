@@ -114,14 +114,17 @@ jobs:
           tagName: v__VERSION__
           releaseName: pi-agent-desktop v__VERSION__
           releaseBody: |
-            ## Pi Agent Desktop 0.8.3 (fork)
+            ## Pi Agent Desktop 0.8.4 (fork)
 
             This is the **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2.
 
             ### New
 
-            - **Built-in cross-end extensions.** `lsp-mcp` (one `lsp` tool with 12 actions, plus diagnostics woven in after write/edit) and `pi-team` (team agent orchestration: 10 `team_*` tools, mailbox, lifecycle, four `/team*` commands) now load alongside codemode / tool-search / mcp, wired through `lib/pi-extension-builtins.ts` and `lib/pi-team-host.ts`.
-            - **Agent team swimlane view.** A `?view=teams` page that projects team runs into swimlanes (`lib/agent-teams-swimlane.ts`, `components/AgentTeams/`).
+            - **Teammates are real agents now.** A spawned team member loads the same built-in extensions a normal session does — `codemode` / `tool-search` / `mcp` (so teammates can call MCP tools and benefit from deferred tool declarations) plus `lsp` for code navigation and a team **mailbox** (`team_message` / `team_status` / `team_wait` / `team_ticket` …). Dispatching a teammate from a teammate is impossible by construction, not merely intercepted.
+            - **Read-only teammates stay read-only through MCP.** The read-only MCP policy now reads a subagent's own tool snapshot, so `explore` / `plan` teammates can no longer write through an MCP server.
+            - **Lean mode.** A global switch (Settings › General › Chat) that drops extensions, skills, prompt templates and context files from a project session, keeping only the built-in coding tools — and teammates spawned while it is on are narrowed the same way.
+            - **Agent Team switch.** On by default; each message can ask for a team. Slash commands and `!shell` are never wrapped.
+            - **Carried over from the previous build:** Team plan approval now launches the members it promised, and teammates get an identity (`PI_AGENT_NAME` / `PI_TEAM_NAME`). The Agent team swimlane view (`?view=teams`) and the built-in `lsp` / `pi-team` extensions ship as before.
 
             ### Notes
 
@@ -132,14 +135,17 @@ jobs:
 
             ---
 
-            ## Pi Agent Desktop 0.8.3（fork）
+            ## Pi Agent Desktop 0.8.4（fork）
 
             这是 pi-agent-desktop 的 **ojbkxc fork**，基于上游 0.8.2 构建。
 
             ### 新增
 
-            - **内置跨端扩展。** `lsp-mcp`（单个 `lsp` 工具、12 个 action，write/edit 后自动织入诊断）与 `pi-team`（团队 agent 编排：10 个 `team_*` 工具、邮箱、生命周期、4 个 `/team*` 命令）现在与 codemode / tool-search / mcp 一起作为内置扩展加载，接线在 `lib/pi-extension-builtins.ts` 与 `lib/pi-team-host.ts`。
-            - **团队泳道图。** 新增 `?view=teams` 页面，把团队运行投影成泳道（`lib/agent-teams-swimlane.ts`、`components/AgentTeams/`）。
+            - **团队成员现在是"真" agent。** 派出的成员会加载和普通会话同一批内置扩展 —— `codemode` / `tool-search` / `mcp`（成员因此能调 MCP 工具，也用得上延迟工具声明的省 token 机制）、用于代码导航的 `lsp`，以及团队**邮箱**（`team_message` / `team_status` / `team_wait` / `team_ticket` 等）。成员再派成员是**结构性不可能**，不只是被拦截。
+            - **只读成员在 MCP 侧也是只读的。** 只读 MCP 策略现在会读子会话自己的工具快照，`explore` / `plan` 成员不能再通过 MCP 服务器写入。
+            - **极简档。** 全局开关（设置 › 通用 › 聊天）：项目会话不加载扩展、技能、提示模板与上下文文件，只保留内置编码工具；开启期间派出的成员同样收窄。
+            - **Agent Team 开关。** 默认打开，每条消息可选择用团队处理；斜杠命令与 `!shell` 永远不被包装。
+            - **沿用上一版的内容**：团队计划审批后会真的把成员派出去；成员拿到身份（`PI_AGENT_NAME` / `PI_TEAM_NAME`）。团队泳道图（`?view=teams`）与内置的 `lsp` / `pi-team` 扩展照旧。
 
             ### 说明
 
