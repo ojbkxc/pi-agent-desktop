@@ -53,6 +53,7 @@ import {
   SUBAGENT_CONTROL_TOOL_NAMES,
 } from "./subagents";
 import { createSubagentController } from "./subagent-runtime";
+import { createPiExtensionBuiltins } from "./pi-extension-builtins";
 import { isBuiltInSubagentsEnabled } from "./subagent-settings";
 import { generateSessionTitle } from "./session-title";
 import { isAutoTitleEnabled } from "./session-title-settings";
@@ -3042,6 +3043,9 @@ export async function startRpcSession(
                 () => listSubagentProfiles(sessionCwd),
                 isBuiltInSubagentsEnabled,
               ),
+              // 跨端扩展（builtin:pi-lsp / builtin:pi-team）：复用同一份 subagent
+              // runtime 作为团队宿主桥。只进普通会话，见 lib/pi-extension-builtins.ts。
+              ...createPiExtensionBuiltins({ subagentController: SUBAGENT_CONTROLLER }),
             ],
             extensionsOverride: (base) => preferUserBashExtension(preferPiWebSubagentExtension(base)),
           },

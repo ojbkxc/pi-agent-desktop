@@ -25,6 +25,7 @@ import { LazyTerminalPanel as TerminalPanel, preloadTerminalPanel } from "./Lazy
 const FileViewer = dynamic(() => import("./FileViewer").then((m) => m.FileViewer), { ssr: false });
 const FileExplorer = dynamic(() => import("./FileExplorer").then((m) => m.FileExplorer), { ssr: false });
 const TasksView = dynamic(() => import("./tasks/TasksView").then((m) => m.TasksView), { ssr: false });
+const AgentTeamsView = dynamic(() => import("./AgentTeams/AgentTeamsView").then((m) => m.AgentTeamsView), { ssr: false });
 const ScheduledView = dynamic(() => import("./scheduled/ScheduledView").then((m) => m.ScheduledView), { ssr: false });
 import { openFileTab, saveFileViewerState } from "./file-tab-state";
 import { SettingsPanel } from "./SettingsPanel";
@@ -113,10 +114,10 @@ import { getProjectDisplayName } from "@/lib/project-display";
 
 type SessionCopyField = "file" | "id" | "projectDir" | "gitBranch" | "gitWorktree";
 /** A page covering the chat area, named by `?view=`. */
-type WorkspaceView = "tasks" | "scheduled" | "artifacts" | null;
+type WorkspaceView = "tasks" | "scheduled" | "artifacts" | "teams" | null;
 
 function parseWorkspaceView(value: string | null | undefined): WorkspaceView {
-  return value === "tasks" || value === "scheduled" || value === "artifacts" ? value : null;
+  return value === "tasks" || value === "scheduled" || value === "artifacts" || value === "teams" ? value : null;
 }
 type AutoNameStatus =
   | { kind: "idle" }
@@ -204,6 +205,7 @@ export function AppShell() {
   const tasksOpen = workspaceView === "tasks";
   const scheduledOpen = workspaceView === "scheduled";
   const artifactsOpen = workspaceView === "artifacts";
+  const teamsOpen = workspaceView === "teams";
   const pageOpen = workspaceView !== null;
   // Read by restoreWorkspaceContext and handleSelectSession; those identities
   // must not change when a page opens.
@@ -1391,6 +1393,7 @@ export function AppShell() {
   const handleOpenTasks = useCallback(() => openWorkspaceView("tasks"), [openWorkspaceView]);
   const handleOpenScheduled = useCallback(() => openWorkspaceView("scheduled"), [openWorkspaceView]);
   const handleOpenArtifacts = useCallback(() => openWorkspaceView("artifacts"), [openWorkspaceView]);
+  const handleOpenTeams = useCallback(() => openWorkspaceView("teams"), [openWorkspaceView]);
 
   // Validated and allow-listed like any project pick, which /api/models needs for the new folder.
   const handleBrowseScheduledFolder = useCallback(
@@ -1898,6 +1901,8 @@ export function AppShell() {
     ? translate("scheduled.title")
     : artifactsOpen
       ? translate("artifacts.page.title")
+    : teamsOpen
+      ? translate("teams.title")
     : selectedSession
       ? selectedSession.name || selectedSession.firstMessage || translate("appshell.untitledTask")
       : showChat
@@ -1967,6 +1972,8 @@ export function AppShell() {
         onSessionsChange={handleSessionsChange}
         onOpenTasks={handleOpenTasks}
         tasksOpen={tasksOpen}
+        onOpenTeams={handleOpenTeams}
+        teamsOpen={teamsOpen}
         onOpenScheduled={handleOpenScheduled}
         scheduledOpen={scheduledOpen}
         onOpenArtifacts={handleOpenArtifacts}
@@ -2950,6 +2957,11 @@ export function AppShell() {
           <TasksView
             sessions={sessionCatalog}
             runningSessionIds={runningSessionIds}
+            onOpenSession={(sessionId) => void handleOpenSession(sessionId)}
+          />
+        )}
+        {teamsOpen && (
+          <AgentTeamsView
             onOpenSession={(sessionId) => void handleOpenSession(sessionId)}
           />
         )}

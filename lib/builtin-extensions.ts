@@ -15,6 +15,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { McpHost, type McpHostOptions } from "./mcp-host";
 import { createPiWebMcpTransportFactory } from "./mcp-transport";
+import { PI_EXTENSION_BUILTIN_NAMES } from "./pi-extension-names";
 import { loadPiSdkInternals, type PiSdkInternals, type PiSdkInternalsResult } from "./pi-sdk-internals";
 import { mayReadProjectConfigNow } from "./project-trust";
 import { PROJECT_SETTINGS_MAX_BYTES, readRegularFileText } from "./regular-file";
@@ -226,7 +227,7 @@ export function createMcpExtensionConfigLoader(
 // Whether the settings switch a built-in off
 // ---------------------------------------------------------------------------
 
-export const BUILTIN_EXTENSION_NAMES = ["codemode", "tool-search", "mcp"] as const;
+export const BUILTIN_EXTENSION_NAMES = ["codemode", "tool-search", "mcp", ...PI_EXTENSION_BUILTIN_NAMES] as const;
 export type BuiltinExtensionName = typeof BUILTIN_EXTENSION_NAMES[number];
 
 export interface BuiltinExtensionSwitch {

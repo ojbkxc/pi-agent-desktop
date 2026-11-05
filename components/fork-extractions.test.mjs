@@ -329,6 +329,18 @@ const FORK_FEATURES = [
     markers: ["<TasksView", "handleOpenTasks", 'value === "tasks"'],
   },
   {
+    name: "Teams entry in the sidebar",
+    file: "components/SessionSidebar.tsx",
+    // The Agent Teams swimlane page entry; losing the row leaves the feature unreachable.
+    markers: ["TeamsSidebarRow", "onOpenTeams"],
+  },
+  {
+    name: "Teams page in AppShell",
+    file: "components/AppShell.tsx",
+    // The fork's Agent Teams swimlane page, its own `?view=teams` state alongside Tasks.
+    markers: ["<AgentTeamsView", "handleOpenTeams", 'value === "teams"'],
+  },
+  {
     name: "Remote access settings and Notify this device",
     file: "components/SettingsPanel.tsx",
     markers: ["<RemoteAccessSection />"],

@@ -47,6 +47,7 @@ import { ArchivedProjectsSection } from "./ArchivedProjectsSection";
 import { ScheduledSidebarRow } from "./scheduled/ScheduledSidebarRow";
 import { ArtifactsSidebarRow } from "./artifacts/ArtifactsSidebarRow";
 import { TasksSidebarRow } from "./tasks/TasksSidebarRow";
+import { TeamsSidebarRow } from "./AgentTeams/TeamsSidebarRow";
 import { isScheduledRunSession } from "@/hooks/useScheduledTasks";
 import { prefetchSessionData } from "@/lib/session-data-cache";
 import { isImeComposing } from "@/lib/ime";
@@ -99,6 +100,9 @@ interface Props {
   artifactsOpen?: boolean;
   onOpenTasks?: () => void;
   tasksOpen?: boolean;
+  /** Opens the Agents (team swimlane) page; the row under Tasks is absent without it. */
+  onOpenTeams?: () => void;
+  teamsOpen?: boolean;
 }
 
 interface WorktreeState {
@@ -299,7 +303,7 @@ function readIdSetPref(key: Parameters<typeof getPrefJson>[0]): Set<string> {
     : new Set();
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onChatWorkspaceCwdChange, onProjectsChange, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange, headerControls, onOpenTerminal, onOpenScheduled, scheduledOpen = false, onOpenArtifacts, artifactsOpen = false, onOpenTasks, tasksOpen = false }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onChatWorkspaceCwdChange, onProjectsChange, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange, headerControls, onOpenTerminal, onOpenScheduled, scheduledOpen = false, onOpenArtifacts, artifactsOpen = false, onOpenTasks, tasksOpen = false, onOpenTeams, teamsOpen = false }: Props) {
   const { t } = useI18n();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [chatWorkspaceCwd, setChatWorkspaceCwd] = useState<string | null>(null);
@@ -1883,6 +1887,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         </button>
 
         {onOpenTasks && <TasksSidebarRow active={tasksOpen} runningCount={runningSessionIds.size} onOpen={onOpenTasks} />}
+        {onOpenTeams && <TeamsSidebarRow active={teamsOpen} runningCount={0} onOpen={onOpenTeams} />}
         {onOpenScheduled && <ScheduledSidebarRow active={scheduledOpen} onOpen={onOpenScheduled} />}
         {onOpenArtifacts && <ArtifactsSidebarRow active={artifactsOpen} onOpen={onOpenArtifacts} />}
       </div>

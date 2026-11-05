@@ -1,0 +1,623 @@
+/**
+ * 泳道数据投影（pi-web 专属，只读）。
+ *
+ * 设计文档 docs/agent-teams-design.md §7 定义了给 H5 渲染的 `TeamWorkbenchSnapshot`：
+ * 每成员一条水平泳道（y=成员，x=时间），成员事件节点 + 跨泳道流向 + 任务依赖。
+ * 本模块把它从 pi-team 落盘的团队文件投影出来，**只读、不改会话内部状态**。
+ *
+ * 数据来源（~/.pi/agent/teams/<team>/，见 pi-team teamHelpers / teamPlanStore /
+ * teamLifecycle / teammateMailbox）：
+ *   - config.json     TeamFile（成员名册）
+ *   - plan.json       TeamPlanRecord（tasks = 任务依赖图；members 带运行时）
+ *   - lifecycle.json  成员运行态（idle/running/parked/aborted）
+ *   - inboxes/*.json + *.history.jsonl  邮箱消息（谁→谁）
+ *   - accepted.jsonl  验收账本（成员→lead 的交付）
+ *
+ * 纯投影 + 纯布局：本模块**不 import node:fs**，客户端组件（AgentTermsView）与
+ * 服务端路由都能安全 import。磁盘读取在 lib/agent-teams-swimlane-store.ts（服务端专用）。
+ *
+ * 兼容层：快照同时输出 `tasks[]`（lane-diagram.html 消费的 `{id,subject,owner,status,blockedBy}`
+ * 形态）与设计文档 §7.1 的 `tickets[]/lanes[]/flows[]/taskAnchors[]`，一份数据喂两种渲染。
+ */
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 输入：pi-team 落盘结构的结构类型（不 import pi-team，投影保持独立可测）
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** config.json 里的成员（子集，够投影用）。 */
+export interface TeamFileMemberLike {
+  agentId: string;
+  name: string;
+  agentType?: string;
+  model?: string;
+  providerId?: string | null;
+  providerName?: string;
+  effortLevel?: string;
+  color?: string;
+  joinedAt: number;
+  cwd: string;
+  worktreePath?: string;
+  sessionId?: string;
+  isActive?: boolean;
+  lastError?: string;
+}
+
+/** config.json（TeamFile）。 */
+export interface TeamFileLike {
+  name: string;
+  description?: string;
+  createdAt: number;
+  leadAgentId: string;
+  leadSessionId?: string;
+  members: TeamFileMemberLike[];
+}
+
+/** plan.json 的成员（带运行时）。 */
+export interface PlanMemberLike {
+  id: string;
+  name: string;
+  agentType?: string;
+  runtime?: { providerId?: string; modelId?: string; effortLevel?: string };
+}
+
+/** plan.json 的任务（依赖图的一环）。 */
+export interface PlanTaskLike {
+  id: string;
+  subject: string;
+  description?: string;
+  ownerId?: string;
+  dependencies: string[];
+}
+
+/** plan.json（TeamPlanRecord，取投影需要的字段）。 */
+export interface PlanLike {
+  planId?: string;
+  state?: string;
+  revision?: number;
+  incarnationId?: string;
+  createdAt?: number;
+  updatedAt?: number;
+  members?: PlanMemberLike[];
+  tasks?: PlanTaskLike[];
+}
+
+/** lifecycle.json 的成员条目。 */
+export type LifecycleStatus = "idle" | "running" | "parked" | "aborted";
+
+export interface LifecycleEntryLike {
+  name: string;
+  sessionId?: string;
+  sessionFile?: string;
+  status: LifecycleStatus;
+  generation?: number;
+  parkedAt?: number;
+  updatedAt?: number;
+  lastError?: string;
+}
+
+/** 邮箱消息（inboxes/*.json 与 *.history.jsonl）。 */
+export interface MailboxMessageLike {
+  id?: string;
+  from: string;
+  /** 收件人：邮箱是按收件人分目录的，读取时由读取器补上（落盘消息体本身没有该字段）。 */
+  to?: string;
+  text: string;
+  timestamp: string;
+  read?: boolean;
+  color?: string;
+  summary?: string;
+}
+
+/** accepted.jsonl 的一条验收记录。 */
+export interface AcceptedRecordLike {
+  member: string;
+  sessionId?: string;
+  summary?: string;
+  result?: string;
+  at: string;
+}
+
+export interface SwimlaneInput {
+  teamName: string;
+  team: TeamFileLike;
+  plan?: PlanLike | null;
+  lifecycle?: Record<string, LifecycleEntryLike>;
+  /** 该团队全部邮箱消息（各成员 live + history 合并去重后由调用方提供）。 */
+  messages?: MailboxMessageLike[];
+  accepted?: AcceptedRecordLike[];
+  /** 快照生成时间（ISO）；缺省由调用方传入，保持纯函数确定性。 */
+  generatedAt?: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 输出：TeamWorkbenchSnapshot（设计文档 §7.1）+ lane-diagram 兼容的 tasks[]
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type MemberStatus = "running" | "idle" | "completed" | "failed" | "aborted" | "queued";
+
+export interface WorkbenchTeam {
+  id: string;
+  name: string;
+  description: string;
+  createdAt: string;
+  leadSessionId: string | null;
+  status: "forming" | "running" | "finishing" | "completed" | "ended";
+  incarnationId: string;
+}
+
+export interface WorkbenchMember {
+  id: string;
+  name: string;
+  role: string;
+  model: string | null;
+  providerName: string | null;
+  color: string;
+  status: MemberStatus;
+  activity: "active" | "idle";
+  sessionId: string | null;
+  cwd: string;
+  worktreePath: string | null;
+  lastError: string | null;
+  joinedAt: string;
+}
+
+export interface WorkbenchAssignment {
+  id: string;
+  status: "pending" | "running" | "ended";
+  sessionId: string | null;
+  startedAt: string | null;
+}
+
+export interface WorkbenchTicket {
+  id: string;
+  subject: string;
+  description: string;
+  ownerId: string | null;
+  status: "open" | "ended";
+  dependencies: string[];
+  assignments: WorkbenchAssignment[];
+}
+
+export type SwimlaneEventType = "spawn" | "task" | "message" | "report";
+
+export interface SwimlaneEvent {
+  seq: number;
+  at: string;
+  type: SwimlaneEventType;
+  /** 事件摘要（中文可读）。 */
+  detail: string;
+  /** task 事件：任务 ID。 */
+  taskId?: string;
+  /** message 事件：来源与去向。 */
+  from?: string;
+  to?: string;
+  text?: string;
+}
+
+export interface WorkbenchLane {
+  memberId: string;
+  name: string;
+  role: string;
+  color: string;
+  status: MemberStatus;
+  events: SwimlaneEvent[];
+}
+
+export interface WorkbenchFlow {
+  from: string;
+  to: string;
+  at: string;
+  text: string;
+  kind: "message" | "report";
+  ticketId?: string;
+  state?: string;
+}
+
+export interface WorkbenchTaskAnchor {
+  ticketId: string;
+  memberId: string;
+  status: "pending" | "in_progress" | "completed" | "aborted";
+  messageId: string | null;
+  timestamp: string;
+}
+
+/** lane-diagram.html 消费的扁平任务形态（cc-haha agentTeamsModel 对齐）。 */
+export interface WorkbenchTask {
+  id: string;
+  subject: string;
+  owner: string;
+  status: "pending" | "in_progress" | "completed";
+  blockedBy: string[];
+}
+
+export interface TeamWorkbenchSnapshot {
+  version: 1;
+  generatedAt: string;
+  team: WorkbenchTeam;
+  members: WorkbenchMember[];
+  tickets: WorkbenchTicket[];
+  lanes: WorkbenchLane[];
+  flows: WorkbenchFlow[];
+  taskAnchors: WorkbenchTaskAnchor[];
+  /** lane-diagram.html 直接消费的兼容数组（由 tickets 投影）。 */
+  tasks: WorkbenchTask[];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 纯投影
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PALETTE = ["blue", "green", "purple", "orange", "teal", "pink", "red"];
+
+/** 成员组内配色：显式 color 优先，其次按名册顺序取调色板，lead 固定 gray。 */
+function colorForMember(member: TeamFileMemberLike, index: number, isLead: boolean): string {
+  if (member.color) return member.color;
+  if (isLead) return "gray";
+  return PALETTE[(index - 1 + PALETTE.length) % PALETTE.length];
+}
+
+/** pi-team 生命周期态 → 泳道成员态（parked 视作 idle；lead 恒 running）。 */
+function toMemberStatus(status: LifecycleStatus | undefined, isLead: boolean): MemberStatus {
+  if (isLead) return "running";
+  switch (status) {
+    case "running":
+      return "running";
+    case "aborted":
+      return "aborted";
+    case "parked":
+    case "idle":
+    case undefined:
+      return "idle";
+    default:
+      return "queued";
+  }
+}
+
+/** 从目标时间是否较新推断活动态；无更新时间按 idle。 */
+function activityOf(status: MemberStatus): "active" | "idle" {
+  return status === "running" ? "active" : "idle";
+}
+
+function isoFromMillis(value: number | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? new Date(value).toISOString() : "";
+}
+
+/**
+ * 把「成员名 → 该成员是否有验收记录」建成集合，用于判定 ticket 是否 ended。
+ * accepted.jsonl 的 member 是成员名。
+ */
+function acceptedMembers(accepted: readonly AcceptedRecordLike[]): Set<string> {
+  return new Set(accepted.map((record) => record.member));
+}
+
+/** 把 plan 成员 id 映射到 config 成员（按 name 对齐），得到稳定的 memberId（agentId）。 */
+function buildPlanMemberIdMap(team: TeamFileLike, plan: PlanLike | null | undefined): Map<string, string> {
+  const byName = new Map(team.members.map((member) => [member.name, member.agentId]));
+  const map = new Map<string, string>();
+  for (const planMember of plan?.members ?? []) {
+    const agentId = byName.get(planMember.name);
+    if (agentId) map.set(planMember.id, agentId);
+  }
+  return map;
+}
+
+/**
+ * 纯投影：把团队名册 + 计划 + 生命周期 + 邮箱 + 验收账本投影成泳道快照。
+ * 不读磁盘、不改任何外部状态。
+ */
+export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapshot {
+  const { teamName, team, plan = null, lifecycle = {}, messages = [], accepted = [], generatedAt = "" } = input;
+
+  const members: WorkbenchMember[] = team.members.map((member, index) => {
+    const isLead = member.name === team.leadAgentId || index === 0;
+    const entry = lifecycle[member.name];
+    const status = toMemberStatus(entry?.status, isLead);
+    const planMember = (plan?.members ?? []).find((item) => item.name === member.name);
+    return {
+      id: member.agentId,
+      name: member.name,
+      role: member.agentType ?? (isLead ? "orchestrator" : "member"),
+      model: member.model ?? planMember?.runtime?.modelId ?? null,
+      providerName: member.providerName ?? null,
+      color: colorForMember(member, index, isLead),
+      status,
+      activity: activityOf(status),
+      sessionId: member.sessionId ?? entry?.sessionId ?? null,
+      cwd: member.cwd,
+      worktreePath: member.worktreePath ?? null,
+      lastError: member.lastError ?? entry?.lastError ?? null,
+      joinedAt: isoFromMillis(member.joinedAt),
+    };
+  });
+
+  const memberById = new Map(members.map((member) => [member.id, member]));
+  const memberByName = new Map(members.map((member) => [member.name, member]));
+  const planMemberIds = buildPlanMemberIdMap(team, plan);
+  const acceptedNames = acceptedMembers(accepted);
+
+  // ── tickets[]：plan.tasks + 生命周期派生的 assignment ────────────────────────
+  const tasks = plan?.tasks ?? [];
+  const tickets: WorkbenchTicket[] = tasks.map((task) => {
+    const ownerId = task.ownerId ? planMemberIds.get(task.ownerId) ?? null : null;
+    const owner = ownerId ? memberById.get(ownerId) : undefined;
+    const entry = owner ? lifecycle[owner.name] : undefined;
+    const ended = owner ? acceptedNames.has(owner.name) : false;
+    const assignments: WorkbenchAssignment[] = [];
+    if (owner) {
+      assignments.push({
+        id: `${task.id}-1`,
+        status: ended ? "ended" : owner.status === "running" ? "running" : "pending",
+        sessionId: owner.sessionId,
+        startedAt: isoFromMillis(entry?.updatedAt) || null,
+      });
+    }
+    return {
+      id: task.id,
+      subject: task.subject,
+      description: task.description ?? "",
+      ownerId,
+      status: ended ? "ended" : "open",
+      dependencies: [...(task.dependencies ?? [])],
+      assignments,
+    };
+  });
+
+  // ── taskAnchors[]：每个有主的 ticket 锚到成员 lane ──────────────────────────
+  const taskAnchors: WorkbenchTaskAnchor[] = tickets
+    .filter((ticket): ticket is WorkbenchTicket & { ownerId: string } => ticket.ownerId !== null)
+    .map((ticket) => {
+      const owner = memberById.get(ticket.ownerId);
+      const status: WorkbenchTaskAnchor["status"] = ticket.status === "ended"
+        ? "completed"
+        : owner?.status === "running"
+          ? "in_progress"
+          : owner?.status === "aborted"
+            ? "aborted"
+            : "pending";
+      const entry = owner ? lifecycle[owner.name] : undefined;
+      return {
+        ticketId: ticket.id,
+        memberId: ticket.ownerId,
+        status,
+        messageId: null,
+        timestamp: isoFromMillis(entry?.updatedAt),
+      };
+    });
+
+  // ── flows[]：邮箱消息（谁→谁）+ 验收报告（成员→lead）────────────────────────
+  const flows: WorkbenchFlow[] = [];
+  const ticketIdByMember = new Map<string, string>();
+  for (const ticket of tickets) {
+    if (ticket.ownerId) ticketIdByMember.set(ticket.ownerId, ticket.id);
+  }
+  for (const message of messages) {
+    const to = message.to ?? "";
+    const toId = memberByName.get(to)?.id;
+    flows.push({
+      from: message.from,
+      to,
+      at: message.timestamp,
+      text: message.summary ?? message.text,
+      kind: "message",
+      ...(toId && ticketIdByMember.has(toId) ? { ticketId: ticketIdByMember.get(toId) } : {}),
+    });
+  }
+  for (const record of accepted) {
+    const fromId = memberByName.get(record.member)?.id;
+    flows.push({
+      from: record.member,
+      to: team.leadAgentId,
+      at: record.at,
+      text: record.summary ?? record.result ?? "已交付",
+      kind: "report",
+      ...(fromId && ticketIdByMember.has(fromId) ? { ticketId: ticketIdByMember.get(fromId) } : {}),
+    });
+  }
+
+  // ── lanes[]：每成员一条；事件归「发起方」lane（与设计文档 §7.1 示例一致）──
+  const lanes: WorkbenchLane[] = members.map((member) => {
+    const events: Omit<SwimlaneEvent, "seq">[] = [];
+    events.push({ at: member.joinedAt, type: "spawn", detail: `${member.name} 加入团队` });
+    // 任务没有自己的时间戳：锚在计划创建/更新时间，退化到该成员生命周期更新时间，
+    // 保证 lane 内顺序是「spawn → 领任务 → 消息/交付」而不是把任务排到最后。
+    const taskAnchor = isoFromMillis(plan?.createdAt)
+      || isoFromMillis(plan?.updatedAt)
+      || isoFromMillis(lifecycle[member.name]?.updatedAt);
+    for (const task of tasks) {
+      const ownerId = task.ownerId ? planMemberIds.get(task.ownerId) ?? null : null;
+      if (ownerId === member.id) {
+        events.push({ at: taskAnchor, type: "task", detail: task.subject, taskId: task.id });
+      }
+    }
+    for (const message of messages) {
+      if (message.from !== member.name) continue;
+      const to = message.to ?? "";
+      if (!to) continue;
+      events.push({ at: message.timestamp, type: "message", detail: message.summary ?? message.text, from: member.name, to, text: message.text });
+    }
+    for (const record of accepted) {
+      if (record.member !== member.name) continue;
+      events.push({ at: record.at, type: "report", detail: record.summary ?? record.result ?? "已交付", from: member.name, to: team.leadAgentId, text: record.result ?? "" });
+    }
+    const sorted = events
+      .map((event, index) => ({ ...event, index }))
+      .sort((a, b) => {
+        const atA = a.at || "9999";
+        const atB = b.at || "9999";
+        if (atA !== atB) return atA < atB ? -1 : 1;
+        return a.index - b.index;
+      });
+    return {
+      memberId: member.id,
+      name: member.name,
+      role: member.role,
+      color: member.color,
+      status: member.status,
+      events: sorted.map((event, seq) => ({ ...event, seq: seq + 1 })),
+    };
+  });
+
+  // ── tasks[]：lane-diagram.html 兼容（按依赖深度分行）─────────────────────────
+  const compatTasks: WorkbenchTask[] = tickets.map((ticket) => {
+    const owner = ticket.ownerId ? memberById.get(ticket.ownerId) : undefined;
+    const status: WorkbenchTask["status"] = ticket.status === "ended"
+      ? "completed"
+      : owner?.status === "running"
+        ? "in_progress"
+        : "pending";
+    return {
+      id: ticket.id,
+      subject: ticket.subject,
+      owner: owner?.name ?? "",
+      status,
+      blockedBy: [...ticket.dependencies],
+    };
+  });
+
+  const teamStatus: WorkbenchTeam["status"] = (() => {
+    if (tasks.length === 0) return "forming";
+    const ended = tickets.filter((ticket) => ticket.status === "ended").length;
+    if (ended === tickets.length) return "completed";
+    if (plan?.state === "running" && ended > 0) return "finishing";
+    if (plan?.state === "draft" || plan?.state === "review_pending") return "forming";
+    return "running";
+  })();
+
+  return {
+    version: 1,
+    generatedAt,
+    team: {
+      id: teamName,
+      name: team.name || teamName,
+      description: team.description ?? "",
+      createdAt: isoFromMillis(team.createdAt),
+      leadSessionId: team.leadSessionId ?? null,
+      status: teamStatus,
+      incarnationId: plan?.incarnationId ?? teamName,
+    },
+    members,
+    tickets,
+    lanes,
+    flows,
+    taskAnchors,
+    tasks: compatTasks,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 纯布局（lane canvas）：y=成员，x=时间。渲染层只消费坐标，不做数学。
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const LANE_LABEL_WIDTH = 200;
+export const EVENT_SPACING = 170;
+export const EVENT_WIDTH = 140;
+export const EVENT_HEIGHT = 44;
+export const LANE_HEIGHT = 76;
+export const LANE_GAP = 18;
+const TIME_ORIGIN = LANE_LABEL_WIDTH + 24;
+
+export interface LaidOutEvent {
+  seq: number;
+  at: string;
+  type: SwimlaneEventType;
+  detail: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface LaidOutLane {
+  memberId: string;
+  name: string;
+  role: string;
+  status: MemberStatus;
+  color: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  events: LaidOutEvent[];
+}
+
+export interface LaidOutFlow {
+  from: string;
+  to: string;
+  kind: "message" | "report";
+  text: string;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+}
+
+export interface SwimlaneLayout {
+  lanes: LaidOutLane[];
+  flows: LaidOutFlow[];
+  width: number;
+  height: number;
+  columns: number;
+}
+
+/**
+ * 纯布局：每个成员一行（lane），行内事件按时间序从左到右排。跨泳道流向用起点
+ * （发送方事件右缘）到终点（收件方 lane 中线）的两点表示，由渲染层画曲线。
+ */
+export function layoutSwimlanes(snapshot: TeamWorkbenchSnapshot): SwimlaneLayout {
+  const columns = Math.max(1, ...snapshot.lanes.map((lane) => lane.events.length));
+
+  const lanes: LaidOutLane[] = snapshot.lanes.map((lane, rowIndex) => {
+    const y = rowIndex * (LANE_HEIGHT + LANE_GAP);
+    const events: LaidOutEvent[] = lane.events.map((event, columnIndex) => ({
+      seq: event.seq,
+      at: event.at,
+      type: event.type,
+      detail: event.detail,
+      x: TIME_ORIGIN + columnIndex * EVENT_SPACING,
+      y: y + (LANE_HEIGHT - EVENT_HEIGHT) / 2,
+      width: EVENT_WIDTH,
+      height: EVENT_HEIGHT,
+    }));
+    return {
+      memberId: lane.memberId,
+      name: lane.name,
+      role: lane.role,
+      status: lane.status,
+      color: lane.color,
+      x: 0,
+      y,
+      width: TIME_ORIGIN + columns * EVENT_SPACING,
+      height: LANE_HEIGHT,
+      events,
+    };
+  });
+
+  const laneByMember = new Map(lanes.map((lane) => [lane.memberId, lane]));
+  const laneByName = new Map(snapshot.members.map((member) => [member.name, laneByMember.get(member.id)]));
+
+  const flows: LaidOutFlow[] = snapshot.flows.map((flow) => {
+    const sender = laneByName.get(flow.from);
+    const receiver = laneByName.get(flow.to);
+    const anchor = sender?.events.find((event) => event.at === flow.at) ?? sender?.events[sender.events.length - 1];
+    const fromX = anchor ? anchor.x + anchor.width : TIME_ORIGIN;
+    const fromY = sender ? sender.y + LANE_HEIGHT / 2 : 0;
+    return {
+      from: flow.from,
+      to: flow.to,
+      kind: flow.kind,
+      text: flow.text,
+      fromX,
+      fromY,
+      toX: fromX + EVENT_SPACING,
+      toY: receiver ? receiver.y + LANE_HEIGHT / 2 : fromY,
+    };
+  });
+
+  return {
+    lanes,
+    flows,
+    width: TIME_ORIGIN + columns * EVENT_SPACING + 24,
+    height: Math.max(lanes.length * (LANE_HEIGHT + LANE_GAP), LANE_HEIGHT),
+    columns,
+  };
+}

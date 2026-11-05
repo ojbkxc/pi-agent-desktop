@@ -3,7 +3,9 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
-const source = await readFile(new URL("./useAgentSession.ts", import.meta.url), "utf8");
+// The Windows checkout is CRLF (core.autocrlf=true); the markers below are LF-relative,
+// so normalize before slicing or the "\n\n" search finds nothing.
+const source = (await readFile(new URL("./useAgentSession.ts", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 const start = source.indexOf("  const handleEditContent = useCallback(");
 const end = source.indexOf("\n\n", start);
 assert.ok(start >= 0 && end > start);

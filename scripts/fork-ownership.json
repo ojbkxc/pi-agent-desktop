@@ -213,9 +213,9 @@
       "reason": "Fork adds the tap-driven enable/disable/test path iOS requires (permission only from a user gesture in a Home Screen web app) and pushRegistration(), which never waits on serviceWorker.ready unbounded: dev builds and the desktop shell register no worker."
     },
     "lib/request-security.ts": {
-      "risk": "low",
-      "drift": 19,
-      "structuralDrift": 19,
+      "risk": "medium",
+      "drift": 36,
+      "structuralDrift": 36,
       "disposition": "accepted",
       "reason": "Admits the Settings › Remote access tailnet name only for an authorized Tailscale user, and its https Origin. A merge that drops the remoteAccess parameter fails closed (the phone loses access); one that admits the host without isRemoteAccessRequestAuthorized would open the server to the whole tailnet."
     },
@@ -318,7 +318,19 @@
     "components/AppSelect.tsx",
     "components/AppCombobox.tsx",
     "components/ProjectViewMenu.tsx",
-    "hooks/useMenuNavigation.ts"
+    "hooks/useMenuNavigation.ts",
+    "lib/pi-extension-names.ts",
+    "lib/pi-extension-builtins.ts",
+    "lib/pi-extension-builtins.integration.test.mjs",
+    "lib/pi-team-host.ts",
+    "lib/agent-teams-swimlane.ts",
+    "lib/agent-teams-swimlane-store.ts",
+    "lib/agent-teams-swimlane.test.mjs",
+    "components/AgentTeams/",
+    "app/api/teams/",
+    "public/lane-diagram.html",
+    "docs/agent-teams-design.md",
+    "docs/remote-access.zh-CN.md"
   ],
   "dispositions": {
     "accepted": "Reviewed and kept. The drift is either the fork's own interaction design or a generic improvement with no desktop coupling, so it cannot be extracted into components/desktop/. Removing it would mean deleting a feature. These files stay permanent review points; that is the running cost of a UI fork, not a backlog item. Do not reopen without new information.",
@@ -345,6 +357,7 @@
     "2026-10-17 — components/FileViewer.tsx: removed the dead FileViewerStatus component. No runtime path used it, so the file retains the toolbar while matching the behavior upstream owns.",
     "2026-10-17 — lib/i18n/messages/{en,zh-CN,zh-TW}.ts: restored to upstream shape; fork additions, replacements, and deliberate deletions moved to lib/i18n/locale-plugins.ts. Runtime message maps are unchanged, but future upstream locale edits no longer conflict with a rewritten fork pack.",
     "2026-10-19 — Rebased local menu/composer customizations onto desktop 0.7.4 (3b6a877), keeping upstream component extractions and SDK 1.3.0. Shared AppSelect/AppCombobox and app-menu tokens (including 4px row gaps) apply to the extracted settings/project/session menus; Config remains a separate entry. Runtime userHome tracing guards, concentric composer geometry and right-aligned toolbar survive. Synchronization procedure: docs/fork-sync.zh-CN.md.",
-    "2026-10-25 — components/MessageView.tsx: backported readable completed write content from agegr/pi-web #1024. Streamed input, empty files and additional arguments, ambiguous paths and paths truncated by the header keep the generic JSON view. No syntax highlighting or styling changes; the implementation converges with pi-web and is retained until the next upstream sync. Drift re-measured against the recorded 6fcd7d4 baseline."
+    "2026-10-25 — components/MessageView.tsx: backported readable completed write content from agegr/pi-web #1024. Streamed input, empty files and additional arguments, ambiguous paths and paths truncated by the header keep the generic JSON view. No syntax highlighting or styling changes; the implementation converges with pi-web and is retained until the next upstream sync. Drift re-measured against the recorded 6fcd7d4 baseline.",
+    "2026-11-05 — Added the cross-end extension layer (builtin:pi-lsp / builtin:pi-team) and the Agent Teams swimlane page: lib/pi-extension-{names,builtins}.ts, lib/pi-team-host.ts, lib/agent-teams-swimlane{,-store}.ts, components/AgentTeams/, app/api/teams/, public/lane-diagram.html. These are new fork-owned files, so they are registered in forkOwnedPaths to keep a clean upstream merge from silently dropping them; lib/rpc-manager.ts gained a single extensionFactories line and lib/builtin-extensions.ts one name-list spread. lib/request-security.ts re-measured against the 6fcd7d4 baseline: 36 structural lines, so low -> medium."
   ]
 }

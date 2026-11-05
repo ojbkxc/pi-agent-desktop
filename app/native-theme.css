@@ -10223,6 +10223,210 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   .tasks-dot--running { animation: none; }
 }
 
+/* Agents page (components/AgentTeams/AgentTeamsView.tsx): the team swimlane.
+   Per-member horizontal lanes on a time axis, cross-lane flow arrows and the
+   task graph. Reuses the Scheduled page's shell/header; only the canvas is new. */
+.agent-teams-shell { max-width: 1080px; }
+
+.agent-teams-picker {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.agent-teams-phase {
+  align-self: flex-start;
+  padding: 4px 12px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  font-size: var(--fs-small);
+  white-space: nowrap;
+}
+
+.agent-teams-phase--running,
+.agent-teams-phase--completed { color: var(--success); border-color: var(--success); }
+.agent-teams-phase--forming { color: var(--text-muted); }
+.agent-teams-phase--finishing { color: var(--warning); border-color: var(--warning); }
+
+.agent-teams-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.agent-teams-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--dur-base) var(--ease-native);
+}
+
+.agent-teams-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agent-teams-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-small);
+  font-weight: var(--fw-semibold);
+}
+
+.agent-teams-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-teams-member { display: inline-flex; }
+
+.agent-teams-member-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: var(--fs-small);
+  cursor: pointer;
+}
+
+.agent-teams-member-chip:hover { background: var(--bg-hover); }
+.agent-teams-member-chip:disabled { cursor: default; opacity: 0.75; }
+.agent-teams-member-role { color: var(--text-dim); }
+.agent-teams-member-status { color: var(--text-muted); }
+
+.agent-teams-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  flex: none;
+}
+
+.agent-teams-dot--running { background: var(--success); animation: scheduled-pulse 1.4s ease-in-out infinite; }
+.agent-teams-dot--completed { background: var(--success); }
+.agent-teams-dot--idle { background: var(--text-dim); }
+.agent-teams-dot--queued { background: var(--warning); }
+.agent-teams-dot--failed,
+.agent-teams-dot--aborted { background: var(--danger); }
+
+.agent-teams-canvas-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  padding: 12px;
+}
+
+.agent-teams-canvas { position: relative; }
+
+.agent-teams-flows {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.agent-teams-flow {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1.5;
+  opacity: 0.9;
+}
+
+.agent-teams-flow--report { stroke: var(--success); }
+
+.agent-teams-lane {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px dashed var(--separator);
+}
+
+.agent-teams-lane:last-of-type { border-bottom: none; }
+
+.agent-teams-lane-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  box-sizing: border-box;
+  padding-right: 12px;
+}
+
+.agent-teams-lane-name { font-weight: var(--fw-semibold); }
+.agent-teams-lane-role { color: var(--text-dim); font-size: var(--fs-small); }
+
+.agent-teams-event {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  font-size: var(--fs-small);
+  overflow: hidden;
+}
+
+.agent-teams-event-type { color: var(--text-muted); font-weight: var(--fw-semibold); }
+.agent-teams-event-detail {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-teams-event--spawn { border-left-color: var(--text-dim); }
+.agent-teams-event--task { border-left-color: var(--accent); }
+.agent-teams-event--message { border-left-color: var(--warning); }
+.agent-teams-event--report { border-left-color: var(--success); }
+
+.agent-teams-tickets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-teams-ticket {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+}
+
+.agent-teams-ticket--ended { opacity: 0.7; }
+.agent-teams-ticket-subject { flex: 1; font-weight: var(--fw-semibold); }
+.agent-teams-ticket-owner { color: var(--text-muted); }
+.agent-teams-ticket-deps { color: var(--text-dim); font-size: var(--fs-small); }
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-teams-dot--running { animation: none; }
+}
+
 /* ---- Render error screen (app/error.tsx, app/global-error.tsx) ------------
    Replaces Next's built-in "This page couldn't load" page, which the packaged
    app showed with no way to see the exception (no DevTools). */

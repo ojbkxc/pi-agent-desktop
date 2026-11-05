@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pi Agent Lane Diagram</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f0f0f; color: #e0e0e0; min-height: 100vh;
+      display: flex; flex-direction: column;
+    }
+    .header {
+      padding: 16px 20px; border-bottom: 1px solid #2a2a2a;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .header h1 { font-size: 16px; font-weight: 600; }
+    .header .badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #2a2a2a; color: #888; }
+    .main { flex: 1; padding: 16px; overflow-x: auto; overflow-y: auto; }
+    .empty { text-align: center; color: #444; padding: 60px 0; font-size: 14px; }
+    .lane-container { display: flex; gap: 4px; min-width: max-content; }
+    .lane {
+      display: flex; flex-direction: column; gap: 8px;
+      padding: 12px; border-radius: 10px;
+      min-width: 220px;
+    }
+    .lane-header {
+      font-size: 11px; color: #666; text-transform: uppercase;
+      letter-spacing: 0.5px; margin-bottom: 4px;
+    }
+    .task-card {
+      padding: 12px; border-radius: 8px; font-size: 13px;
+      border-left: 3px solid #444;
+    }
+    .task-card .task-subject { font-weight: 600; margin-bottom: 4px; }
+    .task-card .task-owner { font-size: 11px; color: #888; margin-bottom: 4px; }
+    .task-card .task-status { font-size: 11px; padding: 2px 6px; border-radius: 4px; display: inline-block; }
+    .task-card.blocked { border-left-color: #f87171; background: #1a1010; }
+    .task-card.blocked .task-status { background: #3a1a1a; color: #f87171; }
+    .task-card.open { border-left-color: #60a5fa; background: #101a2a; }
+    .task-card.open .task-status { background: #1a2a3a; color: #60a5fa; }
+    .task-card.running { border-left-color: #4ade80; background: #102a10; }
+    .task-card.running .task-status { background: #1a3a1a; color: #4ade80; }
+    .task-card.completed { border-left-color: #666; background: #1a1a1a; opacity: 0.7; }
+    .task-card.completed .task-status { background: #2a2a2a; color: #666; }
+    .legend {
+      padding: 12px 0; font-size: 12px; color: #666;
+      display: flex; gap: 16px; flex-wrap: wrap;
+    }
+    .legend-item { display: flex; align-items: center; gap: 4px; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 2px; }
+    .progress-bar {
+      height: 4px; background: #2a2a2a; border-radius: 2px; margin: 12px 0; overflow: hidden;
+    }
+    .progress-bar .fill { height: 100%; background: #4ade80; transition: width 0.3s; }
+    .phase-badge {
+      font-size: 12px; padding: 4px 12px; border-radius: 12px;
+      background: #2a2a2a; color: #888;
+    }
+    .phase-badge.running { background: #1a3a1a; color: #4ade80; }
+    .phase-badge.forming { background: #1a1a3a; color: #60a5fa; }
+    .phase-badge.finishing { background: #3a3a1a; color: #fbbf24; }
+    .phase-badge.completed { background: #1a3a1a; color: #4ade80; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>泳道图</h1>
+    <span class="badge" id="phase-badge">加载中...</span>
+  </div>
+  <div class="main">
+    <div id="progress-container" class="hidden">
+      <div class="progress-bar"><div class="fill" id="progress-fill"></div></div>
+      <div class="legend">
+        <span id="progress-text" style="font-size:12px;color:#666;"></span>
+      </div>
+    </div>
+    <div id="lane-container"></div>
+    <div id="empty" class="empty">暂不可用（agent teams 功能尚未就绪）</div>
+  </div>
+
+  <script>
+    // ─── Workbench layout pure functions (ported from cc-haha agentTeamsModel.ts) ─
+
+    const LANE_WIDTH = 220;
+    const LANE_GAP = 12;
+    const TASK_HEIGHT = 92;
+    const TASK_GAP = 8;
+
+    function getWorkbenchTaskState(task) {
+      const status = task.status || 'pending';
+      if (status === 'completed') return 'completed';
+      if (status === 'in_progress') return 'running';
+      // Check if any dependency is not completed
+      const blockedBy = task.blockedBy || [];
+      if (blockedBy.some(id => {
+        const dep = getTaskById(id);
+        return dep && dep.status !== 'completed';
+      })) return 'blocked';
+      return 'open';
+    }
+
+    function getWorkbenchPhase(snapshot) {
+      if (snapshot.deletedAt) return snapshot.deletedAt ? 'ended' : 'completed';
+      const tasks = snapshot.tasks || [];
+      if (tasks.length === 0) return 'forming';
+      const allCompleted = tasks.every(t => t.status === 'completed');
+      if (allCompleted) return 'finishing';
+      return 'running';
+    }
+
+    function getWorkbenchProgress(snapshot) {
+      const tasks = snapshot.tasks || [];
+      const total = tasks.length;
+      const completed = tasks.filter(t => t.status === 'completed').length;
+      const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+      return { completed, total, percent };
+    }
+
+    function layoutWorkbenchTasks(tasks, width) {
+      // Build task map for dependency lookup
+      const taskMap = new Map();
+      for (const t of tasks) taskMap.set(t.id, t);
+
+      // Compute depth for each task (longest dependency path)
+      const depthMap = new Map();
+      function computeDepth(taskId, visiting = new Set()) {
+        if (depthMap.has(taskId)) return depthMap.get(taskId);
+        if (visiting.has(taskId)) return 0; // cycle guard
+        visiting.add(taskId);
+        const task = taskMap.get(taskId);
+        if (!task) return 0;
+        const blockedBy = task.blockedBy || [];
+        if (blockedBy.length === 0) {
+          depthMap.set(taskId, 0);
+          return 0;
+        }
+        const maxDepth = Math.max(...blockedBy.map(id => computeDepth(id, new Set(visiting))));
+        const depth = maxDepth + 1;
+        depthMap.set(taskId, depth);
+        return depth;
+      }
+      for (const t of tasks) computeDepth(t.id);
+
+      // Group tasks by depth (lanes)
+      const lanesMap = new Map();
+      for (const t of tasks) {
+        const depth = depthMap.get(t.id) ?? 0;
+        if (!lanesMap.has(depth)) lanesMap.set(depth, []);
+        lanesMap.get(depth).push(t);
+      }
+
+      // Sort tasks within each lane by id
+      const lanes = [...lanesMap.entries()].sort((a, b) => a[0] - b[0]);
+      for (const [, taskList] of lanes) {
+        taskList.sort((a, b) => (a.id || '').localeCompare(b.id || ''));
+      }
+
+      // Build layout
+      const positionedTasks = [];
+      const laneLayouts = [];
+      const maxRows = Math.max(...lanes.map(([, tasks]) => tasks.length), 0);
+      const laneHeight = maxRows * (TASK_HEIGHT + TASK_GAP) + 24;
+
+      lanes.forEach(([depth, taskList], laneIdx) => {
+        const x = laneIdx * (LANE_WIDTH + LANE_GAP);
+        const y = 0;
+        taskList.forEach((task, rowIdx) => {
+          positionedTasks.push({
+            task,
+            state: getWorkbenchTaskState(task),
+            depth,
+            row: rowIdx,
+            x: x + 8,
+            y: 24 + rowIdx * (TASK_HEIGHT + TASK_GAP),
+          });
+        });
+        laneLayouts.push({
+          depth,
+          x,
+          y,
+          width: LANE_WIDTH,
+          height: laneHeight,
+          count: taskList.length,
+        });
+      });
+
+      return {
+        tasks: positionedTasks,
+        lanes: laneLayouts,
+        width: Math.max(lanes.length * (LANE_WIDTH + LANE_GAP), 200),
+        height: laneHeight,
+      };
+    }
+
+    // ─── Data loading ───────────────────────────────────────────────────────────
+
+    let currentTaskMap = new Map();
+
+    function getTaskById(id) {
+      return currentTaskMap.get(id);
+    }
+
+    async function loadWorkbench() {
+      const container = document.getElementById('lane-container');
+      const empty = document.getElementById('empty');
+      const badge = document.getElementById('phase-badge');
+      const progressContainer = document.getElementById('progress-container');
+
+      try {
+        // Try to get the main session ID from the URL or from sessions list
+        const sessionId = new URLSearchParams(location.search).get('session');
+        let workbenchData = null;
+
+        if (sessionId) {
+          // Try to fetch workbench timeline
+          const res = await fetch(`/api/teams/session/${sessionId}/workbench`, {
+            headers: { 'Content-Type': 'application/json' },
+          });
+          if (res.ok) {
+            workbenchData = await res.json();
+          }
+        }
+
+        if (!workbenchData) {
+          // Try to get team workbench
+          const teamsRes = await fetch('/api/teams/workbench', {
+            headers: { 'Content-Type': 'application/json' },
+          });
+          if (teamsRes.ok) {
+            workbenchData = await teamsRes.json();
+          }
+        }
+
+        if (!workbenchData || !workbenchData.team || !workbenchData.tasks) {
+          showUnavailable(empty, container);
+          return;
+        }
+
+        // Build task map
+        currentTaskMap.clear();
+        for (const t of workbenchData.tasks || []) {
+          currentTaskMap.set(t.id, t);
+        }
+
+        // Layout
+        const layout = layoutWorkbenchTasks(workbenchData.tasks || [], 800);
+
+        // Phase
+        const phase = getWorkbenchPhase(workbenchData);
+        badge.textContent = phase;
+        badge.className = 'phase-badge ' + phase;
+
+        // Progress
+        const progress = getWorkbenchProgress(workbenchData);
+        progressContainer.classList.remove('hidden');
+        document.getElementById('progress-fill').style.width = progress.percent + '%';
+        document.getElementById('progress-text').textContent = `${progress.completed}/${progress.total} 完成 (${progress.percent}%)`;
+
+        // Render lanes
+        container.innerHTML = layout.lanes.map(lane => {
+          const laneTasks = layout.tasks.filter(t => t.depth === lane.depth);
+          return `
+            <div class="lane" style="min-height:${lane.height}px;">
+              <div class="lane-header">依赖深度 ${lane.depth} · ${lane.count} 任务</div>
+              ${laneTasks.map(t => renderTaskCard(t)).join('')}
+            </div>
+          `;
+        }).join('');
+
+        empty.classList.add('hidden');
+      } catch (error) {
+        showUnavailable(empty, container);
+      }
+    }
+
+    function renderTaskCard(t) {
+      const task = t.task;
+      const subject = task.subject || '(无标题)';
+      const owner = task.owner || '未分配';
+      const state = t.state;
+      const stateLabel = {
+        blocked: '阻塞', open: '待处理', running: '运行中', completed: '已完成'
+      }[state] || state;
+
+      return `
+        <div class="task-card ${state}" style="min-height:${TASK_HEIGHT}px;">
+          <div class="task-subject">${escapeHtml(subject)}</div>
+          <div class="task-owner">@${escapeHtml(owner)}</div>
+          <div class="task-status">${stateLabel}</div>
+        </div>
+      `;
+    }
+
+    function showUnavailable(empty, container) {
+      empty.classList.remove('hidden');
+      container.innerHTML = '';
+      document.getElementById('phase-badge').textContent = '不可用';
+      document.getElementById('phase-badge').className = 'phase-badge';
+      document.getElementById('progress-container').classList.add('hidden');
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = String(text);
+      return div.innerHTML;
+    }
+
+    // ─── Init ───────────────────────────────────────────────────────────────────
+
+    loadWorkbench();
+  </script>
+</body>
+</html>
