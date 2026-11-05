@@ -825,7 +825,7 @@ DeepSeek：有界并发槽位，**留一个额外槽位给人的消息/状态请
 | 全局活跃 worker | **32** | ✅ 已实现（`getMaxGlobalWorkers()`，`PI_TEAM_MAX_GLOBAL_WORKERS` 可覆盖） | PI-Desktop 16 偏紧；pi-agent-desktop 单进程多会话，32 是内存与 provider 限流的平衡 |
 | worker 不能再 spawn worker | **保持** | 见 Phase 4 | 安全边界（PI-Desktop 已验证），防递归失控 |
 | 人类优先槽 | **1 个/父** | ✅ 已实现（`isHumanPriorityEnabled()`；`PI_TEAM_HUMAN_PRIORITY=0` 可关） | 借鉴 DeepSeek：人的消息/状态请求不排队，直接插队，防饿死 |
-| worker 邮箱 inbox 上限 | **8 条未读**（同 PI-Desktop `AGENT_BUSY`） | 未实现（现为 `MAILBOX_CAP = 200` 的总容量上限，语义不同） | 防投递风暴 |
+| worker 邮箱 inbox 上限 | **8 条未读**（同 PI-Desktop `AGENT_BUSY`） | ✅ 已实现（`getMaxUnread()`；`PI_TEAM_MAX_UNREAD=0` 关闭） | 防投递风暴 |
 | Ticket 依赖环检测 | **禁止环** | 见 Phase 4 | 任务 DAG 必须是有向无环图 |
 
 **上限拒绝消息**要区分原因（同 PI-Desktop background tasks D1/D2）：`LIMIT_EXCEEDED: per-parent worker limit reached (8)` vs `LIMIT_EXCEEDED: global worker limit reached (32)`。
@@ -864,6 +864,15 @@ DeepSeek：有界并发槽位，**留一个额外槽位给人的消息/状态请
 - 但 DeepSeek 明确警告：「这些 wrapper 和目录建立默认值，**不是安全边界**」——worktree 不是沙箱，只是工作目录隔离
 
 **未来 v2 加 process backend**：
+
+> **2026-11-05 评估结论：不做。** 理由三条：
+> 1. **与已实现的能力冲突** —— 成员身份注入走 `appendSystemPrompt`（in-process 专属通道），
+>    人类优先槽走 `host.wake()` 的进程内调用；换成子进程这两块都要重做。
+> 2. **代价极高** —— 要重写 spawn 路径（现复用 `subagent` runtime）、新建跨进程邮箱/IPC
+>    （现 `teamBus` 的 waiters 是进程内的）、处理 Windows 进程树管理。
+> 3. **收益当前为零** —— 它服务的是「重量级 worker / 强隔离 / 远程部署」，而团队 agent
+>    现在跑的是文件编辑、代码搜索这类轻任务；目录隔离已由 `isolation: "worktree"` 提供。
+
 - 借鉴 cc-haha 的 `backendType: "process"` + `tmuxPaneId`/`sessionId`
 - worker 作为独立 pi 子进程启动，通过邮箱/IPC 通信
 - 适用场景：重量级 worker、需强隔离、需远程部署
