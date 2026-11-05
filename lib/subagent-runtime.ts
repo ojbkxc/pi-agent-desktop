@@ -38,8 +38,13 @@ import { projectTrustReloadOptions } from "./project-trust";
 import { resolveShellTools } from "./powershell-settings";
 import { isBuiltInSubagentsEnabled, readSubagentSettings } from "./subagent-settings";
 import { SubagentQueue } from "./subagent-queue";
+import { createSubagentBuiltinExtensions } from "./builtin-extensions";
+import type { McpHost } from "./mcp-host";
 import { addWorktree, removeWorktree } from "./worktree";
 import { randomUUID } from "node:crypto";
+
+/** 子会话的 MCP 宿主：包装器在 prompt 前等它、关闭时释放它。 */
+type SubagentMcpHost = Pick<McpHost, "prepareForPrompt" | "dispose">;
 
 interface HostSession {
   readonly inner: AgentSessionLike;
@@ -54,7 +59,7 @@ export interface SubagentRuntimeDependencies {
   getSession(sessionId: string): HostSession | undefined;
   registerSession(
     inner: AgentSessionLike,
-    options?: { exactSystemPrompt?: string; chatOnly?: boolean },
+    options?: { exactSystemPrompt?: string; chatOnly?: boolean; mcpHost?: SubagentMcpHost },
   ): void;
   reopenSession(sessionId: string, sessionFile: string): Promise<HostSession>;
   resolveSessionPath(sessionId: string): Promise<string | null>;
@@ -269,6 +274,9 @@ export function createSubagentController(
       });
       const { chatOnly, appendSystemPrompt, delegatedTask } = promptPlan;
       if (!chatOnly) initTheme();
+      // 团队成员拿到的内置扩展（codemode / tool-search / mcp / pi-lsp / pi-team）。
+      // 与 rpc-manager 的恢复路径必须装配同一批，否则「跑一次→重开」行为不一致。
+      const memberBuiltins = await createSubagentBuiltinExtensions({ agentDir });
       const services = await createAgentSessionServices({
         cwd: childCwd,
         agentDir,
@@ -287,9 +295,16 @@ export function createSubagentController(
               }
             : {}),
           appendSystemPrompt,
-          // The exact prompt is sent through before_agent_start; see lib/exact-system-prompt.ts.
-          ...(promptPlan.exactSystemPrompt !== undefined
-            ? { extensionFactories: [createExactSystemPromptExtension(() => promptPlan.exactSystemPrompt)] }
+          ...(memberBuiltins.extensions.length > 0 || promptPlan.exactSystemPrompt !== undefined
+            ? {
+                extensionFactories: [
+                  ...memberBuiltins.extensions,
+                  // The exact prompt is sent through before_agent_start; see lib/exact-system-prompt.ts.
+                  ...(promptPlan.exactSystemPrompt !== undefined
+                    ? [createExactSystemPromptExtension(() => promptPlan.exactSystemPrompt)]
+                    : []),
+                ],
+              }
             : {}),
         },
         ...((profile.loadExtensions || profile.loadSkills)
@@ -297,15 +312,20 @@ export function createSubagentController(
           : {}),
       });
 
-      const extensionToolNames = profile.loadExtensions
-        ? profile.extensionTools?.length
-          ? selectSubagentExtensionTools(
-            services.resourceLoader.getExtensions().extensions,
-            profile.extensionTools,
-            profile.disallowedExtensionTools,
-          )
-          : services.resourceLoader.getExtensions().extensions.flatMap((extension) => [...extension.tools.keys()])
-        : [];
+      // 内置扩展的工具名不随 profile.loadExtensions 开关（那是给文件系统扩展用的），
+      // 否则 MCP / codemode 注册了也不会被激活 —— 子会话的工具白名单是静态算出来的。
+      const extensionToolNames = [
+        ...memberBuiltins.toolNames,
+        ...(profile.loadExtensions
+          ? profile.extensionTools?.length
+            ? selectSubagentExtensionTools(
+              services.resourceLoader.getExtensions().extensions,
+              profile.extensionTools,
+              profile.disallowedExtensionTools,
+            )
+            : services.resourceLoader.getExtensions().extensions.flatMap((extension) => [...extension.tools.keys()])
+          : []),
+      ];
       const activeTools = resolveShellTools(
         withSubagentExtensionTools(profile.tools, extensionToolNames),
         settingsManager.getDefaultTools(),
@@ -353,6 +373,7 @@ export function createSubagentController(
           ? { exactSystemPrompt: promptPlan.exactSystemPrompt }
           : {}),
         chatOnly,
+        ...(memberBuiltins.mcpHost ? { mcpHost: memberBuiltins.mcpHost } : {}),
       });
 
       const initialRun: SubagentRunInfo = {

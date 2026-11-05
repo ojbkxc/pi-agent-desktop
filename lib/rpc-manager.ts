@@ -61,7 +61,7 @@ import { resolveShellTools } from "./powershell-settings";
 import { CHAT_ONLY_RESOURCE_LOADER_OPTIONS, contextFilesSystemPrompt } from "./chat-only";
 import { createExactSystemPromptExtension } from "./exact-system-prompt";
 import { createArtifactGuideExtension } from "./artifact-guide-extension";
-import { createPiWebBuiltinExtensions } from "./builtin-extensions";
+import { createPiWebBuiltinExtensions, createSubagentBuiltinExtensions, snapshotWantsSubagentExtensions } from "./builtin-extensions";
 import type { McpHost } from "./mcp-host";
 import { mcpPromptPreparation, type McpCommandCandidate } from "./mcp-command";
 import { createReadOnlyMcpPolicyExtension } from "./mcp-read-only-policy";
@@ -2440,6 +2440,8 @@ const SUBAGENT_CONTROLLER = createSubagentController({
         ? { exactSystemPrompt: () => options.exactSystemPrompt! }
         : {}),
       chatOnly: options?.chatOnly,
+      // 团队成员也会连 MCP：宿主必须交给包装器，否则永远不会 prepareForPrompt / dispose。
+      ...(options?.mcpHost ? { mcpHost: options.mcpHost } : {}),
       suppressCompletionNotifications: true,
     });
     registerRpcWrapper(wrapper);
@@ -2972,10 +2974,16 @@ export async function startRpcSession(
     const exactSystemPromptExtension = createExactSystemPromptExtension(() => exactSystemPromptRef.current?.());
     const usesExactSystemPrompt = chatOnly || subagentResources?.exactSystemPrompt !== undefined;
     // codemode, tool-search, and mcp, as the pi CLI loads them, and the host that decides
-    // which MCP servers the session connects (ADR 0006).
-    const builtins = subagentResources || chatOnly
+    // which MCP servers the session connects (ADR 0006). A resumed subagent session gets
+    // the member set instead (plus pi-lsp / pi-team) — but only if its snapshot carries
+    // member-extension tools, so a session created before that change stays as it was.
+    const builtins = chatOnly
       ? undefined
-      : await createPiWebBuiltinExtensions({ agentDir });
+      : subagentResources
+        ? snapshotWantsSubagentExtensions(subagentResources.tools)
+          ? await createSubagentBuiltinExtensions({ agentDir })
+          : undefined
+        : await createPiWebBuiltinExtensions({ agentDir });
     const services = await createAgentSessionServices({
       cwd: sessionCwd,
       agentDir,
@@ -2994,7 +3002,17 @@ export async function startRpcSession(
                 }
               : {}),
             appendSystemPrompt: subagentResources.appendSystemPrompt,
-            ...(usesExactSystemPrompt ? { extensionFactories: [exactSystemPromptExtension] } : {}),
+            // 与 lib/subagent-runtime.ts 的新建路径装配同一批（成员内置扩展里已经含只读
+            // MCP 策略）。builtins 为 undefined 时（chat-only 子会话、或早于成员扩展的
+            // 老快照）保持原样。
+            ...(builtins || usesExactSystemPrompt
+              ? {
+                  extensionFactories: [
+                    ...(builtins?.extensions ?? []),
+                    ...(usesExactSystemPrompt ? [exactSystemPromptExtension] : []),
+                  ],
+                }
+              : {}),
           }
         : chatWorkspace
           ? {

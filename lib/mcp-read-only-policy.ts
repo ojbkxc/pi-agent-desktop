@@ -1,6 +1,7 @@
 import type { InlineExtension, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { MCP_EXTENSION_PATH } from "./mcp-command";
 import { readSessionToolSelection } from "./session-tool-selection";
+import { readSubagentSessionResources } from "./subagents";
 import type { SessionEntry } from "./types";
 
 // A Read-only session pins coding tools that cannot change anything, but MCP
@@ -9,6 +10,11 @@ import type { SessionEntry } from "./types";
 // does not mark `readOnlyHint: true` (ADR 0006, "Safety → Read-only"). The
 // hint comes from the server: the policy keeps the model from writing through
 // a tool by mistake, it does not defend against a malicious server.
+//
+// A subagent session never writes a `pi-web:tool-selection` entry — its pinned
+// tools live in the `pi-web:subagent` resource snapshot — so the lookup falls
+// back to that. Without it an `explore` / `plan` teammate (PRESET_READ_ONLY)
+// would be read-only for coding tools but free to write through MCP.
 
 const WRITE_CAPABLE_TOOLS = new Set(["bash", "powershell", "edit", "write"]);
 const MCP_TOOL_PREFIX = "mcp__";
@@ -43,7 +49,9 @@ export function createReadOnlyMcpPolicyExtension(): InlineExtension {
         const tool = pi.getAllTools().find((candidate) => candidate.name === event.toolName);
         if (!tool || !isMcpTool(tool) || tool.annotations?.readOnlyHint === true) return undefined;
         // Read last: most calls are not MCP calls, and the selection scan walks the session.
-        const selection = readSessionToolSelection(ctx.sessionManager.getEntries() as unknown as SessionEntry[]);
+        const entries = ctx.sessionManager.getEntries() as unknown as SessionEntry[];
+        const selection = readSessionToolSelection(entries)
+          ?? readSubagentSessionResources(entries)?.tools;
         if (!isReadOnlySelection(selection)) return undefined;
         return { block: true, reason: readOnlyMcpBlockReason(event.toolName) };
       });

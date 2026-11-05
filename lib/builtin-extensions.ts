@@ -15,6 +15,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { McpHost, type McpHostOptions } from "./mcp-host";
 import { createPiWebMcpTransportFactory } from "./mcp-transport";
+import { createReadOnlyMcpPolicyExtension } from "./mcp-read-only-policy";
+import { createPiExtensionBuiltins } from "./pi-extension-builtins";
 import { PI_EXTENSION_BUILTIN_NAMES } from "./pi-extension-names";
 import { loadPiSdkInternals, type PiSdkInternals, type PiSdkInternalsResult } from "./pi-sdk-internals";
 import { mayReadProjectConfigNow } from "./project-trust";
@@ -25,8 +27,10 @@ import { PROJECT_SETTINGS_MAX_BYTES, readRegularFileText } from "./regular-file"
 // names, so `-builtin:<name>`, project overrides, `noExtensions`, and
 // replacement by a third-party extension that registers `/mcp`, `codemode`, or
 // `tool_search` behave as in the CLI. `llama.cpp` is not among them: it serves
-// a local model server, not a feature of the session. Chat-only and subagent
-// sessions load none of them.
+// a local model server, not a feature of the session. Chat-only sessions load
+// none of them. Subagent sessions (team members) get them through
+// `createSubagentBuiltinExtensions()` at the bottom of this file, which also
+// adds the cross-end `pi-lsp` / `pi-team`; lean mode gives them none.
 
 export const MCP_DISABLE_VARIABLE = "PI_WEB_DISABLE_MCP";
 
@@ -391,4 +395,100 @@ export async function createPiWebBuiltinExtensions(
   ];
   if (mcpHost) extensions.push(mcpHost.extension());
   return { extensions, mcpHost };
+}
+
+// ---------------------------------------------------------------------------
+// Subagent sessions (team members)
+// ---------------------------------------------------------------------------
+
+const [LSP_BUILTIN_NAME, TEAM_BUILTIN_NAME] = PI_EXTENSION_BUILTIN_NAMES;
+
+/**
+ * pi-team 里成员**该有的那一半**：邮箱与只读视图。派发类（`team_create` /
+ * `team_plan` / `team_delete`）刻意不列进来 —— 它们除了宿主结构性抛错，也不该出现在
+ * 成员的请求里占工具描述的 token。
+ */
+export const MEMBER_TEAM_TOOL_NAMES = [
+  "team_message",
+  "team_status",
+  "team_wait",
+  "team_result",
+  "team_accept",
+  "team_cancel",
+  "team_list",
+  "team_ticket",
+  "team_permission_update",
+] as const;
+
+export interface SubagentBuiltinExtensionsOptions {
+  agentDir: string;
+  /** lean 档：成员一个扩展都不加载（对齐 cc-haha 的 `agentProfile === "lean"`）。 */
+  lean?: boolean;
+  /** Timing overrides for tests. */
+  mcpHost?: Pick<McpHostOptions, "idleMs" | "promptWaitMs">;
+}
+
+const SUBAGENT_EXTENSION_TOOL_NAMES = new Set<string>([
+  "codemode",
+  "tool_search",
+  "lsp",
+  ...MEMBER_TEAM_TOOL_NAMES,
+]);
+
+/**
+ * 一个子会话的 `resourceSnapshot.tools` 里是否留下了成员扩展的工具。恢复路径据此决定
+ * 要不要重新装配成员扩展 —— 这样**不需要给快照加字段**：加这次改动之前创建的会话
+ * 自然不含这些名字，也就不会被塞进一批它从来没有过的 MCP 工具；lean 成员同理
+ * （它的工具集里没有这些名字，本就不该装配）。
+ */
+export function snapshotWantsSubagentExtensions(tools: readonly string[]): boolean {
+  return tools.some((name) => name.startsWith("mcp__") || SUBAGENT_EXTENSION_TOOL_NAMES.has(name));
+}
+
+export interface SubagentBuiltinExtensions extends PiWebBuiltinExtensions {
+  /**
+   * 这些扩展提供的工具名（`mcp__*` 是通配）。子会话把工具白名单直接交给
+   * `createAgentSessionFromServices({ tools })`，所以内置扩展的工具必须在这里列出来，
+   * 否则注册了也不会被激活。MCP 工具在会话创建之后才连上，只能按前缀放行。
+   */
+  toolNames: string[];
+}
+
+/**
+ * 团队成员（子会话）拿到的内置扩展。与普通会话的差别是**刻意的**：
+ *
+ * - 保留 codemode / tool-search / mcp —— 成员要能调 MCP 工具，也才用得上省 token
+ *   的延迟工具声明。
+ * - 加 `pi-lsp`（成员要读代码）与 `pi-team`。pi-team 这里**固定挂不可用宿主**：
+ *   成员因此只有邮箱（见 `MEMBER_TEAM_TOOL_NAMES`），派发在 host 层直接抛错。
+ *   这比单靠扩展侧的 `requireTeamLead()` 硬——那道检查依赖进程级 `process.env`
+ *   身份注入（lib/subagent-runtime.ts 的设置/还原窗口），并发派成员时理论上可能
+ *   串号，一旦捕获失败就会放行递归派发。
+ * - **不给** pi-purge（`/purge` 是 composer 命令，子会话没有 composer）、
+ *   artifactGuide（`:::artifact` 提示）、projectCommandBash（composer 的 `!command`）、
+ *   subagent（派发能力本身，其三个工具本就进了 `excludeTools`）。
+ */
+export async function createSubagentBuiltinExtensions(
+  options: SubagentBuiltinExtensionsOptions,
+): Promise<SubagentBuiltinExtensions> {
+  if (options.lean) return { extensions: [], mcpHost: undefined, toolNames: [] };
+  const web = await createPiWebBuiltinExtensions({
+    agentDir: options.agentDir,
+    ...(options.mcpHost ? { mcpHost: options.mcpHost } : {}),
+  });
+  // `subagentController` 缺省 → teamBuiltin 落到 createUnavailableTeamHost()。
+  const crossEnd = createPiExtensionBuiltins({
+    include: [LSP_BUILTIN_NAME, TEAM_BUILTIN_NAME],
+  });
+  return {
+    extensions: [...web.extensions, ...crossEnd, createReadOnlyMcpPolicyExtension()],
+    mcpHost: web.mcpHost,
+    toolNames: [
+      "codemode",
+      "tool_search",
+      "lsp",
+      ...MEMBER_TEAM_TOOL_NAMES,
+      ...(web.mcpHost ? ["mcp__*"] : []),
+    ],
+  };
 }
