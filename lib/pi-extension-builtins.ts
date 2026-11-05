@@ -14,14 +14,30 @@
 import type { ExtensionAPI, ExtensionContext, InlineExtension } from "@earendil-works/pi-coding-agent";
 import { createPiTeamExtension } from "pi-team";
 import lspExtension from "lsp-mcp";
-// pi-purge 不编译、不发 dist，入口是纯 TS 源码 extensions/pi-purge.ts，
-// 且 package.json 无 main / exports 字段——只能深路径导入 .ts 源文件。
-// Node ≥22.19 原生支持 type stripping，运行时可直接执行 .ts 模块。
-import piPurgeExtension from "pi-purge/extensions/pi-purge.ts";
 import { createSubagentTeamHost, createUnavailableTeamHost } from "./pi-team-host";
 import { PI_EXTENSION_BUILTIN_NAMES } from "./pi-extension-names";
 import { isBuiltInSubagentsEnabled } from "./subagent-settings";
 import type { SubagentController } from "./subagent-runtime";
+
+// pi-purge 的加载方式与另两个不同，这里必须用运行时加载而不是顶层 import：
+// 它不编译、不发 dist，入口是纯 TS 源码 `extensions/pi-purge.ts`，且 package.json
+// 没有 main / exports —— 只能按子路径导入那个 .ts 文件本身。
+// 顶层 `import "pi-purge/extensions/pi-purge.ts"` 会被 webpack 静态解析，
+// 而它的 loader 链把该文件当 JS 解析（`import type` 是 TS 语法）→ build 直接失败；
+// `serverExternalPackages` 只按**包名**匹配，覆盖不到这个子路径。
+// 所以走 `webpackIgnore` 的动态 import：打包期完全不碰，运行时由 Node ≥22.19 的
+// 原生 type stripping 直接执行 .ts。desktop 的 engines 要求 >=22.19.0，成立。
+const PI_PURGE_ENTRY = "pi-purge/extensions/pi-purge.ts";
+
+async function loadPiPurgeExtension(): Promise<(pi: ExtensionAPI) => void> {
+  const mod = (await import(/* webpackIgnore: true */ PI_PURGE_ENTRY)) as {
+    default?: (pi: ExtensionAPI) => void;
+  };
+  if (typeof mod.default !== "function") {
+    throw new Error(`${PI_PURGE_ENTRY} 没有默认导出的注册钩子`);
+  }
+  return mod.default;
+}
 
 const [LSP_BUILTIN_NAME, TEAM_BUILTIN_NAME, PURGE_BUILTIN_NAME] = PI_EXTENSION_BUILTIN_NAMES;
 
@@ -59,11 +75,12 @@ function teamBuiltin(controller: SubagentController | undefined): InlineExtensio
 /**
  * prompt 切换扩展：注册 `/purge` 命令，在 pi 内置人设与自定义 prompt 文件之间切换。
  * pi-purge 的默认导出是 `(pi: ExtensionAPI) => void` 的注册钩子（非工厂），
- * 与 builtin() 的 factory 签名直接兼容。
+ * 与 builtin() 的 factory 签名直接兼容。加载方式见文件顶部 PI_PURGE_ENTRY 的说明。
  */
 function purgeBuiltin(): InlineExtension {
-  return builtin(PURGE_BUILTIN_NAME, (pi) => {
-    piPurgeExtension(pi as unknown as Parameters<typeof piPurgeExtension>[0]);
+  return builtin(PURGE_BUILTIN_NAME, async (pi) => {
+    const register = await loadPiPurgeExtension();
+    register(pi);
   });
 }
 
