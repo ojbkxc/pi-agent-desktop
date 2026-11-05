@@ -123,6 +123,10 @@ export function createSubagentTeamHost(controller: SubagentController, options: 
         ...(request.model ? { model: request.model } : {}),
         ...(request.thinking ? { thinking: request.thinking } : {}),
         ...(request.isolation ? { isolation: request.isolation } : {}),
+        // 成员身份注入：宿主据此在成员会话写入 PI_AGENT_NAME / PI_TEAM_NAME 并注入
+        // 身份 system prompt（设计文档 §8.4）。
+        ...(request.teamName ? { teamName: request.teamName } : {}),
+        ...(request.agentName ? { agentName: request.agentName } : {}),
       };
       return attach(await controller.extensionRuntime.start(startRequest));
     },

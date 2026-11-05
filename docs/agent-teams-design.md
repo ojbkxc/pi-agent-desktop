@@ -819,16 +819,25 @@ DeepSeek：有界并发槽位，**留一个额外槽位给人的消息/状态请
 
 ### 8.4 建议：8 / 32 + 人类优先槽
 
-| 维度 | 建议值 | 理由 |
-|---|---|---|
-| 每父会话活跃 worker | **8** | PI-Desktop 4 偏保守（单父 4 个 worker 在大型重构场景不够用）；8 是可观测性（泳道 8 条）与生产力的平衡 |
-| 全局活跃 worker | **32** | PI-Desktop 16 偏紧；pi-agent-desktop 单进程多会话，32 是内存与 provider 限流的平衡 |
-| worker 不能再 spawn worker | **保持** | 安全边界（PI-Desktop 已验证），防递归失控 |
-| 人类优先槽 | **1 个/父** | 借鉴 DeepSeek：人的消息/状态请求不排队，直接插队，防饿死 |
-| worker 邮箱 inbox 上限 | **8 条未读**（同 PI-Desktop `AGENT_BUSY`） | 防投递风暴 |
-| Ticket 依赖环检测 | **禁止环** | 任务 DAG 必须是有向无环图 |
+| 维度 | 建议值 | 状态 | 理由 |
+|---|---|---|---|
+| 每父会话活跃 worker | **8** | ✅ 已实现（`getMaxMembersPerTeam()`，`PI_TEAM_MAX_MEMBERS` 可覆盖） | PI-Desktop 4 偏保守（单父 4 个 worker 在大型重构场景不够用）；8 是可观测性（泳道 8 条）与生产力的平衡 |
+| 全局活跃 worker | **32** | ✅ 已实现（`getMaxGlobalWorkers()`，`PI_TEAM_MAX_GLOBAL_WORKERS` 可覆盖） | PI-Desktop 16 偏紧；pi-agent-desktop 单进程多会话，32 是内存与 provider 限流的平衡 |
+| worker 不能再 spawn worker | **保持** | 见 Phase 4 | 安全边界（PI-Desktop 已验证），防递归失控 |
+| 人类优先槽 | **1 个/父** | ✅ 已实现（`isHumanPriorityEnabled()`；`PI_TEAM_HUMAN_PRIORITY=0` 可关） | 借鉴 DeepSeek：人的消息/状态请求不排队，直接插队，防饿死 |
+| worker 邮箱 inbox 上限 | **8 条未读**（同 PI-Desktop `AGENT_BUSY`） | 未实现（现为 `MAILBOX_CAP = 200` 的总容量上限，语义不同） | 防投递风暴 |
+| Ticket 依赖环检测 | **禁止环** | 见 Phase 4 | 任务 DAG 必须是有向无环图 |
 
 **上限拒绝消息**要区分原因（同 PI-Desktop background tasks D1/D2）：`LIMIT_EXCEEDED: per-parent worker limit reached (8)` vs `LIMIT_EXCEEDED: global worker limit reached (32)`。
+
+> 落地说明：两个数值上限已在 `pi-team/src/constants.ts` 与 `teamTools.ts` 的 `checkSpawnLimits()` 中实现，
+> 拒绝消息前缀为 `LIMIT_EXCEEDED`，分别带 `per-team` 与 `global`。全局计数跨所有团队的 `config.json`，
+> 但排除调用方自己 —— `team_create` 是先落盘名册再派发，若把自己算进基数，新团队第一次派发就会自我判超限。
+> 超限时团队名册仍然创建（有效），只是不派发任何成员。
+>
+> 人类优先槽落在 `teamBus.ts` 的 `#isHumanPriority()`：发送者名为 `human` 的直发消息不进
+> `#scheduleWake()` 的静默合并窗口，直接 `#flush()` 立即唤醒；成员之间的消息仍走防抖合并。
+> 这样一串 agent 消息不会把人的插话按窗口往后推。
 
 ---
 

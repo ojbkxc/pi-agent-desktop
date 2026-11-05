@@ -199,6 +199,25 @@ export function createSubagentController(
     if (!parent?.isAlive()) throw new Error("Parent session is no longer available");
     if (!parent.sessionFile) throw new Error("Parent session must be persisted before starting a subagent");
 
+    // 团队成员身份注入（设计文档 §8.4）：把成员名与团队名写进子会话创建期的环境变量
+    // 窗口，子会话加载的扩展（如 pi-team）在工厂期捕获身份，据此拦截成员会话的团队级
+    // 操作。窗口在会话创建后立即关闭，避免污染同进程其他会话——lead 会话的团队工具
+    // 仍按 team-lead 行事。
+    const previousAgentName = process.env.PI_AGENT_NAME;
+    const previousTeamName = process.env.PI_TEAM_NAME;
+    if (request.agentName) process.env.PI_AGENT_NAME = request.agentName;
+    if (request.teamName) process.env.PI_TEAM_NAME = request.teamName;
+    const restoreIdentityEnv = (): void => {
+      if (request.agentName) {
+        if (previousAgentName === undefined) delete process.env.PI_AGENT_NAME;
+        else process.env.PI_AGENT_NAME = previousAgentName;
+      }
+      if (request.teamName) {
+        if (previousTeamName === undefined) delete process.env.PI_TEAM_NAME;
+        else process.env.PI_TEAM_NAME = previousTeamName;
+      }
+    };
+
     let isolatedWorktree: { path: string; branch: string } | undefined;
     try {
       const profile = resolveSubagentProfile(parent.cwd, request.profile);
@@ -236,6 +255,7 @@ export function createSubagentController(
         promptMode: profile.promptMode,
         task: appendSubagentInputFiles(request.task, inputFiles),
         inheritedParentContext,
+        teamIdentity: { agentName: request.agentName, teamName: request.teamName },
       });
       const { chatOnly, appendSystemPrompt, delegatedTask } = promptPlan;
       if (!chatOnly) initTheme();
@@ -467,8 +487,10 @@ export function createSubagentController(
         resolveCompletion({ ...initialRun, status: "failed", completedAt: new Date().toISOString(), error: error instanceof Error ? error.message : String(error) });
       });
 
+      restoreIdentityEnv();
       return { run: stored.run, completion: stored.completion };
     } catch (error) {
+      restoreIdentityEnv();
       if (isolatedWorktree) {
         try { await removeWorktree(parent.cwd, isolatedWorktree.path); } catch { /* preserve setup failure and avoid force deletion */ }
       }

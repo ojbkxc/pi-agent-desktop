@@ -55,6 +55,10 @@ export interface StartSubagentRequest {
   maxTurns?: number;
   inheritContext?: boolean;
   isolation?: "worktree";
+  /** 团队名：团队成员身份注入的上下文（PI_TEAM_NAME）。缺省时不注入团队上下文。 */
+  teamName?: string;
+  /** 成员名（PI_AGENT_NAME）：团队成员身份注入。缺省时按 team-lead 处理（保持既有行为）。 */
+  agentName?: string;
   signal?: AbortSignal;
   onUpdate?: (run: SubagentRunInfo) => void;
 }
