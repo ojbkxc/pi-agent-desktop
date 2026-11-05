@@ -817,18 +817,23 @@ cc-haha：subagent 队列 per-parent `maxConcurrent`（默认可配），team �
 
 DeepSeek：有界并发槽位，**留一个额外槽位给人的消息/状态请求**（防止新工作饿死人类继续对话）。
 
-### 8.4 建议：8 / 32 + 人类优先槽
+### 8.4 落地值：12 / 32 + 人类优先槽
 
-| 维度 | 建议值 | 状态 | 理由 |
+> **2026-11-05 复核后从 8 调整为 12。** 原文档的 8 是为了「泳道画 8 条 lane」，但泳道投影
+> （`agent-teams-swimlane.ts`）早已按成员数动态生成，那个锚点不存在了；而 8 会误伤常见用法
+> ——lead 并行改 10 个互不相干的文件时会卡在第 9 个，可每个成员其实很轻。真正承担「防失控」
+> 的是全局 32。需要更紧的人用 `PI_TEAM_MAX_MEMBERS` 调低。
+
+| 维度 | 落地值 | 状态 | 理由 |
 |---|---|---|---|
-| 每父会话活跃 worker | **8** | ✅ 已实现（`getMaxMembersPerTeam()`，`PI_TEAM_MAX_MEMBERS` 可覆盖） | PI-Desktop 4 偏保守（单父 4 个 worker 在大型重构场景不够用）；8 是可观测性（泳道 8 条）与生产力的平衡 |
-| 全局活跃 worker | **32** | ✅ 已实现（`getMaxGlobalWorkers()`，`PI_TEAM_MAX_GLOBAL_WORKERS` 可覆盖） | PI-Desktop 16 偏紧；pi-agent-desktop 单进程多会话，32 是内存与 provider 限流的平衡 |
+| 每父会话活跃 worker | **12** | ✅ 已实现（`getMaxMembersPerTeam()`，`PI_TEAM_MAX_MEMBERS` 可覆盖） | 只防「一个团队失控」；12 是不误伤正常并行、又能及时刹车的实用值（原 8 的锚点已失效） |
+| 全局活跃 worker | **32** | ✅ 已实现（`getMaxGlobalWorkers()`，`PI_TEAM_MAX_GLOBAL_WORKERS` 可覆盖） | **真正的安全边界**：每个成员是一个 in-process AgentSession，吃内存也打 provider 限流 |
 | worker 不能再 spawn worker | **保持** | 见 Phase 4 | 安全边界（PI-Desktop 已验证），防递归失控 |
 | 人类优先槽 | **1 个/父** | ✅ 已实现（`isHumanPriorityEnabled()`；`PI_TEAM_HUMAN_PRIORITY=0` 可关） | 借鉴 DeepSeek：人的消息/状态请求不排队，直接插队，防饿死 |
 | worker 邮箱 inbox 上限 | **8 条未读**（同 PI-Desktop `AGENT_BUSY`） | ✅ 已实现（`getMaxUnread()`；`PI_TEAM_MAX_UNREAD=0` 关闭） | 防投递风暴 |
 | Ticket 依赖环检测 | **禁止环** | 见 Phase 4 | 任务 DAG 必须是有向无环图 |
 
-**上限拒绝消息**要区分原因（同 PI-Desktop background tasks D1/D2）：`LIMIT_EXCEEDED: per-parent worker limit reached (8)` vs `LIMIT_EXCEEDED: global worker limit reached (32)`。
+**上限拒绝消息**要区分原因（同 PI-Desktop background tasks D1/D2）：`LIMIT_EXCEEDED: per-team worker limit reached (12)` vs `LIMIT_EXCEEDED: global worker limit reached (32)`。
 
 > 落地说明：两个数值上限已在 `pi-team/src/constants.ts` 与 `teamTools.ts` 的 `checkSpawnLimits()` 中实现，
 > 拒绝消息前缀为 `LIMIT_EXCEEDED`，分别带 `per-team` 与 `global`。全局计数跨所有团队的 `config.json`，
