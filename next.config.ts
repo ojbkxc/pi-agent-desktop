@@ -69,8 +69,10 @@ const nextConfig: NextConfig = {
     "@earendil-works/pi-tui",
     // 内置跨端扩展：以 file: 依赖挂进 node_modules，自身再依赖 typebox /
     // @modelcontextprotocol/sdk 等；交给 Node 运行时解析，别让 webpack 打包。
+    // pi-purge 不编译、发的是纯 TS 源码，Node ≥22.19 原生 type stripping 可直接执行。
     "lsp-mcp",
     "pi-team",
+    "pi-purge",
   ],
   // Next 16 blocks cross-origin access to dev resources by default. Allow the
   // loopback and the RFC1918 LAN ranges so the dev server stays reachable
