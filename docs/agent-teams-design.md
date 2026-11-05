@@ -929,7 +929,17 @@ DeepSeek：有界并发槽位，**留一个额外槽位给人的消息/状态请
 
 **目标**：Ticket/Mandate/Assignment 三段式 + 并发槽位留人优先。
 
-**步骤**：
+**落地状态（2026-11-05）**
+
+| 步骤 | 状态 | 说明 |
+|---|---|---|
+| 5. team_plan 审批后自动 launch | ✅ 已实现 | `teamPlanStore.approveTeamPlan()` 原本是死代码（无人调用）；现补上 `claimPlanLaunch()` / `completePlanLaunch()` / `failPlanLaunch()`，并把 `team_plan` 扩展到 `operation: approve \| launch`。幂等靠 plan 状态机：`launch.status` 一旦不是 `pending` 就返回"没有待派发的计划" |
+| 人类优先槽 | ✅ 已实现 | `teamBus.#isHumanPriority()`：`from === 'human'` 的直发消息跳过 `#scheduleWake()` 的静默合并窗口，直接 `#flush()` |
+| 1. Ticket/Mandate/Assignment | ⬜ 未实现 | 只有 `message-protocol.ts` 的 `TaskAssignmentMessage` 消息类型；无 `tickets/<id>.json` 落盘实体与状态机 |
+| 2. Subscription 扇出 | ⬜ 未实现 | `TeamMember.subscriptions` 字段恒为 `[]`，无扇出逻辑 |
+| 3. Read receipt | ⚠️ 部分 | 只有 `teamBus.#flush()` 的"注入即标记已读"，无 ack 回执与未 ack 查询 |
+
+**原始步骤**：
 1. 实现 `tickets/<ticket_id>.json`（Mandate 不可变、Ticket open/ended、Assignment pending/running/ended）
 2. 实现 Subscription 扇出（ticket 订阅 thread，后续讨论自动扇出）
 3. 实现 Read receipt（claim + report/turn_end 算已读，未 ack 回 Eval）
