@@ -55,6 +55,12 @@ export interface StartSubagentRequest {
   maxTurns?: number;
   inheritContext?: boolean;
   isolation?: "worktree";
+  /**
+   * 能力覆盖：缺省时用 profile 的值（保持既有行为）。团队派发的成员用它们把能力开到最大
+   * ——成员是替 lead 干实事的，技能与扩展（含 MCP 工具）都该可用，否则很多任务做不了。
+   */
+  loadSkills?: boolean;
+  loadExtensions?: boolean;
   /** 团队名：团队成员身份注入的上下文（PI_TEAM_NAME）。缺省时不注入团队上下文。 */
   teamName?: string;
   /** 成员名（PI_AGENT_NAME）：团队成员身份注入。缺省时按 team-lead 处理（保持既有行为）。 */

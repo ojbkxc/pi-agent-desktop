@@ -127,6 +127,12 @@ export function createSubagentTeamHost(controller: SubagentController, options: 
         // 身份 system prompt（设计文档 §8.4）。
         ...(request.teamName ? { teamName: request.teamName } : {}),
         ...(request.agentName ? { agentName: request.agentName } : {}),
+        // 权限开到最大：成员是替 lead 干实事的，技能与扩展（含 MCP 工具）都该可用 ——
+        // general-purpose profile 默认 `loadSkills/loadExtensions: false`，成员会因此拿不到
+        // 扩展工具（也拿不到 team_*，导致「worker 不能 spawn worker」的拦截在 desktop 下
+        // 形同虚设）。这里显式打开。
+        loadSkills: true,
+        loadExtensions: true,
       };
       return attach(await controller.extensionRuntime.start(startRequest));
     },

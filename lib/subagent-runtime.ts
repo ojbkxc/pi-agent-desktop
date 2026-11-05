@@ -230,6 +230,9 @@ export function createSubagentController(
       }
       const childCwd = isolatedWorktree?.path ?? parent.cwd;
       const inheritContext = request.inheritContext ?? profile.inheritContext;
+      // 能力可被请求覆盖（团队派发的成员用它们把权限开到最大）。缺省仍走 profile。
+      const loadSkills = request.loadSkills ?? profile.loadSkills;
+      const loadExtensions = request.loadExtensions ?? profile.loadExtensions;
       const maxTurns = request.maxTurns ?? profile.maxTurns;
       if (maxTurns !== undefined && (!Number.isFinite(maxTurns) || maxTurns < 0)) {
         throw new Error("max_turns must be a non-negative number");
@@ -250,8 +253,8 @@ export function createSubagentController(
       const promptPlan = buildSubagentPromptPlan({
         profileSystemPrompt: profile.systemPrompt,
         tools: profile.tools,
-        loadSkills: profile.loadSkills,
-        loadExtensions: profile.loadExtensions,
+        loadSkills,
+        loadExtensions,
         promptMode: profile.promptMode,
         task: appendSubagentInputFiles(request.task, inputFiles),
         inheritedParentContext,
@@ -265,8 +268,8 @@ export function createSubagentController(
         modelRuntime: parentModelRuntime,
         settingsManager,
         resourceLoaderOptions: {
-          noExtensions: !profile.loadExtensions,
-          noSkills: !profile.loadSkills,
+          noExtensions: !loadExtensions,
+          noSkills: !loadSkills,
           noPromptTemplates: true,
           noThemes: true,
           noContextFiles: true,
@@ -282,12 +285,12 @@ export function createSubagentController(
             ? { extensionFactories: [createExactSystemPromptExtension(() => promptPlan.exactSystemPrompt)] }
             : {}),
         },
-        ...((profile.loadExtensions || profile.loadSkills)
+        ...((loadExtensions || loadSkills)
           ? { resourceLoaderReloadOptions: projectTrustReloadOptions(childCwd, agentDir) }
           : {}),
       });
 
-      const extensionToolNames = profile.loadExtensions
+      const extensionToolNames = loadExtensions
         ? profile.extensionTools?.length
           ? selectSubagentExtensionTools(
             services.resourceLoader.getExtensions().extensions,
@@ -319,8 +322,8 @@ export function createSubagentController(
           version: 1,
           appendSystemPrompt: [...appendSystemPrompt],
           tools: [...activeTools],
-          loadSkills: profile.loadSkills,
-        loadExtensions: profile.loadExtensions,
+          loadSkills,
+          loadExtensions,
         ...(promptPlan.exactSystemPrompt !== undefined ? { exactSystemPrompt: promptPlan.exactSystemPrompt } : {}),
         },
         ...(isolatedWorktree ? { worktreePath: isolatedWorktree.path, worktreeBranch: isolatedWorktree.branch } : {}),
