@@ -6,10 +6,13 @@
  * 让 SDK 把它当 `builtin:<name>` 资源——默认加载，`-builtin:<name>` 或 `--no-extensions`
  * 可关闭。`replaceable: true` 允许用户用同名工具/命令的第三方扩展顶替。
  *
- * 只接线到**普通会话**（见 lib/rpc-manager.ts 的 normal-session 分支）：chat-only、
- * 子 agent、以及 workspace chat 都不加载这三个扩展——团队工具会派发子会话，属于
- * agent 委派能力，不应出现在聊天策略下；LSP 也只在真正的项目会话里才有意义；
- * pi-purge 的 `/purge` 命令在聊天策略下没有意义。
+ * 接线到两处（都在 lib/rpc-manager.ts 与 lib/subagent-runtime.ts）：
+ *   - **普通会话**：三个扩展全给（normal-session 分支）。
+ *   - **团队成员（子会话）**：只给 pi-lsp 与 pi-team，且 pi-team **不带 controller** ——
+ *     成员因此只有邮箱，派发在宿主层结构性抛错（见 lib/builtin-extensions.ts 的
+ *     `createSubagentBuiltinExtensions`）。chat-only 与 workspace chat 仍然一个都不给：
+ *     团队工具会派发子会话，属于 agent 委派能力，不应出现在聊天策略下；LSP 也只在真正的
+ *     项目会话里才有意义；pi-purge 的 `/purge` 命令在聊天策略下没有意义。
  */
 import type { ExtensionAPI, ExtensionContext, InlineExtension } from "@earendil-works/pi-coding-agent";
 import { createPiTeamExtension } from "pi-team";

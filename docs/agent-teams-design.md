@@ -844,6 +844,39 @@ DeepSeek：有界并发槽位，**留一个额外槽位给人的消息/状态请
 > `#scheduleWake()` 的静默合并窗口，直接 `#flush()` 立即唤醒；成员之间的消息仍走防抖合并。
 > 这样一串 agent 消息不会把人的插话按窗口往后推。
 
+### 8.5 成员的资源面（2026-11-06 起）
+
+成员（子会话）此前**一个内置扩展都拿不到** —— `pi-lsp` / `pi-team` / `pi-purge` 与
+`codemode` / `tool-search` / `mcp` 都只在普通会话装配。后果有两个：`requireTeamLead()`
+那道「worker 不能 spawn worker」的拦截从来没有机会跑（成员根本没有 `team_*` 工具），
+以及 codemode 的延迟工具声明等省 token 机制对成员完全不可用。
+
+现在成员走 `lib/builtin-extensions.ts` 的 `createSubagentBuiltinExtensions()`：
+
+| 给不给 | 扩展 | 说明 |
+|---|---|---|
+| 给 | `codemode` / `tool-search` / `mcp` | 省 token 的工具暴露 + MCP 工具。**每个成员各自一个 `McpHost`**（宿主单会话绑定，父子不可共享），连的是同一份 `mcp.json`；宿主是懒连接的，且 10 分钟 idle 释放 |
+| 给 | `pi-lsp` | 成员要读代码。language server **不是 eager 启动**的：`LSPServerManager.initialize()` 只建实例，真正 spawn 在按文件首次请求时。但每个调用过 `lsp` 的成员各自一份进程，没有跨会话共享 |
+| 给 | `pi-team`（**不带 controller**） | 只有邮箱（`MEMBER_TEAM_TOOL_NAMES`）；`team_create` / `team_plan` / `team_delete` 在宿主层结构性抛错。这比单靠 `requireTeamLead()` 硬 —— 身份注入走进程级 `process.env`，并发派成员理论上可能串号 |
+| 不给 | `pi-purge` / artifactGuide / projectCommandBash / subagent | 分别是 composer 命令、`:::artifact` 提示、`!command`、派发能力本身，子会话都无意义或有害 |
+
+两条装配路径必须一致：新建在 `lib/subagent-runtime.ts`，恢复在 `lib/rpc-manager.ts` 的
+`subagentResources` 分支。恢复侧用一个**可推导的判据**（`snapshotWantsSubagentExtensions(tools)`）
+而不是新快照字段 —— 加这次改动之前创建的会话、以及极简档成员，工具名里都不会出现这些
+名字，因此不会被塞进一批它从来没有过的 MCP 服务器。
+
+只读 MCP 策略（`lib/mcp-read-only-policy.ts`）现在也覆盖成员：它此前只读
+`pi-web:tool-selection`，而子会话把钉住的工具写在 `pi-web:subagent` 快照里，于是
+`explore` / `plan` 成员（`PRESET_READ_ONLY`）只读的是编码工具、却能通过 MCP 写。
+
+### 8.6 全局「极简档」与成员
+
+设置里的极简档（`lib/lean-mode.ts`，对齐 cc-haha 的 `agentProfile === "lean"`）打开后：
+普通项目会话不加载任何扩展、技能、提示模板与上下文文件，工具收敛到内置编码工具；
+成员被派发时跟着一起收窄（`StartSubagentRequest.lean`，`lib/pi-team-host.ts` 传
+`isLeanMode()`），因此也就没有 MCP 与 LSP。真源在服务端
+（`~/.pi/agent/pi-web/settings.json` 的 `leanMode`），重开旧会话同样生效。
+
 ---
 
 ## 9. in-process vs 子进程的取舍
