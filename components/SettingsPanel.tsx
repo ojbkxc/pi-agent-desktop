@@ -38,6 +38,7 @@ import { DesktopAppSection } from "./desktop";
 import { McpConfig } from "./McpConfig";
 import { ConfigButton, ConfigSwitch } from "./SettingsUi";
 import { ArtifactsSettingRow, AutoTitleSettingRow } from "./ArtifactsSettingRow";
+import { AgentTeamsSettingRow } from "./AgentTeamsSettingRow";
 import { RemoteAccessSection } from "./RemoteAccessSection";
 import { RelaySection } from "./RelaySection";
 import { ChatsSettingsSection } from "./ChatsSettingsSection";
@@ -268,6 +269,7 @@ function GeneralSettings({
                   onChange={(enabled) => { if (enabled !== soundEnabled) onSoundToggle(); }}
                 />
               </div>
+              <AgentTeamsSettingRow />
               <ArtifactsSettingRow />
               <AutoTitleSettingRow />
               <div className="settings-chat-option settings-chat-switch-option" role="radiogroup" aria-label={t("settings.enterSendMode")}>

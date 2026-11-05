@@ -26,6 +26,11 @@ export const APP_PREF_KEYS = {
   expandedProjects: "pi-web:expanded-projects",
   /** "1" while the sidebar Chats section is folded. */
   collapsedChats: "pi-web:collapsed-chats",
+  /**
+   * Agent Team 开关（composer 的「用团队处理」）。**默认开**：打开时发送的消息会前置一段
+   * 团队指令，让模型建团队拆任务；用户可在设置里关掉，关掉后消息按原样发送。
+   */
+  agentTeamsEnabled: "pi-agent-teams-enabled",
   /** Additional five-chat pages shown past the Chats preview cap. */
   chatSessionPages: "pi-web:chat-session-pages",
   /** Chat session ids pinned to the top of the Chats section. */

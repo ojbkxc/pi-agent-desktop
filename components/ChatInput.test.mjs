@@ -15,6 +15,7 @@ const { ChatInput, ModelErrorBanner, ModelScopeWarningBanner, canClearBuiltinCom
 
 const { isBareMcpCommand } = await jiti.import("@/lib/mcp-command.ts");
 const { composeMessageWithAttachedFiles } = await jiti.import("@/lib/chat-attachments.ts");
+const { withAgentTeamRequest } = await jiti.import("@/lib/agent-team-request.ts");
 const { ModelSelector } = await jiti.import("./ModelSelector.tsx");
 const { clearDraft, getDraft, mergeRestoredSubmissionDraft, mergeRestoredSubmissionText, rekeyDraft, setDraft } = await jiti.import("@/lib/draft-store");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
@@ -705,6 +706,9 @@ test("handleSend lets a handled /mcp through while streaming and sends an unowne
       runBuiltinCommand: async (message) => { calls.builtin.push(message); return handled; },
       clearInput() {},
       onSend: (message) => calls.sent.push(message),
+      // 本用例只关心 /mcp 的路由，Agent Team 开关显式关掉，让发送的就是原文。
+      agentTeamsEnabled: false,
+      withAgentTeamRequest,
     });
     await handleSend();
     return calls;
@@ -934,7 +938,7 @@ test("handleSend sends exactly once and routes builtin commands through the pend
     compilerOptions: { target: ts.ScriptTarget.ES2020 },
   }).outputText);
 
-  function run({ value = "hello", attachedImages = [], builtinHandled = false, resolved = null, workspaceUnavailable = null }) {
+  function run({ value = "hello", attachedImages = [], builtinHandled = false, resolved = null, workspaceUnavailable = null, agentTeamsEnabled = false }) {
     let sends = 0;
     let cleared = 0;
     let builtinCalls = 0;
@@ -950,6 +954,8 @@ test("handleSend sends exactly once and routes builtin commands through the pend
       sessionMentionTargetsRef: { current: [] },
       onSend(message, images) { sends += 1; handler.sent = { message, images }; },
       clearInput() { cleared += 1; },
+      agentTeamsEnabled,
+      withAgentTeamRequest,
     });
     return handler().then(() => ({ sends, cleared, builtinCalls, sent: handler.sent }));
   }
@@ -980,6 +986,13 @@ test("handleSend sends exactly once and routes builtin commands through the pend
   assert.equal(blocked.cleared, 0);
   const local = await run({ value: "/copy", builtinHandled: true, workspaceUnavailable: gone });
   assert.equal(local.builtinCalls, 1);
+
+  // Agent Team 开关：关着发原文，开着在原文前加团队指令块（原文保持不变，在块之后）。
+  const teamOff = await run({ value: "拆一下这活", agentTeamsEnabled: false });
+  assert.equal(teamOff.sent.message, "拆一下这活");
+  const teamOn = await run({ value: "拆一下这活", agentTeamsEnabled: true });
+  assert.equal(teamOn.sent.message, withAgentTeamRequest("拆一下这活"));
+  assert.ok(teamOn.sent.message.endsWith("拆一下这活"), "用户原文应完整保留在块之后");
 });
 
 test("a missing workspace replaces the model error and disables Send", () => {

@@ -27,6 +27,7 @@ import { CODEMODE_TOOL_NAME, codemodeCalls, codemodeScript, codemodeScriptPrevie
 import { CodemodeCallList } from "./CodemodeToolView";
 import { imageSource, resultImageFileName } from "@/lib/result-image";
 import { mcpToolLabel, prettyMcpResultText } from "@/lib/mcp-tool-display";
+import { stripAgentTeamRequest } from "@/lib/agent-team-request";
 import type {
   AgentMessage,
   UserMessage,
@@ -364,14 +365,16 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
   // SDK image normalization appends coordinate hints to persisted user text.
   // Project those out of display/copy and newly created edit drafts. The source
   // message and existing model context retain the exact original data.
-  const content = userImageDisplayText((
+  // The Agent Team switch wraps a message for the model (`lib/agent-team-request.ts`);
+  // the bubble shows only what the user typed, so the block is stripped here too.
+  const content = userImageDisplayText(stripAgentTeamRequest((
     typeof message.content === "string"
       ? message.content
       : message.content
           .filter((b): b is TextContent => b.type === "text")
           .map((b) => b.text)
           .join("\n")
-  ).replace(/\r\n?/g, "\n"), imageBlocks.length);
+  ).replace(/\r\n?/g, "\n")).content, imageBlocks.length);
 
   // Files attached in a chat travel inside the text; show them as chips, not a wall of text.
   const { text: bodyText, files: attachedFiles } = splitAttachedFiles(content);
