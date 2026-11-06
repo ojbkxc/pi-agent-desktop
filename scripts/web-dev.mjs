@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const { getHelpText, parseLaunchOptions } = require("../bin/pi-web-options.js");
+const { readConfiguredServerPort } = require("../bin/pi-web-settings.js");
 const { getNextNodeArgs } = require("../bin/pi-web-node-args.js");
 const { wireChildProcessLifecycle } = require("../bin/process-lifecycle.js");
 const { attachReadyHandoff, shouldOpenBrowser } = require("../lib/browser-open.js");
@@ -14,7 +15,9 @@ const loopbackHosts = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 
 let launchOptions;
 try {
-  launchOptions = parseLaunchOptions(process.argv.slice(2));
+  launchOptions = parseLaunchOptions(process.argv.slice(2), process.env, {
+    settingsPort: readConfiguredServerPort(process.env),
+  });
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
@@ -53,6 +56,7 @@ const child = spawn(
     env: {
       ...process.env,
       PI_WEB_HOSTNAME: "127.0.0.1",
+      PI_WEB_PORT: launchOptions.port,
       PI_WEB_VERBOSE: launchOptions.verbose ? "1" : "0",
     },
   },

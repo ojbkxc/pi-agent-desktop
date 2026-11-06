@@ -60,7 +60,7 @@ Environment:
 `;
 }
 
-function parseLaunchOptions(args = process.argv.slice(2), env = process.env) {
+function parseLaunchOptions(args = process.argv.slice(2), env = process.env, options = {}) {
   let values;
   let positionals;
   try {
@@ -87,9 +87,13 @@ function parseLaunchOptions(args = process.argv.slice(2), env = process.env) {
     );
   }
 
+  // Settings-file port sits below PORT so an explicit environment still wins;
+  // it exists so the Settings UI can change the listener without editing scripts.
+  const settingsPort = Number.isInteger(options.settingsPort) ? String(options.settingsPort) : null;
+
   return {
     help: false,
-    port: normalizePort(values.port ?? env.PORT ?? "30141"),
+    port: normalizePort(values.port ?? env.PORT ?? settingsPort ?? "30141"),
     hostname: values.hostname ?? env.PI_WEB_HOSTNAME ?? "127.0.0.1",
     openBrowser: !values["no-open"] && !isEnabled(env.PI_WEB_NO_OPEN),
     verbose: Boolean(values.verbose) || isVerboseLogging(env),

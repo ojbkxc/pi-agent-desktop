@@ -2,6 +2,7 @@ import { configureHttpDispatcher } from "@/lib/http-dispatcher";
 import { closeAllAgentEventStreams } from "@/lib/agent-event-stream";
 import { startScheduler } from "@/lib/scheduled-tasks";
 import { restartRelayFromConfig } from "@/lib/relay/runtime";
+import { restartPublicAccessFromConfig } from "@/lib/public-access/runtime";
 
 export function registerNodeInstrumentation(): void {
   configureHttpDispatcher();
@@ -15,6 +16,15 @@ export function registerNodeInstrumentation(): void {
   if (process.env.PI_WEB_DISABLE_RELAY !== "1") {
     void restartRelayFromConfig().catch((error) => {
       console.error("[relay] could not start:", error instanceof Error ? error.message : error);
+    });
+  }
+
+  // The Cloudflare tunnel (Settings › Public access) restores only when the user
+  // turned on auto-start; it refuses to run without a web password. Tests and
+  // e2e runs set PI_WEB_DISABLE_TUNNEL=1 so nothing dials out.
+  if (process.env.PI_WEB_DISABLE_TUNNEL !== "1") {
+    void restartPublicAccessFromConfig().catch((error) => {
+      console.error("[public-access] could not start:", error instanceof Error ? error.message : error);
     });
   }
 

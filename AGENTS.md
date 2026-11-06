@@ -71,6 +71,9 @@ app/api/
   agent/running/events/route.ts   GET SSE stream of currently-running session ids
   agent/tasks/route.ts            GET live task snapshots (running step, waiting dialogs, last outcome) for the Tasks page
   remote-access/route.ts          GET/PUT Tailscale remote-access setting (PUT only from loopback)
+  public-access/route.ts          GET/PUT/POST the Cloudflare tunnel: config+state+binary (GET), save config (PUT), start/stop/auto-start/install-binary (POST); writes local-only
+  server-settings/route.ts        GET/PUT the saved listener port (PUT local-only, applies on restart)
+  health/route.ts                 not under app/api: top-level GET /health {status,gatewayId}, deliberately outside the proxy matcher so the tunnel can verify it reached this process
   push/{config,subscribe,unsubscribe,test}/route.ts  Web Push key, device subscriptions, test send
   relay/route.ts                  GET/PUT encrypted relay status and config (PUT local-only)
   relay/pairing/**                POST pairing QR ticket, POST [id] approve/deny (local-only)
@@ -131,6 +134,8 @@ lib/
   plugin-marketplace.ts  pi-extensions catalog: parse/validate + source mapping (fixed URL, see app/api/plugins/marketplace)
   rpc-manager.ts      AgentSessionWrapper + registry + startRpcSession
   scheduled-tasks/    scheduler, runner, cron, store, run index for scheduled tasks (see docs/agents/scheduled-tasks.md)
+  public-access/      Cloudflare tunnel: config validation, the cloudflared spawner, the gateway probe, the state machine, the binary resolver and install (see docs/agents/fork-public-access.md)
+  server-port.ts      read/write the saved listener port (mirrored by bin/pi-web-settings.js for launchers that cannot load the SDK)
   session-reader.ts   SessionManager wrappers + path cache + buildSessionContext adapter
   tool-presets.ts     PRESET_NONE/DEFAULT/FULL + getPresetFromTools()
   types.ts            shared TypeScript types
@@ -157,6 +162,7 @@ components/
   scheduled/          Scheduled page (list, detail, editor, run history) and its sidebar row
   tasks/              Tasks page (waiting / running / recent across projects) and its sidebar row
   RemoteAccessSection.tsx  Settings › General › Remote access (Tailscale) and "Notify this device"
+  ServerSection.tsx   Settings › General › Server: the listener port and the Cloudflare tunnel switch
   RelaySection.tsx    Settings › General › Remote relay: relay config, pairing QR, approvals, paired phones
   SettingsPanel.tsx   settings dialog; its General tab hosts the app intro, Version & Updates and the desktop-only switches
   AppUpdatesSection.tsx  Version & Updates block at the top of General
@@ -205,6 +211,7 @@ Fork notes:
 - [fork-desktop.md](docs/agents/fork-desktop.md): the Tauri shell (desktop token, native menus in Rust, file context menu, window state, tauri plugin version pairing), workspace terminals and node-pty / quickjs staging, Windows overwrite installs.
 - [fork-ui.md](docs/agents/fork-ui.md): who contains whom in the topbar / chat column / right panel, the settings dialog tabs, touch affordances, completion sound, plugins and skills.
 - [fork-chat-workspace.md](docs/agents/fork-chat-workspace.md): the non-project Chats section, the hidden `chat-workspace` cwd and `workspaceKind` identity, project-workbench suppression, and the server-enforced chat policy (skills and MCP yes; no file, shell or other extension tools; no context files), text attachments, and continuing a chat in a project.
+- [fork-public-access.md](docs/agents/fork-public-access.md): the Cloudflare tunnel and the Settings › General › Server section — the config layer, the cloudflared spawner and its readiness rule, the gateway probe that proves the public hostname returns to this process, the state machine, the host-allow-list binding to the web password, and the `prepare:cloudflared` binary. Files: `lib/public-access/**`, `lib/server-port.ts`, `bin/pi-web-settings.js`, `app/api/public-access/**`, `app/api/server-settings/**`, `app/health/route.ts`, `components/ServerSection.tsx`, `scripts/prepare-cloudflared.mjs`, `lib/request-security.ts`, `proxy.ts`, `instrumentation-node.ts`.
 - [agent-teams-design.md](docs/agent-teams-design.md): the agent-teams feature end to end — the sources it borrows from (PI-Desktop Session Orchestrator, cc-haha swarm, DeepSeek dsh-superagent, the `pi-team` extension), the module split (`lib/pi-extension-builtins.ts` registers the three cross-end extensions — `pi-lsp`, `pi-team`, `pi-purge` — as `builtin:` names; `lib/pi-team-host.ts` adapts the existing subagent runtime onto the `TeamHost` seam so the extension never spawns sessions itself), the ten `team_*` tools and four `/team-*` commands, the file layer under `~/.pi/agent/teams/`, the swimlane projection and its `app/api/teams/**` routes, the concurrency limits (§8: 8 per team / 32 global, rejected with a `LIMIT_EXCEEDED` message that names which limit was hit), and the Phase 1–5 rollout with what each phase actually shipped. Files: `lib/pi-extension-names.ts`, `lib/pi-extension-builtins.ts`, `lib/pi-team-host.ts`, `lib/agent-teams-swimlane.ts`, `lib/agent-teams-swimlane-store.ts`, `components/AgentTeams/**`, `app/api/teams/**`, `public/lane-diagram.html`, and the `pi-team` package itself.
 
 ### AgentSession lifecycle (`lib/rpc-manager.ts`)
@@ -235,6 +242,7 @@ Each one undid a real regression; the linked note has the reasoning.
 - Layout: the center column contains topbar and chat; the right-panel block is a full-height sibling inside the outer row; no `paddingLeft: sidebarResizer.width` on the topbar. Pinned by `AppShell.right-panel-row.test.mjs`. ([fork-ui](docs/agents/fork-ui.md))
 - `SettingsPanel` keeps the `onBusyChange` guard so a desktop update cannot be dismissed mid-install. ([fork-ui](docs/agents/fork-ui.md))
 - Chats own a server-created folder under the chat root (a new chat is requested with the root, never a path built in the browser); `workspaceKind` / `chatFolder` come from the server, and chats stay out of project trust / worktrees / project files / terminals / the right panel. Server policy keeps a chat off the shell, with file tools confined to its folder, `read` also opening skills and files the user named in their own message (read-only), MCP tools limited to those their server marks read-only, no extension tool the user has not allowed, and context-file-free, even for persisted sessions. Only the per-chat unlock (`pi-web:chat-unlock`, never on a network-exposed server) lifts that. Legacy chats (the old shared `chat-workspace` cwd) keep their old policy. ([fork-chat-workspace](docs/agents/fork-chat-workspace.md))
+- The Cloudflare tunnel's hostname is trusted only while the tunnel is online **and** `PI_WEB_PASSWORD` is set; `publicAccess.origin` is written on `online` and cleared on stop/failure, so hand-editing the settings file alone never widens the host allow-list. Keep `/health` free of anything but `{status,gatewayId}`. ([fork-public-access](docs/agents/fork-public-access.md))
 
 ---
 

@@ -15,6 +15,7 @@ import {
   readRemoteAccessConfig,
 } from "@/lib/remote-access";
 import { readRelayMark } from "@/lib/relay/mark";
+import { isPublicAccessRequestHost, readPublicAccessConfig } from "@/lib/public-access/settings";
 import {
   isValidWebSessionToken,
   isValidBasicAuthorization,
@@ -59,6 +60,17 @@ export function proxy(request: NextRequest) {
       : new NextResponse("Untrusted relay request", { status: 403 });
   }
   if (relayMark) return NextResponse.next();
+
+  // The Cloudflare tunnel's hostname is only trusted with a web password (see
+  // lib/request-security.ts). If a settings file was edited by hand to point here
+  // without one, say so instead of the generic "untrusted" answer.
+  if (!isWebPasswordEnabled(process.env.PI_WEB_PASSWORD)
+    && isPublicAccessRequestHost(request, readPublicAccessConfig())) {
+    return new NextResponse("Pi refuses public tunnel traffic without a web password. Set PI_WEB_PASSWORD.", {
+      status: 403,
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
 
   if (!isTrustedRequest) {
     // The tailnet name from Settings › Remote access, reached without a Tailscale user:

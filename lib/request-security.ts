@@ -6,6 +6,27 @@ import {
   readRemoteAccessConfig,
   type RemoteAccessConfig,
 } from "./remote-access.ts";
+import {
+  isPublicAccessRequestHost,
+  readPublicAccessConfig,
+  type PublicAccessConfig,
+} from "./public-access/settings.ts";
+import { isWebPasswordEnabled } from "./web-auth.ts";
+
+/**
+ * The Cloudflare tunnel's published hostname. Trusting it is deliberately tied to
+ * a live tunnel and a web password: `origin` is only written while the tunnel is
+ * online, and without PI_WEB_PASSWORD the proxy would hand a shell to anyone who
+ * can reach the URL. Editing the settings file by hand therefore changes nothing.
+ */
+function isTrustedPublicAccessRequest(request: Request, publicAccess: PublicAccessConfig | null): boolean {
+  return isWebPasswordEnabled() && isPublicAccessRequestHost(request, publicAccess);
+}
+
+function isPublicAccessOrigin(origin: string, publicAccess: PublicAccessConfig | null): boolean {
+  if (!publicAccess?.origin || !isWebPasswordEnabled()) return false;
+  return canonicalOrigin(origin) === publicAccess.origin;
+}
 
 function normalizeHostname(value: string): string {
   const unbracketed = value.startsWith("[") && value.endsWith("]")
@@ -110,6 +131,7 @@ export function isApiRequestHostAllowed(
   request: Request,
   configuredHostnames = configuredHostnamesFromEnvironment(),
   remoteAccess: RemoteAccessConfig | null = readRemoteAccessConfig(),
+  publicAccess: PublicAccessConfig | null = readPublicAccessConfig(),
 ): boolean {
   const host = request.headers.get("host");
   const hostname = host ? hostnameFromAuthority(host) : null;
@@ -119,6 +141,9 @@ export function isApiRequestHostAllowed(
   if (remoteAccess !== null && hostname === remoteAccess.hostname) {
     return isRemoteAccessRequestAuthorized(request, remoteAccess);
   }
+  // The Cloudflare tunnel (Settings › Public access), only while online and only when a
+  // web password exists — the untrusted-deny path below would reject it otherwise.
+  if (isTrustedPublicAccessRequest(request, publicAccess)) return true;
   // Tailscale Serve (or any proxy) passes the client's Host through, so a relayed
   // request can claim to be local. A loopback Host is trusted only from this computer,
   // and an IP literal from another machine only when the server listens on the network.
@@ -162,6 +187,7 @@ function isProxyRewrittenSameOrigin(request: Request, origin: string): boolean {
 export function isApiRequestOriginAllowed(
   request: Request,
   remoteAccess: RemoteAccessConfig | null = readRemoteAccessConfig(),
+  publicAccess: PublicAccessConfig | null = readPublicAccessConfig(),
 ): boolean {
   const origin = request.headers.get("origin");
   const fetchSite = request.headers.get("sec-fetch-site");
@@ -171,6 +197,7 @@ export function isApiRequestOriginAllowed(
   const requestOrigin = getRequestOrigin(request);
   if (requestOrigin !== null && canonicalOrigin(origin) === requestOrigin) return true;
   if (isRemoteAccessOrigin(origin, request, remoteAccess)) return true;
+  if (isPublicAccessOrigin(origin, publicAccess)) return true;
 
   return isProxyRewrittenSameOrigin(request, origin);
 }

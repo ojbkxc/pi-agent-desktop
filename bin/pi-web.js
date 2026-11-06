@@ -24,11 +24,15 @@ const { wireChildProcessLifecycle } = require("./process-lifecycle");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { checkNetworkExposure } = require("./network-exposure-warning");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+const { readConfiguredServerPort } = require("./pi-web-settings");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { attachReadyHandoff, shouldOpenBrowser } = require("../lib/browser-open");
 
 let launchOptions;
 try {
-  launchOptions = parseLaunchOptions();
+  launchOptions = parseLaunchOptions(process.argv.slice(2), process.env, {
+    settingsPort: readConfiguredServerPort(process.env),
+  });
 } catch (error) {
   fs.writeSync(
     process.stderr.fd,
@@ -80,7 +84,7 @@ nextArgs.push("-H", hostname);
 const child = spawn(process.execPath, getNextNodeArgs(nextBin, nextArgs), {
   cwd: pkgDir,
   stdio: ["inherit", "pipe", "inherit"],
-  env: { ...process.env, PI_WEB_HOSTNAME: hostname, PI_WEB_VERBOSE: launchOptions.verbose ? "1" : "0" },
+  env: { ...process.env, PI_WEB_HOSTNAME: hostname, PI_WEB_PORT: port, PI_WEB_VERBOSE: launchOptions.verbose ? "1" : "0" },
 });
 attachReadyHandoff(child.stdout, { port, wantOpen });
 wireChildProcessLifecycle(child);

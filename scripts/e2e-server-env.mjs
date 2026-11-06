@@ -18,6 +18,9 @@ export function createE2EServerEnv(parentEnv, agentDir, mode) {
     LOCALAPPDATA: join(home, "AppData", "Local"),
     NODE_ENV: mode === "dev" ? "development" : "production",
     PI_WEB_PASSWORD: "",
+    // E2E must never dial out to Cloudflare; the tunnel also needs a saved config,
+    // which the isolated agent dir does not have.
+    PI_WEB_DISABLE_TUNNEL: "1",
     NEXT_TELEMETRY_DISABLED: "1",
   };
   // Desktop shells export their serialized config; Next must read this checkout's

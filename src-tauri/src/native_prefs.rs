@@ -266,6 +266,50 @@ pub fn write_last_server_port(app: &AppHandle, port: u16) {
     let _ = write_ui_prefs(app, &prefs);
 }
 
+/// Where Pi Web's own settings live, resolved the way lib/remote-access.ts does:
+/// `PI_CODING_AGENT_DIR`, else `PI_AGENT_HOME/.pi/agent`, else the OS home directory.
+fn pi_web_settings_path() -> Option<PathBuf> {
+    let agent_dir = match env::var("PI_CODING_AGENT_DIR") {
+        Ok(value) if !value.trim().is_empty() => expand_home_prefix(value.trim()),
+        _ => {
+            let home = env::var("PI_AGENT_HOME")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .map(PathBuf::from)
+                .or_else(|| env::var("USERPROFILE").ok().map(PathBuf::from))
+                .or_else(|| env::var("HOME").ok().map(PathBuf::from))?;
+            home.join(".pi").join("agent")
+        }
+    };
+    Some(agent_dir.join("pi-web").join("settings.json"))
+}
+
+fn expand_home_prefix(value: &str) -> PathBuf {
+    if let Some(rest) = value.strip_prefix('~') {
+        if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') {
+            let home = env::var("PI_AGENT_HOME")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| env::var("USERPROFILE").ok())
+                .or_else(|| env::var("HOME").ok());
+            if let Some(home) = home {
+                return PathBuf::from(home).join(rest.trim_start_matches(['/', '\\']));
+            }
+        }
+    }
+    PathBuf::from(value)
+}
+
+/// The listener port saved from the Settings UI (`pi-web/settings.json: serverPort`).
+/// The packaged launcher reads the same file; a missing or unreadable one is simply `None`.
+#[cfg(feature = "custom-protocol")]
+pub fn read_configured_server_port() -> Option<u16> {
+    let contents = fs::read_to_string(pi_web_settings_path()?).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&contents).ok()?;
+    let port = parsed.get("serverPort")?.as_u64()?;
+    u16::try_from(port).ok().filter(|port| *port >= 1024)
+}
+
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn theme_background_color(theme: &str) -> Color {
     if theme == "dark" {

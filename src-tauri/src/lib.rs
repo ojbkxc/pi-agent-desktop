@@ -26,7 +26,7 @@ use native_prefs::{
     clear_app_cache, reconcile_webview_cache_for_version, set_ui_theme, write_last_version,
 };
 #[cfg(feature = "custom-protocol")]
-use native_prefs::{read_last_server_port, write_last_server_port};
+use native_prefs::{read_configured_server_port, read_last_server_port, write_last_server_port};
 #[cfg(target_os = "macos")]
 use shell::build_macos_app_menu;
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -473,9 +473,16 @@ fn server_process_path(node_path: &Path) -> Option<std::ffi::OsString> {
 
 #[cfg(feature = "custom-protocol")]
 fn choose_port(app: &AppHandle) -> io::Result<u16> {
-    let mut candidates = Vec::with_capacity(36);
+    let mut candidates = Vec::with_capacity(37);
+    // The port picked in Settings › Server wins over the remembered last-used one;
+    // both fall through to the built-in range when the port is taken.
+    if let Some(configured) = read_configured_server_port() {
+        candidates.push(configured);
+    }
     if let Some(last) = read_last_server_port(app) {
-        candidates.push(last);
+        if !candidates.contains(&last) {
+            candidates.push(last);
+        }
     }
     candidates.push(DESKTOP_SERVER_PORT);
     for offset in 1u16..=32 {

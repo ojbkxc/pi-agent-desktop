@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const { checkNetworkExposure } = require("../bin/network-exposure-warning.js");
 const { wireChildProcessLifecycle } = require("../bin/process-lifecycle.js");
+const { parseLaunchOptions } = require("../bin/pi-web-options.js");
+const { readConfiguredServerPort } = require("../bin/pi-web-settings.js");
 
 const HOSTNAME = "0.0.0.0";
 const mode = process.argv[2];
@@ -17,15 +19,19 @@ if (mode !== "dev" && mode !== "start") {
   process.exit(1);
 }
 
+// The port comes from the same parser the packaged launcher uses, so the Settings UI
+// can change it; an explicit --port or PORT still wins over the saved value.
+const { port } = parseLaunchOptions([], process.env, { settingsPort: readConfiguredServerPort(process.env) });
+
 const exposure = checkNetworkExposure(HOSTNAME);
 if (exposure) console.warn(exposure.message);
 if (exposure?.fatal) process.exit(1);
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const nextBin = path.join(root, "node_modules", "next", "dist", "bin", "next");
-const child = spawn(process.execPath, [nextBin, mode, "-H", HOSTNAME, "-p", "30141"], {
+const child = spawn(process.execPath, [nextBin, mode, "-H", HOSTNAME, "-p", port], {
   cwd: root,
   stdio: "inherit",
-  env: { ...process.env, PI_WEB_HOSTNAME: HOSTNAME },
+  env: { ...process.env, PI_WEB_HOSTNAME: HOSTNAME, PI_WEB_PORT: port },
 });
 wireChildProcessLifecycle(child);

@@ -19,6 +19,13 @@ Fork-owned notes moved out of `AGENTS.md` to keep it short. The upstream doc on 
 - The sidebar worktree state is event-driven by nature (agent end, cwd switch) — branches checked out *outside* pi would go stale. `SessionSidebar` therefore polls `/api/worktrees` every 10 s while the tab is visible and on window focus; the project menu reads its lists fresh each time a page opens.
 - A branch already checked out in another worktree cannot be checked out again (git refuses); picking it under Switch branch jumps to that worktree instead.
 
+## Public access through a Cloudflare tunnel
+- Settings › General › Server (`components/ServerSection.tsx`, `app/api/public-access/route.ts`) publishes this server through `cloudflared`. The tunnel points at the same Next listener; there is no second listener and no gateway process. Details: [fork-public-access.md](fork-public-access.md).
+- **Trust is bound to a live tunnel *and* a password.** `isApiRequestHostAllowed()` takes the public-access config as a fourth argument and accepts the tunnel hostname only while `isWebPasswordEnabled()` is true and the Host matches the stored https `origin`. Because `origin` is written only on `online` and cleared on stop/failure/exit, hand-editing `settings.json` to add a hostname does nothing without a password — and with one, the request still has to clear `/login` or Basic in `proxy.ts`.
+- `proxy.ts` answers an unauthenticated request on the tunnel hostname with an explicit 403 naming the missing `PI_WEB_PASSWORD`, rather than the generic "untrusted". Writes (`PUT`/`POST /api/public-access`, `PUT /api/server-settings`) are `isLocalRequest()`-only: a phone or the public URL can read the state but never open the tunnel or move the port.
+- `GET /health` (`app/health/route.ts`) is the probe the tunnel manager uses to confirm the public hostname returns to *this* process: it is outside the proxy matcher and returns only `{status,gatewayId}`. Do not add anything to it.
+- Publishing still needs a web password before it will start at all (`409 configuration` from the route, and `restore()` refuses at boot); an unauthenticated tunnel is a shell for anyone who finds the address.
+
 ## File access allow-list
 - `/api/files` is intentionally not a general filesystem browser. Allowed roots come from session cwds, their resolved project roots, `~/pi-cwd-*`, and roots explicitly added with `allowFileRoot()`.
 - `/api/cwd/validate`, `/api/default-cwd`, and `/api/worktrees` call `allowFileRoot()` when they make a new location browsable.

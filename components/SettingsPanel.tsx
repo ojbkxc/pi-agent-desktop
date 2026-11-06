@@ -41,6 +41,7 @@ import { ArtifactsSettingRow, AutoTitleSettingRow } from "./ArtifactsSettingRow"
 import { AgentTeamsSettingRow } from "./AgentTeamsSettingRow";
 import { LeanModeSettingRow } from "./LeanModeSettingRow";
 import { RemoteAccessSection } from "./RemoteAccessSection";
+import { ServerSection } from "./ServerSection";
 import { RelaySection } from "./RelaySection";
 import { ChatsSettingsSection } from "./ChatsSettingsSection";
 import { AppearanceSettings } from "./AppearanceSettings";
@@ -360,6 +361,8 @@ function GeneralSettings({
           <RelaySection />
 
           <RemoteAccessSection />
+
+          <ServerSection />
 
           <TerminalSettingsSection />
 
