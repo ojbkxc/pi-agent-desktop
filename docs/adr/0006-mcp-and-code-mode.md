@@ -361,9 +361,10 @@ restores the branch's tool set from its transcript.
 ### Transport, rendering, and lifecycle
 
 - The SSE projection slims nested tool events (those with `parentToolCallId`),
-  drops nested updates, removes `result` from `tool_execution_end`, omits
-  `entry_appended`, coalesces updates per `toolCallId`, and truncates codemode
-  call snapshots, which otherwise grow with the square of the number of calls.
+  drops nested updates, removes `result` from `tool_execution_end`, strips the
+  `entry` from `entry_appended` (the browser only needs the marker), coalesces
+  updates per `toolCallId`, and truncates codemode call snapshots, which
+  otherwise grow with the square of the number of calls.
 - Extension dialogs queue instead of sharing one slot, so concurrent confirms
   from a script cannot overwrite each other.
 - A wrapper is removed from the registry by identity, reports itself closing

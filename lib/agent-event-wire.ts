@@ -27,9 +27,6 @@ export type ClientMessageUpdateEvent = Omit<JsonMessageUpdateEvent, "assistantMe
 const OMITTED_EVENT_TYPES = new Set([
   "turn_start",
   "turn_end",
-  // Carries the whole appended entry (an extension's custom entry, such as a
-  // codemode `store()` write, can be 1 MiB), and nothing in the browser reads it.
-  "entry_appended",
 ]);
 
 /**
@@ -191,6 +188,12 @@ export function toClientAgentEvent(
   }
 
   if (event.type === "agent_end") return { type: "agent_end" };
+
+  // The handler only needs to know that an entry appeared while idle; the entry
+  // itself can be a 1 MiB custom write (codemode `store()`), so it never
+  // travels. `useForkAgentEvents` reloads the transcript on the marker.
+  if (event.type === "entry_appended") return { type: "entry_appended" };
+
   return event;
 }
 
