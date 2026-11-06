@@ -13,8 +13,15 @@ const css = (await Promise.all(["app/globals.css", "app/settings.css", "app/nati
   .map(source => source.replace(/^@import[^;]*;/gm, "")).join("\n");
 const server = createServer((req, res) => {
   if (req.url.startsWith("/api/")) {
+    // The Terminal section lives on General, which also renders the fork's
+    // Server section: it reads these two routes, and a bare `{}` makes it throw
+    // on `binary.available`, taking the whole section down with it.
     const data = req.url.startsWith("/api/chat-settings") ? { model: null, thinkingLevel: null, instructions: "", allowedTools: [], confirmSave: false, instructionsMaxChars: 8000 }
-      : req.url.startsWith("/api/updates") ? { components: [], updates: [] } : {};
+      : req.url.startsWith("/api/updates") ? { components: [], updates: [] }
+        : req.url.startsWith("/api/public-access") ? { passwordSet: true, local: true, binary: { available: true, source: "fixture" },
+          view: { state: "disabled", phase: null, error: null, publicUrl: null, mode: "quick", localPort: 30141,
+            customUrl: "", tokenSet: false, tunnelId: null, autoStart: false, enabled: false } }
+          : req.url.startsWith("/api/server-settings") ? { port: 30141, configured: 30141, local: true } : {};
     res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(data)); return;
   }
   res.setHeader("Content-Type", req.url === "/fixture.js" ? "text/javascript" : "text/html; charset=utf-8");
