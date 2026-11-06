@@ -56,6 +56,9 @@ Environment:
   PI_WEB_ALLOWED_HOSTS       Extra exact proxy/custom hostnames, comma-separated
   PI_WEB_SKIP_VERSION_CHECK  Set to 1 to disable Pi Web update checks
   PI_WEB_IDLE_TIMEOUT_MS     Session idle timeout in ms (0 disables; default 600000)
+  PI_WEB_HTTP_IDLE_TIMEOUT_MS  Outbound HTTP idle timeout in ms, or "disabled"
+                               (default 1800000; a model stream that goes quiet
+                               longer than this is dropped mid-response)
   PI_WEB_SHUTDOWN_DEADLINE_MS  Shutdown wait for extensions in ms (default 5000)
 `;
 }

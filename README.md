@@ -100,6 +100,13 @@ NO_PROXY=localhost,127.0.0.1 \
 npm run dev
 ```
 
+Server-side requests also carry an *idle* timeout: a response that sends nothing at all for `PI_WEB_HTTP_IDLE_TIMEOUT_MS` is dropped. The default is 30 minutes, so a slow or buffering model relay is not cut off mid-stream. Lower it to fail a dead connection sooner, or disable it and leave cancellation to Stop:
+
+```bash
+PI_WEB_HTTP_IDLE_TIMEOUT_MS=300000 npm run dev    # 5 minutes
+PI_WEB_HTTP_IDLE_TIMEOUT_MS=disabled npm run dev  # no idle timeout
+```
+
 ## Local Development
 
 ### Requirements

@@ -1,7 +1,17 @@
 import { EventEmitter } from "node:events";
 import * as undici from "undici";
 
-export const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 300_000;
+/**
+ * How long a response body may stay silent before undici aborts it.
+ *
+ * This is an *idle* timer: undici refreshes it on every chunk, so a stream that
+ * keeps sending keeps living regardless of total duration. It is set well above
+ * a model's thinking time on purpose — a relay that buffers a stream, or a
+ * reasoning model that emits nothing for minutes, would otherwise be cut off
+ * mid-response and seen upstream as "client disconnected before the response
+ * completed". Override with PI_WEB_HTTP_IDLE_TIMEOUT_MS (ms, or "disabled").
+ */
+export const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 30 * 60_000;
 
 type DispatcherGlobal = typeof globalThis & {
   __piWebHttpDispatcherConfigured?: boolean;
@@ -55,8 +65,27 @@ function createUndiciOriginDispatcher(origin: string | URL, options: object): un
   );
 }
 
+/**
+ * The idle timeout to configure: `PI_WEB_HTTP_IDLE_TIMEOUT_MS` as a number of
+ * milliseconds, or `disabled`/`0` to leave body stalls entirely to the caller's
+ * own AbortSignal. An unset, blank or unusable value falls back to the default.
+ */
+export function resolveHttpIdleTimeoutMs(
+  rawValue: string | undefined = process.env.PI_WEB_HTTP_IDLE_TIMEOUT_MS,
+): number {
+  if (rawValue === undefined || rawValue.trim() === "") return DEFAULT_HTTP_IDLE_TIMEOUT_MS;
+  const parsed = parseHttpIdleTimeoutMs(rawValue);
+  if (parsed === undefined) {
+    console.warn(
+      `[pi-web] invalid PI_WEB_HTTP_IDLE_TIMEOUT_MS "${rawValue}", falling back to ${DEFAULT_HTTP_IDLE_TIMEOUT_MS} ms`,
+    );
+    return DEFAULT_HTTP_IDLE_TIMEOUT_MS;
+  }
+  return parsed;
+}
+
 export function configureHttpDispatcher(
-  timeoutMs: number = DEFAULT_HTTP_IDLE_TIMEOUT_MS,
+  timeoutMs: number | string = resolveHttpIdleTimeoutMs(),
 ): void {
   if (dispatcherGlobal.__piWebHttpDispatcherConfigured) return;
 

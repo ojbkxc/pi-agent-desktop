@@ -144,8 +144,9 @@ test("untouched and ignored files never trigger review", () => {
 
 test("the real v0.8.0 -> v0.8.1 changeset would have demanded review", () => {
   // Regression anchor: this is what upstream actually shipped in one patch
-  // release. Eight of these files carry tracked fork drift (including the
-  // editable outbox hook), so the previous
+  // release. Nine of these files carry tracked fork drift (including the
+  // editable outbox hook, and bin/pi-web.js, whose launcher the fork rewrote
+  // for the saved server port), so the previous
   // push-straight-to-signed-release path was applying them unattended.
   // lib/directory-browser.ts is in both lists for a reason — v0.8.1 introduced
   // it, and its homedir() usage is what broke the Windows build.
@@ -170,7 +171,7 @@ test("the real v0.8.0 -> v0.8.1 changeset would have demanded review", () => {
 
   assert.equal(result.reviewRequired, true);
   assert.equal(result.highestRisk, "high");
-  assert.equal(result.overlaps.length, 8);
+  assert.equal(result.overlaps.length, 9);
   assert.equal(result.overlaps.find(entry => entry.path === "hooks/useAgentSession.ts")?.risk, "high");
   assert.equal(result.overlaps[0].risk, "high", "the riskiest overlap must be reported first");
   assert.match(formatReport(result), /silent semantic conflicts/);

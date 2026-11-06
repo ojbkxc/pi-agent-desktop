@@ -214,10 +214,10 @@
     },
     "lib/request-security.ts": {
       "risk": "medium",
-      "drift": 36,
-      "structuralDrift": 36,
+      "drift": 61,
+      "structuralDrift": 61,
       "disposition": "accepted",
-      "reason": "Admits the Settings › Remote access tailnet name only for an authorized Tailscale user, and its https Origin. A merge that drops the remoteAccess parameter fails closed (the phone loses access); one that admits the host without isRemoteAccessRequestAuthorized would open the server to the whole tailnet."
+      "reason": "Admits the Settings › Remote access tailnet name only for an authorized Tailscale user, and its https Origin; also admits the Cloudflare tunnel hostname only while isWebPasswordEnabled(). A merge that drops either parameter fails closed (the phone or the tunnel loses access); one that admits the host without the authorization check would open the server to the whole tailnet or the public internet."
     },
     "components/PwaRegistration.tsx": {
       "risk": "low",
@@ -239,6 +239,68 @@
       "structuralDrift": 6,
       "disposition": "accepted",
       "reason": "Asks isLocalRequest() instead of trusting a loopback Host: requests replayed by the relay connector (and Tailscale Host spoofs) carry a loopback Host too."
+    },
+    "lib/http-dispatcher.ts": {
+      "risk": "medium",
+      "drift": 32,
+      "structuralDrift": 32,
+      "disposition": "accepted",
+      "reason": "Raises the outbound HTTP idle timeout from upstream 5 minutes to 30 and reads PI_WEB_HTTP_IDLE_TIMEOUT_MS (ms, or \"disabled\"). Upstream keeps body/headers timeouts at 5 minutes on the global undici dispatcher, which every model request uses; a buffering relay or a long reasoning pause is then dropped mid-response and the provider records it as a client disconnect. A merge that restores the 5-minute default silently re-introduces that cut, so keep resolveHttpIdleTimeoutMs and the larger default."
+    },
+    "lib/request-security.test.mjs": {
+      "risk": "medium",
+      "drift": 38,
+      "structuralDrift": 38,
+      "disposition": "accepted",
+      "reason": "Covers the two fork-only host branches: the tailnet name with an authorized Tailscale user, and the tunnel hostname with a web password."
+    },
+    "lib/pi-web-options.test.mjs": {
+      "risk": "low",
+      "drift": 24,
+      "structuralDrift": 24,
+      "disposition": "accepted",
+      "reason": "Covers the saved listener port (settingsPort) that the fork adds below PORT in parseLaunchOptions."
+    },
+    "bin/pi-web-options.js": {
+      "risk": "low",
+      "drift": 22,
+      "structuralDrift": 22,
+      "disposition": "accepted",
+      "reason": "Adds the optional settingsPort argument (--port > PORT > saved port > 30141) and the PI_WEB_HTTP_IDLE_TIMEOUT_MS help line. The launchers pass the port saved from Settings › Server."
+    },
+    "bin/pi-web.js": {
+      "risk": "medium",
+      "drift": 76,
+      "structuralDrift": 76,
+      "disposition": "accepted",
+      "reason": "Reads the saved server port through bin/pi-web-settings.js, passes PI_WEB_PORT so Get /api/server-settings can report the running port, and is otherwise the same next start launcher. lib/browser-open.test.mjs pins the package.json script text this file is started from."
+    },
+    "proxy.ts": {
+      "risk": "medium",
+      "drift": 50,
+      "structuralDrift": 50,
+      "disposition": "accepted",
+      "reason": "Adds the encrypted relay mark check, the Tailscale Funnel refusal without a web password, and the explicit 403 for tunnel traffic without one. Each branch is a fork security decision; a merge that drops one fails open."
+    },
+    "instrumentation-node.ts": {
+      "risk": "low",
+      "drift": 24,
+      "structuralDrift": 24,
+      "disposition": "accepted",
+      "reason": "Starts the scheduler and restores the relay and the Cloudflare tunnel at boot (each behind a PI_WEB_DISABLE_* switch) and closes agent event streams on SIGINT/SIGTERM so a production Next 16 server can exit."
+    },
+    "AGENTS.md": {
+      "risk": "low",
+      "drift": 377,
+      "disposition": "accepted",
+      "reason": "Fork-maintained collaboration notes: the File Map rows and Hard rules this fork adds, plus the fork-specific topic docs. Textual conflicts surface in review; nothing here merges silently into behaviour."
+    },
+    "components/SettingsPanel.tsx": {
+      "risk": "high",
+      "drift": 520,
+      "structuralDrift": 428,
+      "disposition": "accepted",
+      "reason": "Fork settings sections (server, public access, relay, remote access, agent teams, chats) mounted in the General tab. Upstream edits to the same tab merge cleanly around them, so a merge must keep every fork section mounted."
     }
   },
   "forkOwnedPaths": [
@@ -330,7 +392,20 @@
     "app/api/teams/",
     "public/lane-diagram.html",
     "docs/agent-teams-design.md",
-    "docs/remote-access.zh-CN.md"
+    "docs/remote-access.zh-CN.md",
+    "lib/public-access/",
+    "app/api/public-access/",
+    "app/api/server-settings/",
+    "app/health/",
+    "bin/pi-web-settings.js",
+    "lib/server-port.ts",
+    "lib/server-port.test.mjs",
+    "lib/pi-web-settings.test.mjs",
+    "components/ServerSection.tsx",
+    "scripts/prepare-cloudflared.mjs",
+    "scripts/prepare-cloudflared.test.mjs",
+    "docs/agents/fork-public-access.md",
+    "lib/http-dispatcher-idle.test.mjs"
   ],
   "dispositions": {
     "accepted": "Reviewed and kept. The drift is either the fork's own interaction design or a generic improvement with no desktop coupling, so it cannot be extracted into components/desktop/. Removing it would mean deleting a feature. These files stay permanent review points; that is the running cost of a UI fork, not a backlog item. Do not reopen without new information.",
@@ -358,6 +433,7 @@
     "2026-10-17 — lib/i18n/messages/{en,zh-CN,zh-TW}.ts: restored to upstream shape; fork additions, replacements, and deliberate deletions moved to lib/i18n/locale-plugins.ts. Runtime message maps are unchanged, but future upstream locale edits no longer conflict with a rewritten fork pack.",
     "2026-10-19 — Rebased local menu/composer customizations onto desktop 0.7.4 (3b6a877), keeping upstream component extractions and SDK 1.3.0. Shared AppSelect/AppCombobox and app-menu tokens (including 4px row gaps) apply to the extracted settings/project/session menus; Config remains a separate entry. Runtime userHome tracing guards, concentric composer geometry and right-aligned toolbar survive. Synchronization procedure: docs/fork-sync.zh-CN.md.",
     "2026-10-25 — components/MessageView.tsx: backported readable completed write content from agegr/pi-web #1024. Streamed input, empty files and additional arguments, ambiguous paths and paths truncated by the header keep the generic JSON view. No syntax highlighting or styling changes; the implementation converges with pi-web and is retained until the next upstream sync. Drift re-measured against the recorded 6fcd7d4 baseline.",
-    "2026-11-05 — Added the cross-end extension layer (builtin:pi-lsp / builtin:pi-team) and the Agent Teams swimlane page: lib/pi-extension-{names,builtins}.ts, lib/pi-team-host.ts, lib/agent-teams-swimlane{,-store}.ts, components/AgentTeams/, app/api/teams/, public/lane-diagram.html. These are new fork-owned files, so they are registered in forkOwnedPaths to keep a clean upstream merge from silently dropping them; lib/rpc-manager.ts gained a single extensionFactories line and lib/builtin-extensions.ts one name-list spread. lib/request-security.ts re-measured against the 6fcd7d4 baseline: 36 structural lines, so low -> medium."
+    "2026-11-05 — Added the cross-end extension layer (builtin:pi-lsp / builtin:pi-team) and the Agent Teams swimlane page: lib/pi-extension-{names,builtins}.ts, lib/pi-team-host.ts, lib/agent-teams-swimlane{,-store}.ts, components/AgentTeams/, app/api/teams/, public/lane-diagram.html. These are new fork-owned files, so they are registered in forkOwnedPaths to keep a clean upstream merge from silently dropping them; lib/rpc-manager.ts gained a single extensionFactories line and lib/builtin-extensions.ts one name-list spread. lib/request-security.ts re-measured against the 6fcd7d4 baseline: 36 structural lines, so low -> medium.",
+    "2026-11-06 — Registered the Cloudflare public-access + server-port feature (commits c82d50e, 35b1757). New fork-owned paths: lib/public-access/, app/api/public-access/, app/api/server-settings/, app/health/, components/ServerSection.tsx, lib/server-port.ts, bin/pi-web-settings.js, scripts/prepare-cloudflared.mjs, docs/agents/fork-public-access.md. Upstream files that feature edits, now registered: lib/request-security.ts (re-measured 36 -> 61 structural lines), proxy.ts, instrumentation-node.ts, bin/pi-web.js, bin/pi-web-options.js, components/SettingsPanel.tsx (high), AGENTS.md, and the two test files. Separately, lib/http-dispatcher.ts is the one to watch: upstream pins a 5-minute idle timeout on the global undici dispatcher that every model request goes through, and this fork raises it to 30 minutes and makes it configurable (PI_WEB_HTTP_IDLE_TIMEOUT_MS, or disabled) so a buffering relay or a long reasoning pause is not dropped mid-stream. A merge that restores the upstream default silently re-breaks that, so the new default and resolveHttpIdleTimeoutMs must survive. Drift re-measured against the 6fcd7d4 baseline."
   ]
 }

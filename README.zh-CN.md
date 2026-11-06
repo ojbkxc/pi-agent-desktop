@@ -99,6 +99,13 @@ NO_PROXY=localhost,127.0.0.1 \
 npm run dev
 ```
 
+服务端请求还带一个*空闲*超时：响应在 `PI_WEB_HTTP_IDLE_TIMEOUT_MS` 内一个字节都不发就会被断开。默认 30 分钟，避免中转站缓冲或模型长时间思考时被半路掐断。想更早放弃死连接就调小，想完全交给「停止」按钮就关掉：
+
+```bash
+PI_WEB_HTTP_IDLE_TIMEOUT_MS=300000 npm run dev    # 5 分钟
+PI_WEB_HTTP_IDLE_TIMEOUT_MS=disabled npm run dev  # 不设空闲超时
+```
+
 ## 本地开发
 
 ### 环境要求
