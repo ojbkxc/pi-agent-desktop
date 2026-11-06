@@ -57,6 +57,7 @@ function harness() {
     compactResult: null,
     liveThinkingLevel: null,
     loadedSessions: [],
+    activeToolResultsResets: [],
   };
   const bashRunningRef = { current: true };
   const agentRunningRef = { current: false };
@@ -93,7 +94,7 @@ function harness() {
     get reportCompactFailure() { return compactFailure; },
     setQueuedMessages() {},
     setExtensionDialog() {},
-    setActiveToolResults() {},
+    setActiveToolResults(v) { state.activeToolResultsResets.push(v); },
     setLiveModel() {},
     setLiveThinkingLevel(v) { state.liveThinkingLevel = v; },
     setSummarizationRetry,
@@ -204,6 +205,23 @@ test("entry_appended refreshes the transcript only when idle and throttled", () 
   // Second append within the throttle window is dropped.
   handler({ type: "entry_appended", entry: {} });
   assert.equal(state.loadedSessions.length, 1);
+});
+
+test("a reconnect into a running session reloads the transcript and drops stale live output", () => {
+  const { handler, state } = harness();
+
+  // An idle connect has nothing to catch up on.
+  handler({ type: "connected", isStreaming: false });
+  assert.deepEqual(state.loadedSessions, []);
+  assert.equal(state.activeToolResultsResets.length, 0);
+
+  // Mid-run, the events that finished while the stream was down
+  // (`message_end`, `tool_execution_end`) are never resent: reload the
+  // transcript and clear the running-tool output the replays will rebuild.
+  handler({ type: "connected", isStreaming: true });
+  assert.deepEqual(state.loadedSessions, ["s1"]);
+  assert.equal(state.activeToolResultsResets.length, 1);
+  assert.equal(state.activeToolResultsResets[0].size, 0);
 });
 
 test("legacy auto_compaction_* events are no longer handled", () => {

@@ -1556,6 +1556,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           agentRunningRef.current = true;
           setAgentRunning(true);
           setAgentPhase({ kind: "waiting_model" });
+          // A reconnect replays only the still-running tools and the in-flight
+          // message; anything that finished while the stream was down
+          // (`message_end`, `tool_execution_end`) is never resent, so the
+          // transcript would keep a resultless tool call and a tool stuck on
+          // "running" until the run ended. Clear the stale live output (the
+          // replays that follow this event rebuild the tools that really are
+          // running) and reload the transcript so the gap closes now.
+          setActiveToolResults(new Map());
+          const reconnectSid = sessionIdRef.current;
+          if (reconnectSid) void loadSession(reconnectSid);
         }
         break;
       }
