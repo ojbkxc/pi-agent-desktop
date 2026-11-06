@@ -49,7 +49,7 @@ test("GET returns the marketplace header and entries", async () => {
   });
   assert.equal(body.entries.length, 1);
   assert.equal(body.entries[0].name, "lsp-mcp");
-  assert.equal(body.entries[0].installSource, "git:https://github.com/ojbkxc/lsp-mcp#main");
+  assert.equal(body.entries[0].installSource, "git:https://github.com/ojbkxc/lsp-mcp@main");
 });
 
 test("GET maps an upstream non-2xx to 502 without echoing the upstream body", async () => {

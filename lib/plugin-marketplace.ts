@@ -134,14 +134,18 @@ export function installSourceFor(source: unknown): { installSource?: string; uns
     const ref = optionalString(source.ref)?.trim();
     // A bare "owner/name" is a GitHub shorthand; an explicit URL is used as-is.
     const remote = /^(https?:\/\/|git@|ssh:\/\/|git:\/\/)/.test(repo) ? repo : `https://github.com/${repo}`;
-    return { installSource: `git:${remote}${ref ? `#${ref}` : ""}` };
+    // `@`, not `#`: the SDK's splitRef (utils/git.js) only separates a ref on
+    // `@`. With `#main` the ref parses but stays in `repo`, so the clone targets
+    // a non-existent URL and git exits 128.
+    return { installSource: `git:${remote}${ref ? `@${ref}` : ""}` };
   }
 
   if (kind === "url") {
     const url = optionalString(source.url)?.trim();
     if (!url) return { unsupported: "The url source is missing its url." };
     const ref = optionalString(source.ref)?.trim();
-    return { installSource: `git:${url}${ref ? `#${ref}` : ""}` };
+    // Same `@` rule as the github branch (see splitRef in utils/git.js).
+    return { installSource: `git:${url}${ref ? `@${ref}` : ""}` };
   }
 
   if (kind === "npm") {
