@@ -35,6 +35,12 @@ const data = {
     totals:counts,diagnostics:[],projectResourcesLoaded:true},
   '/api/mcp':{mcp:{available:true},codemode:{sandbox:{state:'available'},builtinDisabled:false,preference:'automatic'},
     files:[{scope:'global',path:'D:/fixture/mcp.json',exists:true,problems:[]}],servers:mcpServers},
+  // Settings › General › Server. The tunnel is idle, so the section renders
+  // without polling; `binary` and `view` are the shape the real route returns.
+  '/api/server-settings':{port:30141,configured:30141,local:true},
+  '/api/public-access':{passwordSet:true,local:true,binary:{available:true,source:'fixture'},
+    view:{state:'disabled',phase:null,error:null,publicUrl:null,mode:'quick',localPort:30141,
+      customUrl:'',tokenSet:false,tunnelId:null,autoStart:false,enabled:false}},
 };
 const server = createServer((req,res)=>{
   const path = new URL(req.url,'http://localhost').pathname;
