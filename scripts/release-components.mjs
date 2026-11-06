@@ -4,8 +4,21 @@ import { fileURLToPath } from "node:url";
 
 export const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 
+// Where each bundled component's releases live. `pi-agent-desktop` is resolved
+// to the repository actually running the release (GITHUB_REPOSITORY), because
+// this is a fork: the rule that matters is "this version is not already
+// published *here*", and a fork may legitimately ship a version number that
+// upstream also used (the tag lives in a different repository, so tauri-action
+// does not collide). The other two are third-party and stay fixed.
+const DESKTOP_REPOSITORY_FALLBACK = "ojbkxc/pi-agent-desktop";
+
+export function desktopRepository(env = process.env) {
+  const fromRunner = env.GITHUB_REPOSITORY?.trim();
+  return fromRunner && fromRunner.includes("/") ? fromRunner : DESKTOP_REPOSITORY_FALLBACK;
+}
+
 export const componentRepositories = {
-  "pi-agent-desktop": "abcwyc/pi-agent-desktop",
+  "pi-agent-desktop": desktopRepository(),
   pi: "earendil-works/pi",
   "pi-web": "agegr/pi-web",
 };
