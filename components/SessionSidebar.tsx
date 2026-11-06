@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useLayoutEffect, useState, useCallback, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, useSyncExternalStore, type ReactNode } from "react";
 import type { SessionInfo, SessionWorkspaceKind } from "@/lib/types";
 import { listSessionFamilies } from "@/lib/session-family";
 import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
@@ -500,6 +500,34 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // running state; late /api/sessions responses must not overwrite it.
   const sseAuthoritativeRef = useRef(false);
   const detailsHydrationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Team member sessions from /api/teams, intersected with the live
+  // runningSessionIds to drive the teams-row badge. Roster changes arrive via
+  // refreshKey — no extra polling.
+  const [teamMemberSessionIds, setTeamMemberSessionIds] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/teams", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { teams?: { memberSessionIds?: string[] }[] } | null) => {
+        if (cancelled || !Array.isArray(data?.teams)) return;
+        const ids = new Set<string>();
+        for (const team of data.teams) {
+          for (const id of team.memberSessionIds ?? []) ids.add(id);
+        }
+        setTeamMemberSessionIds(ids);
+      })
+      .catch(() => {
+        // Silent: the badge stays hidden until the next refresh.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey]);
+
+  const runningTeamMemberCount = useMemo(
+    () => [...teamMemberSessionIds].filter((id) => runningSessionIds.has(id)).length,
+    [teamMemberSessionIds, runningSessionIds],
+  );
 
   // Overlay-style scrollbar: `is-scrolling` shows the thumb only while the
   // project tree is actually scrolling.
@@ -1887,7 +1915,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         </button>
 
         {onOpenTasks && <TasksSidebarRow active={tasksOpen} runningCount={runningSessionIds.size} onOpen={onOpenTasks} />}
-        {onOpenTeams && <TeamsSidebarRow active={teamsOpen} runningCount={0} onOpen={onOpenTeams} />}
+        {onOpenTeams && <TeamsSidebarRow active={teamsOpen} runningCount={runningTeamMemberCount} onOpen={onOpenTeams} />}
         {onOpenScheduled && <ScheduledSidebarRow active={scheduledOpen} onOpen={onOpenScheduled} />}
         {onOpenArtifacts && <ArtifactsSidebarRow active={artifactsOpen} onOpen={onOpenArtifacts} />}
       </div>

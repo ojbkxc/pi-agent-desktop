@@ -19,6 +19,8 @@ import {
   type LifecycleEntryLike,
   type MailboxMessageLike,
   type PlanLike,
+  type ReceiptLike,
+  type RuntimeTicketLike,
   type TeamFileLike,
   type TeamWorkbenchSnapshot,
 } from "./agent-teams-swimlane";
@@ -68,6 +70,50 @@ async function readAccepted(teamDir: string): Promise<AcceptedRecordLike[]> {
       }
     }
     return records;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 运行时工单：tickets/<ticketId>.json（pi-team team_ticket 工具写入）。
+ * 目录缺失、单个文件损坏/结构不符一律静默跳过；顺序按 createdAt 升序（与 listTickets 一致）。
+ */
+async function readRuntimeTickets(teamDir: string): Promise<RuntimeTicketLike[]> {
+  const dir = join(teamDir, "tickets");
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return [];
+  }
+  const collected: RuntimeTicketLike[] = [];
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const ticket = await readJson<RuntimeTicketLike>(join(dir, name));
+    if (!ticket || typeof ticket.id !== "string" || typeof ticket.subject !== "string" || !Array.isArray(ticket.assignments)) continue;
+    collected.push(ticket);
+  }
+  return collected.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+}
+
+/** 已读回执：acks/receipts.jsonl，逐行解析，撕裂/损坏行静默忽略（同 readAccepted 风格）。 */
+async function readReceipts(teamDir: string): Promise<ReceiptLike[]> {
+  try {
+    const raw = await readFile(join(teamDir, "acks", "receipts.jsonl"), "utf8");
+    const receipts: ReceiptLike[] = [];
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line) as ReceiptLike;
+        if (parsed && typeof parsed.messageId === "string" && typeof parsed.reader === "string" && typeof parsed.ackedAt === "number") {
+          receipts.push(parsed);
+        }
+      } catch {
+        // 撕裂的最后一行：下次追加会另起一行，忽略之。
+      }
+    }
+    return receipts;
   } catch {
     return [];
   }
@@ -143,11 +189,13 @@ export async function readTeamWorkbench(teamName: string): Promise<TeamWorkbench
   const team = await readJson<TeamFileLike>(join(teamDir, "config.json"));
   if (!team || !Array.isArray(team.members)) return null;
 
-  const [plan, lifecycle, accepted, messages] = await Promise.all([
+  const [plan, lifecycle, accepted, messages, runtimeTickets, receipts] = await Promise.all([
     readJson<PlanLike>(join(teamDir, "plan.json")),
     readLifecycle(teamDir),
     readAccepted(teamDir),
     readAllMessages(teamDir, team.members.map((member) => member.name)),
+    readRuntimeTickets(teamDir),
+    readReceipts(teamDir),
   ]);
 
   return projectTeamWorkbench({
@@ -157,12 +205,18 @@ export async function readTeamWorkbench(teamName: string): Promise<TeamWorkbench
     lifecycle,
     accepted,
     messages,
+    runtimeTickets,
+    receipts,
     generatedAt: new Date().toISOString(),
   });
 }
 
-/** 找到以某 session 为 lead 的团队名（供 /api/teams/session/[id]/workbench）。 */
-export async function findTeamByLeadSession(sessionId: string): Promise<string | null> {
+/**
+ * 找到包含该 session 的团队名（供 /api/teams/session/[id]/workbench）。
+ * 既认 lead 会话，也认成员会话：成员的 sessionId 可能落在 config 名册里，
+ * 也可能只落在 lifecycle.json（成员被派发后才写入），两处都要查。
+ */
+export async function findTeamBySession(sessionId: string): Promise<string | null> {
   let names: string[];
   try {
     names = await readdir(teamsRootDir());
@@ -170,14 +224,25 @@ export async function findTeamByLeadSession(sessionId: string): Promise<string |
     return null;
   }
   for (const name of names) {
-    const team = await readJson<TeamFileLike>(join(teamDirFor(name), "config.json"));
+    const teamDir = teamDirFor(name);
+    const team = await readJson<TeamFileLike>(join(teamDir, "config.json"));
     if (team?.leadSessionId === sessionId) return name;
+    if (Array.isArray(team?.members) && team.members.some((member) => member.sessionId === sessionId)) return name;
+    const lifecycle = await readLifecycle(teamDir);
+    if (Object.values(lifecycle).some((entry) => entry.sessionId === sessionId)) return name;
   }
   return null;
 }
 
 /** 本机团队名册（供 Agents 面板选择）。 */
-export async function listTeams(): Promise<Array<{ name: string; description: string; memberCount: number; createdAt: string }>> {
+export async function listTeams(): Promise<Array<{
+  name: string;
+  description: string;
+  memberCount: number;
+  createdAt: string;
+  /** 团队成员的全部会话 id：config 名册 + lifecycle 条目，合并去重（名册在前）。 */
+  memberSessionIds: string[];
+}>> {
   let names: string[];
   try {
     names = await readdir(teamsRootDir());
@@ -185,13 +250,25 @@ export async function listTeams(): Promise<Array<{ name: string; description: st
     return [];
   }
   const teams = await Promise.all(names.map(async (name) => {
-    const team = await readJson<TeamFileLike>(join(teamDirFor(name), "config.json"));
+    const teamDir = teamDirFor(name);
+    const [team, lifecycle] = await Promise.all([
+      readJson<TeamFileLike>(join(teamDir, "config.json")),
+      readLifecycle(teamDir),
+    ]);
     if (!team) return null;
+    const sessionIds = new Set<string>();
+    for (const member of team.members ?? []) {
+      if (typeof member.sessionId === "string" && member.sessionId) sessionIds.add(member.sessionId);
+    }
+    for (const entry of Object.values(lifecycle)) {
+      if (typeof entry.sessionId === "string" && entry.sessionId) sessionIds.add(entry.sessionId);
+    }
     return {
       name,
       description: team.description ?? "",
       memberCount: team.members?.length ?? 0,
       createdAt: typeof team.createdAt === "number" ? new Date(team.createdAt).toISOString() : "",
+      memberSessionIds: [...sessionIds],
     };
   }));
   return teams.filter((team): team is NonNullable<typeof team> => team !== null);

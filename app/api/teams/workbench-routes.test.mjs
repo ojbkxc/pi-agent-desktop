@@ -58,6 +58,9 @@ test("GET /api/teams returns the roster", async (t) => {
   const body = await response.json();
   assert.deepEqual(body.teams.map((team) => team.name), ["demo"]);
   assert.equal(body.teams[0].memberCount, 2);
+  // memberSessionIds：名册无 sessionId，lifecycle 的 s-impl 必须出现
+  assert.ok(Array.isArray(body.teams[0].memberSessionIds), "GET /api/teams 返回 memberSessionIds 数组");
+  assert.deepEqual(body.teams[0].memberSessionIds, ["s-impl"]);
 });
 
 test("GET /api/teams/[team]/workbench returns a lane snapshot lane-diagram can read", async (t) => {
@@ -98,6 +101,11 @@ test("GET /api/teams/session/[id]/workbench resolves the team by lead session", 
   const ok = await sessionRoute.GET(new Request("http://localhost/api/teams/session/lead-session/workbench"), { params: Promise.resolve({ id: "lead-session" }) });
   assert.equal(ok.status, 200);
   assert.equal((await ok.json()).team.id, "demo");
+
+  // 成员会话（lifecycle.json 里的 s-impl）同样能反查到团队
+  const member = await sessionRoute.GET(new Request("http://localhost/api/teams/session/s-impl/workbench"), { params: Promise.resolve({ id: "s-impl" }) });
+  assert.equal(member.status, 200);
+  assert.equal((await member.json()).team.id, "demo");
 
   const missing = await sessionRoute.GET(new Request("http://localhost/api/teams/session/nope/workbench"), { params: Promise.resolve({ id: "nope" }) });
   assert.equal(missing.status, 404);

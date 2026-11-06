@@ -12,6 +12,8 @@
  *   - lifecycle.json  成员运行态（idle/running/parked/aborted）
  *   - inboxes/*.json + *.history.jsonl  邮箱消息（谁→谁）
  *   - accepted.jsonl  验收账本（成员→lead 的交付）
+ *   - tickets/<id>.json  pi-team team_ticket 的运行时工单（真实派活与状态）
+ *   - acks/receipts.jsonl  消息已读回执（谁确认读过）
  *
  * 纯投影 + 纯布局：本模块**不 import node:fs**，客户端组件（AgentTermsView）与
  * 服务端路由都能安全 import。磁盘读取在 lib/agent-teams-swimlane-store.ts（服务端专用）。
@@ -117,6 +119,42 @@ export interface AcceptedRecordLike {
   at: string;
 }
 
+/**
+ * tickets/<ticketId>.json 的运行时工单（pi-team team_ticket 工具写入，取投影需要的字段）。
+ * 注意：assignee / subscribers 存的是**成员名**，不是 agentId（与 pi-team 落盘一致）。
+ */
+export interface RuntimeAssignmentLike {
+  id: string;
+  /** 成员名（不是 agentId）。 */
+  assignee: string;
+  status: "pending" | "running" | "ended";
+  createdAt: number;
+  updatedAt: number;
+  result?: string;
+  outcome?: "completed" | "failed" | "cancelled";
+}
+
+export interface RuntimeTicketLike {
+  id: string;
+  subject: string;
+  description?: string;
+  status: "open" | "ended";
+  createdBy: string;
+  createdAt: number;
+  updatedAt: number;
+  endedAt?: number;
+  assignments: RuntimeAssignmentLike[];
+  subscribers?: string[];
+}
+
+/** acks/receipts.jsonl 的一条已读回执；reader 是成员名。 */
+export interface ReceiptLike {
+  messageId: string;
+  /** 成员名（不是 agentId）。 */
+  reader: string;
+  ackedAt: number;
+}
+
 export interface SwimlaneInput {
   teamName: string;
   team: TeamFileLike;
@@ -125,6 +163,10 @@ export interface SwimlaneInput {
   /** 该团队全部邮箱消息（各成员 live + history 合并去重后由调用方提供）。 */
   messages?: MailboxMessageLike[];
   accepted?: AcceptedRecordLike[];
+  /** pi-team team_ticket 写入的运行时工单（tickets/<id>.json）；缺省视为无。 */
+  runtimeTickets?: RuntimeTicketLike[];
+  /** acks/receipts.jsonl 的已读回执；缺省视为无。 */
+  receipts?: ReceiptLike[];
   /** 快照生成时间（ISO）；缺省由调用方传入，保持纯函数确定性。 */
   generatedAt?: string;
 }
@@ -164,8 +206,14 @@ export interface WorkbenchMember {
 export interface WorkbenchAssignment {
   id: string;
   status: "pending" | "running" | "ended";
+  /** 承担该派活的成员 agentId；名不在名册时为 null。 */
+  memberId: string | null;
+  /** 落盘原样的成员名（runtime 票的 assignee；plan 派生时为 owner 名）。 */
+  assignee: string;
   sessionId: string | null;
   startedAt: string | null;
+  result: string | null;
+  outcome: "completed" | "failed" | "cancelled" | null;
 }
 
 export interface WorkbenchTicket {
@@ -176,6 +224,8 @@ export interface WorkbenchTicket {
   status: "open" | "ended";
   dependencies: string[];
   assignments: WorkbenchAssignment[];
+  /** 来源：plan 任务派生、pi-team 运行时工单、或两者合并（同 id）。 */
+  source: "plan" | "runtime" | "merged";
 }
 
 export type SwimlaneEventType = "spawn" | "task" | "message" | "report";
@@ -221,6 +271,14 @@ export interface WorkbenchTaskAnchor {
   timestamp: string;
 }
 
+/** acks/receipts.jsonl 投影出的已读回执；reader 为成员名，readerId 为映射后的 agentId（不在名册则 null）。 */
+export interface WorkbenchReceipt {
+  messageId: string;
+  reader: string;
+  readerId: string | null;
+  ackedAt: string;
+}
+
 /** lane-diagram.html 消费的扁平任务形态（cc-haha agentTeamsModel 对齐）。 */
 export interface WorkbenchTask {
   id: string;
@@ -241,6 +299,8 @@ export interface TeamWorkbenchSnapshot {
   taskAnchors: WorkbenchTaskAnchor[];
   /** lane-diagram.html 直接消费的兼容数组（由 tickets 投影）。 */
   tasks: WorkbenchTask[];
+  /** acks/receipts.jsonl 的已读回执（新增字段，不影响既有字段语义）。 */
+  receipts: WorkbenchReceipt[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -306,7 +366,17 @@ function buildPlanMemberIdMap(team: TeamFileLike, plan: PlanLike | null | undefi
  * 不读磁盘、不改任何外部状态。
  */
 export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapshot {
-  const { teamName, team, plan = null, lifecycle = {}, messages = [], accepted = [], generatedAt = "" } = input;
+  const {
+    teamName,
+    team,
+    plan = null,
+    lifecycle = {},
+    messages = [],
+    accepted = [],
+    runtimeTickets = [],
+    receipts = [],
+    generatedAt = "",
+  } = input;
 
   const members: WorkbenchMember[] = team.members.map((member, index) => {
     const isLead = member.name === team.leadAgentId || index === 0;
@@ -335,9 +405,11 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
   const planMemberIds = buildPlanMemberIdMap(team, plan);
   const acceptedNames = acceptedMembers(accepted);
 
-  // ── tickets[]：plan.tasks + 生命周期派生的 assignment ────────────────────────
+  // ── tickets[]：plan.tasks 派生 + pi-team 运行时工单（tickets/<id>.json）合并 ──
+  // 派生票在前；运行时独有的票（id 不与 plan 任务重复）按 createdAt 升序追加在后；
+  // 同 id 时运行时的 assignments / status 覆盖派生值。没有运行时票时结果与改动前等价。
   const tasks = plan?.tasks ?? [];
-  const tickets: WorkbenchTicket[] = tasks.map((task) => {
+  const baseTickets: WorkbenchTicket[] = tasks.map((task) => {
     const ownerId = task.ownerId ? planMemberIds.get(task.ownerId) ?? null : null;
     const owner = ownerId ? memberById.get(ownerId) : undefined;
     const entry = owner ? lifecycle[owner.name] : undefined;
@@ -347,8 +419,12 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
       assignments.push({
         id: `${task.id}-1`,
         status: ended ? "ended" : owner.status === "running" ? "running" : "pending",
+        memberId: owner.id,
+        assignee: owner.name,
         sessionId: owner.sessionId,
         startedAt: isoFromMillis(entry?.updatedAt) || null,
+        result: null,
+        outcome: null,
       });
     }
     return {
@@ -359,28 +435,79 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
       status: ended ? "ended" : "open",
       dependencies: [...(task.dependencies ?? [])],
       assignments,
+      source: "plan" as const,
     };
   });
 
+  const ticketById = new Map(baseTickets.map((ticket) => [ticket.id, ticket]));
+  /** 落盘的 assignee（成员名）→ 名册成员；名不在名册则 undefined。 */
+  const memberForName = (name: string | undefined): WorkbenchMember | undefined =>
+    name ? memberByName.get(name) : undefined;
+
+  const orderedRuntime = [...runtimeTickets].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+  for (const runtime of orderedRuntime) {
+    if (typeof runtime?.id !== "string" || !runtime.id) continue;
+    const assignments: WorkbenchAssignment[] = (runtime.assignments ?? []).map((assignment) => {
+      const member = memberForName(assignment.assignee);
+      return {
+        id: assignment.id,
+        status: assignment.status,
+        memberId: member?.id ?? null,
+        assignee: assignment.assignee,
+        sessionId: member?.sessionId ?? null,
+        startedAt: isoFromMillis(assignment.createdAt) || null,
+        result: assignment.result ?? null,
+        outcome: assignment.outcome ?? null,
+      };
+    });
+    const existing = ticketById.get(runtime.id);
+    if (existing) {
+      // 同 id：运行时的 assignments/status 覆盖派生值，其余（subject/依赖）保留计划口径。
+      existing.assignments = assignments;
+      existing.status = runtime.status;
+      existing.source = "merged";
+      if (existing.ownerId === null) {
+        existing.ownerId = assignments.find((item) => item.memberId)?.memberId ?? null;
+      }
+      continue;
+    }
+    const ticket: WorkbenchTicket = {
+      id: runtime.id,
+      subject: runtime.subject ?? "",
+      description: runtime.description ?? "",
+      ownerId: assignments.find((item) => item.memberId)?.memberId ?? null,
+      status: runtime.status,
+      dependencies: [],
+      assignments,
+      source: "runtime",
+    };
+    baseTickets.push(ticket);
+    ticketById.set(ticket.id, ticket);
+  }
+  const tickets = baseTickets;
+
   // ── taskAnchors[]：每个有主的 ticket 锚到成员 lane ──────────────────────────
+  /** 票内是否有 running 的派活（运行时票的主信号；派生票此时与 owner.status 等价）。 */
+  const hasRunning = (ticket: WorkbenchTicket): boolean =>
+    ticket.assignments.some((assignment) => assignment.status === "running");
+  const anchorStatusOf = (ticket: WorkbenchTicket, owner: WorkbenchMember | undefined): WorkbenchTaskAnchor["status"] => {
+    if (ticket.status === "ended") return "completed";
+    if (hasRunning(ticket)) return "in_progress";
+    if (owner?.status === "aborted") return "aborted";
+    return "pending";
+  };
   const taskAnchors: WorkbenchTaskAnchor[] = tickets
     .filter((ticket): ticket is WorkbenchTicket & { ownerId: string } => ticket.ownerId !== null)
     .map((ticket) => {
       const owner = memberById.get(ticket.ownerId);
-      const status: WorkbenchTaskAnchor["status"] = ticket.status === "ended"
-        ? "completed"
-        : owner?.status === "running"
-          ? "in_progress"
-          : owner?.status === "aborted"
-            ? "aborted"
-            : "pending";
       const entry = owner ? lifecycle[owner.name] : undefined;
+      const assignmentTime = ticket.assignments.map((item) => item.startedAt).filter(Boolean).sort().at(-1);
       return {
         ticketId: ticket.id,
         memberId: ticket.ownerId,
-        status,
+        status: anchorStatusOf(ticket, owner),
         messageId: null,
-        timestamp: isoFromMillis(entry?.updatedAt),
+        timestamp: isoFromMillis(entry?.updatedAt) || assignmentTime || "",
       };
     });
 
@@ -423,11 +550,13 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
     const taskAnchor = isoFromMillis(plan?.createdAt)
       || isoFromMillis(plan?.updatedAt)
       || isoFromMillis(lifecycle[member.name]?.updatedAt);
-    for (const task of tasks) {
-      const ownerId = task.ownerId ? planMemberIds.get(task.ownerId) ?? null : null;
-      if (ownerId === member.id) {
-        events.push({ at: taskAnchor, type: "task", detail: task.subject, taskId: task.id });
-      }
+    for (const ticket of tickets) {
+      if (ticket.ownerId !== member.id) continue;
+      // plan 派生票没有自己的时间戳，沿用原锚点；运行时票用其最早的派活开始时间。
+      const at = ticket.source === "plan"
+        ? taskAnchor
+        : ticket.assignments.map((item) => item.startedAt).filter((value): value is string => Boolean(value)).sort()[0] || taskAnchor;
+      events.push({ at, type: "task", detail: ticket.subject, taskId: ticket.id });
     }
     for (const message of messages) {
       if (message.from !== member.name) continue;
@@ -462,7 +591,7 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
     const owner = ticket.ownerId ? memberById.get(ticket.ownerId) : undefined;
     const status: WorkbenchTask["status"] = ticket.status === "ended"
       ? "completed"
-      : owner?.status === "running"
+      : hasRunning(ticket)
         ? "in_progress"
         : "pending";
     return {
@@ -474,8 +603,19 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
     };
   });
 
+  // ── receipts[]：acks/receipts.jsonl 的已读回执（reader 成员名 → agentId）────
+  const receiptItems: WorkbenchReceipt[] = receipts
+    .filter((receipt) => receipt && typeof receipt.messageId === "string" && typeof receipt.reader === "string")
+    .map((receipt) => ({
+      messageId: receipt.messageId,
+      reader: receipt.reader,
+      readerId: memberByName.get(receipt.reader)?.id ?? null,
+      ackedAt: isoFromMillis(receipt.ackedAt),
+    }))
+    .sort((a, b) => (a.ackedAt < b.ackedAt ? -1 : a.ackedAt > b.ackedAt ? 1 : 0));
+
   const teamStatus: WorkbenchTeam["status"] = (() => {
-    if (tasks.length === 0) return "forming";
+    if (tickets.length === 0) return "forming";
     const ended = tickets.filter((ticket) => ticket.status === "ended").length;
     if (ended === tickets.length) return "completed";
     if (plan?.state === "running" && ended > 0) return "finishing";
@@ -501,6 +641,7 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
     flows,
     taskAnchors,
     tasks: compatTasks,
+    receipts: receiptItems,
   };
 }
 
