@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # `push` events stopped creating runs for this repository (no run for a7b5829
+  # and the four commits before it, while `workflow_dispatch` still works), so CI
+  # is also dispatchable by hand as a fallback.
+  workflow_dispatch:
 
 permissions:
   contents: read
