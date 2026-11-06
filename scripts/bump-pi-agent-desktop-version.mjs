@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  desktopRepository,
   fetchRecentReleases,
   nextDesktopVersion,
   normalizeVersion,
@@ -12,7 +13,9 @@ const cargoPath = join(rootDir, "src-tauri", "Cargo.toml");
 const lockPath = join(rootDir, "src-tauri", "Cargo.lock");
 const desktopPackage = JSON.parse(await readFile(packagePath, "utf8"));
 const current = normalizeVersion(desktopPackage.version);
-const released = await fetchRecentReleases("abcwyc/pi-agent-desktop", { allowMissing: true });
+// 解析「实际发布本版本的仓库」(GITHUB_REPOSITORY，带 fork 回退)，而不是硬编码的上游名：
+// 即便上游仓库某天消失，本 fork 也要能算出自己的下一个版本号。
+const released = await fetchRecentReleases(desktopRepository(), { allowMissing: true });
 const next = nextDesktopVersion(current, released.map((release) => release.version));
 
 desktopPackage.version = next;

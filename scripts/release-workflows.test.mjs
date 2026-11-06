@@ -13,10 +13,14 @@ const componentUpdates = await readText(
   "utf8",
 );
 
-test("component updates are manual-only with the permissions the sync needs", () => {
-  assert.match(componentUpdates, /on:\s*\n\s*workflow_dispatch:/);
-  assert.doesNotMatch(componentUpdates, /schedule:/);
-  assert.doesNotMatch(componentUpdates, /actions: write/);
+test("component updates run on a schedule and can still be started by hand", () => {
+  // A nightly schedule is the only trigger that survives the upstream
+  // repository disappearing; workflow_dispatch stays for a manual retry.
+  assert.match(componentUpdates, /on:[\s\S]*?\n\s*schedule:/);
+  assert.match(componentUpdates, /- cron:/);
+  assert.match(componentUpdates, /on:[\s\S]*?\n\s*workflow_dispatch:/);
+  // Dispatching release.yml from the sync needs `actions: write`.
+  assert.match(componentUpdates, /actions: write/);
   assert.match(componentUpdates, /contents: write/);
   assert.match(componentUpdates, /pull-requests: write/);
   assert.match(componentUpdates, /issues: write/);
@@ -33,17 +37,65 @@ test("the boundary is classified before the merge, not after", () => {
   assert.ok(classifyAt < mergeAt, "classification must run before the merge");
 });
 
-test("a manually requested direct sync is gated on the fork boundary", () => {
+test("a verified direct sync is gated on the fork boundary, and only then releases", () => {
   // A clean merge into a fork-modified file can be a silent semantic conflict,
-  // so only a no-overlap sync may reach a signed release without review.
+  // so only a no-overlap sync may reach a signed release without review. The
+  // no-overlap path now both pushes main and dispatches the release; the
+  // review path must do neither automatically.
   assert.match(
     componentUpdates,
     /steps\.boundary\.outputs\.review_required != 'true'[\s\S]{0,400}git push origin HEAD:main/,
   );
+  assert.match(
+    componentUpdates,
+    /git push origin HEAD:main[\s\S]{0,400}gh workflow run release\.yml/,
+  );
   const reviewStep = componentUpdates.slice(componentUpdates.indexOf("Open a review PR"));
   assert.match(reviewStep, /steps\.boundary\.outputs\.review_required == 'true'/);
   assert.match(reviewStep, /gh pr create/);
-  assert.doesNotMatch(componentUpdates, /gh workflow run release\.yml/);
+  // The review path holds for a human; it must never auto-dispatch a release.
+  assert.doesNotMatch(reviewStep, /gh workflow run release\.yml/);
+});
+
+test("the desktop version bump resolves this repository, not a hardcoded upstream", async () => {
+  // The bump used to run on a hardcoded abcwyc/pi-agent-desktop, so if that
+  // upstream repository ever disappears the sync dies before it can pick a
+  // version. It must resolve the repository publishing this release instead.
+  const bump = await readText(
+    join(root, "scripts", "bump-pi-agent-desktop-version.mjs"),
+    "utf8",
+  );
+  assert.match(bump, /desktopRepository\(\)/);
+  assert.doesNotMatch(bump, /abcwyc\/pi-agent-desktop/);
+});
+
+test("the lockfile is never left with an unrunnable git+ssh dependency", async () => {
+  // `npm install` can rewrite a git dependency's resolved URL to
+  // git+ssh://git@github.com/..., which no CI runner — and no contributor
+  // without an SSH key — can clone. The committed lock must stay installable,
+  // and the sync must normalize after every install.
+  const lock = await readText(join(root, "package-lock.json"), "utf8");
+  assert.doesNotMatch(
+    lock,
+    /git\+ssh:\/\/git@github\.com\//,
+    "npm rewrote a git dependency to git+ssh://; run node scripts/normalize-lock-git-urls.mjs",
+  );
+  assert.match(componentUpdates, /node scripts\/normalize-lock-git-urls\.mjs/);
+});
+
+test("normalizeLockGitUrls rewrites only the git+ssh GitHub form", async () => {
+  const { normalizeLockGitUrls } = await import("./normalize-lock-git-urls.mjs");
+  const input = [
+    '"resolved": "git+ssh://git@github.com/ojbkxc/pi-team.git#abc"',
+    '"resolved": "git+https://github.com/ojbkxc/lsp-mcp.git#def"',
+    '"resolved": "https://registry.npmjs.org/foo/-/foo-1.0.0.tgz"',
+  ].join("\n");
+  const output = normalizeLockGitUrls(input);
+  assert.doesNotMatch(output, /git\+ssh:/);
+  assert.match(output, /git\+https:\/\/github\.com\/ojbkxc\/pi-team\.git#abc/);
+  assert.match(output, /git\+https:\/\/github\.com\/ojbkxc\/lsp-mcp\.git#def/);
+  // A plain registry tarball URL is untouched.
+  assert.match(output, /https:\/\/registry\.npmjs\.org\/foo\/-\/foo-1\.0\.0\.tgz/);
 });
 
 test("the signed release workflow is manual-only", async () => {

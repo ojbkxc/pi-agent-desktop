@@ -1,12 +1,20 @@
 name: Update released components
 
 on:
+  # Nightly. A schedule is the only mechanism that keeps working if the upstream
+  # repository disappears: we cannot make a third-party repo send us a
+  # repository_dispatch, and this fork's own releases are what users install.
+  schedule:
+    - cron: "0 3 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
   pull-requests: write
   issues: write
+  # Needed to dispatch release.yml once a verified sync lands on main, and to
+  # re-run a failed run by hand.
+  actions: write
 
 concurrency:
   group: component-release-sync
@@ -102,6 +110,11 @@ jobs:
             fi
           fi
 
+          # npm can rewrite a git dependency's `resolved` URL from
+          # git+https://github.com/... to git+ssh://git@github.com/..., which no
+          # CI runner — and no contributor without an SSH key — can install.
+          node scripts/normalize-lock-git-urls.mjs
+
           node scripts/bump-pi-agent-desktop-version.mjs
           npm run release:manifest
 
@@ -126,16 +139,23 @@ jobs:
           git add --all
           git commit -m "chore: sync released pi components"
 
-      # Upstream did not touch anything this fork has modified, so a manually
-      # requested sync may update main without a review PR. Publishing a signed
-      # release remains a separate, manually dispatched action.
-      - name: Publish manually requested sync
+      # Upstream did not touch anything this fork has modified, so the verified
+      # sync may update main and then cut the signed release on its own. The
+      # release checks out the exact commit the gate just validated below.
+      - name: Publish the verified sync and dispatch the release
         if: steps.releases.outputs.needs_update == 'true' && steps.pending.outputs.awaiting_review != 'true' && steps.boundary.outputs.review_required != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git push origin HEAD:main
+
+          # release.yml stays workflow_dispatch-only; dispatching with
+          # GITHUB_TOKEN is one of the two events allowed to start a new run.
+          # Its own concurrency group (pi-agent-desktop-release,
+          # cancel-in-progress: false) keeps this from cancelling a build that
+          # is already running.
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main
 
       # Upstream changed files the fork has also rewritten. Git may have merged
       # them cleanly and still be wrong, so a human reviews before anything is
@@ -161,7 +181,9 @@ jobs:
             echo "that is exactly why this needs eyes. Check the listed files for"
             echo "behaviour the merge kept from both sides."
             echo
-            echo "After merging, dispatch \`release.yml\` manually when ready to publish."
+            echo "Because the sync touched fork-owned files, merging this PR does"
+            echo "**not** auto-publish a release: dispatch \`release.yml\` by hand once"
+            echo "you are satisfied, when ready to publish."
           } > /tmp/pr-body.md
 
           gh pr create \
