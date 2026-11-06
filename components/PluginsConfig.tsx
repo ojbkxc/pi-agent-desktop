@@ -55,6 +55,73 @@ type Translate = ReturnType<typeof useI18n>["t"];
 
 const PLUGIN_SOURCE_EXAMPLES = ["npm:@scope/pi-plugin", "git:https://github.com/user/repo", "/absolute/path/to/plugin"];
 
+/** One catalog entry of `GET /api/plugins/marketplace`; every field but `name` may be absent. */
+interface MarketplaceEntry {
+  name: string;
+  description?: string;
+  version?: string;
+  license?: string;
+  homepage?: string;
+  repository?: string;
+  keywords?: string[];
+  /** The raw catalog source string (e.g. `{source:github,repo:owner/name,ref:main}`), display only. */
+  source?: string;
+  /** What to install with; mutually exclusive with `unsupported`. */
+  installSource?: string | null;
+  /** Why this entry cannot be installed; mutually exclusive with `installSource`. */
+  unsupported?: string;
+}
+
+/** The catalog itself, as the marketplace route reports it. */
+interface MarketplaceInfo {
+  name?: string;
+  owner?: string;
+  description?: string;
+  version?: string;
+}
+
+interface MarketplaceResponse {
+  marketplace?: MarketplaceInfo;
+  entries?: MarketplaceEntry[];
+}
+
+/**
+ * A catalog entry's install source, or why it has none. The two are mutually
+ * exclusive, and a missing `installSource` without a reason still counts as
+ * not installable (the reason is then `null` and the panel says so).
+ */
+export function marketplaceInstallState(
+  entry: Pick<MarketplaceEntry, "installSource" | "unsupported">,
+): { kind: "installable"; source: string } | { kind: "unsupported"; reason: string | null } {
+  const source = entry.installSource?.trim();
+  if (source) return { kind: "installable", source };
+  const reason = entry.unsupported?.trim();
+  return { kind: "unsupported", reason: reason ? reason : null };
+}
+
+/** A sidebar/detail key for a catalog entry, in its own namespace so it never collides with a package key. */
+export function marketplaceEntryKey(entry: Pick<MarketplaceEntry, "name">): string {
+  return `marketplace\0${entry.name}`;
+}
+
+/**
+ * Whether a catalog entry is already installed *in the given scope*: its
+ * resolved `installSource` compared as a string against the installed packages
+ * of that scope. Scope matters — a package installed globally must not block a
+ * legitimate project install of the same source, so the switch that chooses
+ * where it goes decides the answer. Entries without an install source are
+ * never installed.
+ */
+export function isMarketplaceEntryInstalled(
+  entry: Pick<MarketplaceEntry, "installSource" | "unsupported">,
+  packages: readonly Pick<PluginPackageInfo, "source" | "scope">[],
+  scope: PluginScope,
+): boolean {
+  const state = marketplaceInstallState(entry);
+  if (state.kind !== "installable") return false;
+  return packages.some((pkg) => pkg.scope === scope && pkg.source === state.source);
+}
+
 function normalizePluginSourceInput(value: string): string {
   const match = value.trim().match(/^\$?\s*pi\s+install\s+(\S+)\s*$/);
   return match?.[1] ?? value;
@@ -271,20 +338,7 @@ function AddPluginPanel({
   return (
     <ConfigAddSourcePanel
       title={t("i18n.addPlugin")}
-      catalogs={[{
-        href: "https://pi.dev/packages",
-        label: "pi.dev/packages",
-        icon: (
-          <svg width="28" height="28" viewBox="0 0 800 800" aria-hidden="true" focusable="false">
-            <path
-              fill="#000"
-              fillRule="evenodd"
-              d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z"
-            />
-            <path fill="#000" d="M517.36 400H634.72V634.72H517.36Z" />
-          </svg>
-        ),
-      }]}
+      catalogs={[]}
       target={
         <ConfigSaveTarget
           value={scope}
@@ -319,6 +373,168 @@ function AddPluginPanel({
         {busy ? t("i18n.installing") : t("i18n.install")}
       </ConfigButton>
     </ConfigAddSourcePanel>
+  );
+}
+
+/**
+ * One catalog entry: what it is, where it really comes from, and the Install
+ * control. The trust notice names the upstream repository, not the catalog —
+ * installing runs third-party code, so the source must be visible before the
+ * click. An entry the catalog cannot resolve shows its reason verbatim and gets
+ * no Install button; an installed one gets a disabled button labelled so.
+ */
+function MarketplaceDetail({
+  entry,
+  cwd,
+  scope,
+  projectResourcesLoaded,
+  installed,
+  busy,
+  actionError,
+  actionMessage,
+  onScopeChange,
+  onInstall,
+}: {
+  entry: MarketplaceEntry;
+  cwd: string;
+  scope: PluginScope;
+  projectResourcesLoaded: boolean;
+  installed: boolean;
+  busy: boolean;
+  actionError: string | null;
+  actionMessage: string | null;
+  onScopeChange: (scope: PluginScope) => void;
+  onInstall: () => void;
+}) {
+  const { t } = useI18n();
+  const installState = marketplaceInstallState(entry);
+  const installable = installState.kind === "installable";
+  const description = entry.description?.trim();
+  const trustSource = entry.repository?.trim()
+    || (installable ? installState.source : entry.name);
+
+  return (
+    <ConfigDetailStack>
+      <div className="config-detail-heading">
+        <ConfigDetailHeader className="is-top-aligned">
+          <ConfigDetailHeaderInfo>
+            <ConfigDetailTitle>{entry.name}</ConfigDetailTitle>
+            {entry.version && (
+              <span
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: "var(--fs-caption)",
+                  color: "var(--text-dim)",
+                }}
+              >
+                {entry.version}
+              </span>
+            )}
+            {installed && (
+              <span
+                style={{
+                  fontSize: "var(--fs-micro)",
+                  padding: "1px 5px",
+                  borderRadius: "var(--radius-xs)",
+                  background: "rgba(59,130,246,0.12)",
+                  color: "var(--accent)",
+                }}
+              >
+                {t("plugins.marketplaceInstalled")}
+              </span>
+            )}
+          </ConfigDetailHeaderInfo>
+
+          <ConfigDetailActions>
+            {installable && (
+              <ConfigButton
+                variant="primary"
+                onClick={onInstall}
+                disabled={busy || installed}
+              >
+                {busy
+                  ? t("i18n.installing")
+                  : installed
+                    ? t("plugins.marketplaceInstalled")
+                    : t("i18n.install")}
+              </ConfigButton>
+            )}
+          </ConfigDetailActions>
+        </ConfigDetailHeader>
+      </div>
+
+      <ConfigTrustNotice message={t("plugins.marketplaceTrust", { source: trustSource })} />
+
+      {!installable && (
+        <div
+          role="alert"
+          style={{ fontSize: "var(--fs-caption)", color: "var(--danger)", whiteSpace: "pre-wrap" }}
+        >
+          {installState.reason ?? t("plugins.marketplaceUnsupported")}
+        </div>
+      )}
+
+      {installable && (
+        <ConfigSaveTarget
+          value={scope}
+          label={t("config.saveTo")}
+          options={[
+            { value: "global", label: scopeLabel("global", t) },
+            { value: "project", label: scopeLabel("project", t), disabled: !projectResourcesLoaded },
+          ]}
+          path={installLocation(scope, cwd)}
+          disabledReason={t("trust.projectScopeUnavailable")}
+          onChange={onScopeChange}
+        />
+      )}
+
+      <ConfigDetailGrid>
+        {description && (
+          <ConfigDetailGridRow label={t("i18n.description")}>
+            {description}
+          </ConfigDetailGridRow>
+        )}
+        {entry.version && (
+          <ConfigDetailGridRow label={t("i18n.version")} mono>
+            {entry.version}
+          </ConfigDetailGridRow>
+        )}
+        {entry.license && (
+          <ConfigDetailGridRow label={t("plugins.marketplaceLicense")}>
+            {entry.license}
+          </ConfigDetailGridRow>
+        )}
+        {entry.homepage && (
+          <ConfigDetailGridRow label={t("plugins.marketplaceHomepage")} mono>
+            <a href={entry.homepage} target="_blank" rel="noopener noreferrer">{entry.homepage}</a>
+          </ConfigDetailGridRow>
+        )}
+        {entry.repository && (
+          <ConfigDetailGridRow label={t("plugins.marketplaceRepository")} mono>
+            <a href={entry.repository} target="_blank" rel="noopener noreferrer">{entry.repository}</a>
+          </ConfigDetailGridRow>
+        )}
+        {installable && (
+          <ConfigDetailGridRow label={t("plugins.marketplaceInstallSource")} mono>
+            {installState.source}
+          </ConfigDetailGridRow>
+        )}
+        <ConfigDetailGridRow label={t("i18n.cwd")} tone="dim" mono>
+          {shortenPath(cwd)}
+        </ConfigDetailGridRow>
+      </ConfigDetailGrid>
+
+      {actionMessage && (
+        <div style={{ fontSize: "var(--fs-caption)", color: "var(--success)" }}>
+          {actionMessage}
+        </div>
+      )}
+      {actionError && (
+        <div style={{ fontSize: "var(--fs-caption)", color: "var(--danger)", whiteSpace: "pre-wrap" }}>
+          {actionError}
+        </div>
+      )}
+    </ConfigDetailStack>
   );
 }
 
@@ -597,12 +813,19 @@ export function PluginsConfig({
   const [checkingAll, setCheckingAll] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [updatingAll, setUpdatingAll] = useState(false);
+  const [marketplace, setMarketplace] = useState<MarketplaceResponse | null>(null);
+  const [marketplaceLoading, setMarketplaceLoading] = useState(false);
+  const [marketplaceError, setMarketplaceError] = useState<string | null>(null);
+  const [selectedMarket, setSelectedMarket] = useState<string | null>(null);
 
   const packages = useMemo(() => data?.packages ?? [], [data?.packages]);
   const standaloneExtensions = useMemo(() => data?.standaloneExtensions ?? [], [data?.standaloneExtensions]);
   const selectedPackage = packages.find((pkg) => packageKey(pkg) === selected) ?? null;
   const selectedExtension = standaloneExtensions.find((extension) => extensionKey(extension) === selected) ?? null;
   const projectResourcesLoaded = data?.projectResourcesLoaded ?? true;
+  const marketplaceEntries = useMemo(() => marketplace?.entries ?? [], [marketplace]);
+  const selectedMarketEntry = marketplaceEntries.find((entry) => marketplaceEntryKey(entry) === selectedMarket) ?? null;
+  const marketInstallBusy = busyKey?.startsWith("market-install:") ?? false;
 
   const groupedPackages = useMemo(() => {
     return (["project", "global"] as PluginScope[])
@@ -637,6 +860,27 @@ export function PluginsConfig({
       setLoading(false);
     }
   }, [cwd]);
+
+  // The catalog depends on nothing local, so it is fetched once when this panel
+  // opens (and again from the marketplace group's Refresh button), not per cwd.
+  const loadMarketplace = useCallback(async () => {
+    setMarketplaceLoading(true);
+    setMarketplaceError(null);
+    try {
+      const res = await fetch("/api/plugins/marketplace");
+      const next = (await res.json()) as MarketplaceResponse & { error?: string };
+      if (!res.ok || next.error) throw new Error(next.error ?? `HTTP ${res.status}`);
+      setMarketplace(next);
+    } catch (err) {
+      setMarketplaceError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setMarketplaceLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadMarketplace();
+  }, [loadMarketplace]);
 
   useEffect(() => {
     setUpdateStatuses({});
@@ -864,6 +1108,36 @@ export function PluginsConfig({
     }
   }, [cwd, installScope, installSource, t]);
 
+  // Installs one catalog entry through the same route the add form uses, with
+  // the entry's resolved source in place of typed input.
+  const installMarketEntry = useCallback(async (entry: MarketplaceEntry) => {
+    const state = marketplaceInstallState(entry);
+    if (state.kind !== "installable") return;
+    const source = state.source;
+    const key = marketplaceEntryKey(entry);
+    setBusyKey(`market-install:${key}`);
+    setActionError(null);
+    setActionMessage(null);
+    setGroupStatus(null);
+    try {
+      const res = await fetch("/api/plugins", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "install", source, scope: installScope, cwd }),
+      });
+      const next = (await res.json()) as PluginsResponse & { error?: string };
+      if (!res.ok || next.error) throw new Error(next.error ?? `HTTP ${res.status}`);
+      setData(next);
+      const installed = findInstalledPackage(next.packages, source, installScope);
+      if (installed) setSelected(packageKey(installed));
+      setActionMessage(t("i18n.packageInstalled"));
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyKey(null);
+    }
+  }, [cwd, installScope, t]);
+
   const reloadSession = useCallback(async () => {
     if (!sessionId) return;
     setBusyKey("reload");
@@ -919,10 +1193,11 @@ export function PluginsConfig({
                         return (
                           <ConfigSidebarItem
                             key={key}
-                            active={!addMode && selected === key}
+                            active={!addMode && !selectedMarket && selected === key}
                             title={extension.path}
                             onClick={() => {
                               setSelected(key);
+                              setSelectedMarket(null);
                               setAddMode(false);
                               setActionError(null);
                               setActionMessage(null);
@@ -961,7 +1236,7 @@ export function PluginsConfig({
                         )}
                         {group.packages.map((pkg) => {
                           const key = packageKey(pkg);
-                          const isSelected = !addMode && selected === key;
+                          const isSelected = !addMode && !selectedMarket && selected === key;
                           return (
                             <ConfigSidebarItem
                               key={key}
@@ -969,6 +1244,7 @@ export function PluginsConfig({
                               title={pkg.description ?? pkg.source}
                               onClick={() => {
                                 setSelected(key);
+                                setSelectedMarket(null);
                                 setAddMode(false);
                                 setActionError(null);
                                 setActionMessage(null);
@@ -991,11 +1267,72 @@ export function PluginsConfig({
                   })}
                 </>
               )}
+
+              <div className="config-sidebar-group">
+                <ConfigSidebarGroupLabel
+                  aside={
+                    <ConfigButton
+                      size="small"
+                      onClick={() => void loadMarketplace()}
+                      disabled={marketplaceLoading}
+                    >
+                      {t("i18n.refresh")}
+                    </ConfigButton>
+                  }
+                >
+                  {t("plugins.marketplace")}
+                </ConfigSidebarGroupLabel>
+                {marketplaceError ? (
+                  <div className="config-sidebar-message is-error">
+                    {t("plugins.marketplaceLoadFailed", { error: marketplaceError })}
+                  </div>
+                ) : !marketplace && marketplaceLoading ? (
+                  <div className="config-sidebar-message">
+                    {t("i18n.loading")}
+                  </div>
+                ) : marketplaceEntries.length === 0 ? (
+                  <div className="config-sidebar-message is-empty">
+                    {t("plugins.marketplaceEmpty")}
+                  </div>
+                ) : (
+                  marketplaceEntries.map((entry) => {
+                    const key = marketplaceEntryKey(entry);
+                    const installed = isMarketplaceEntryInstalled(entry, packages, installScope);
+                    return (
+                      <ConfigSidebarItem
+                        key={key}
+                        active={!addMode && selectedMarket === key}
+                        title={entry.description ?? entry.installSource ?? entry.name}
+                        onClick={() => {
+                          setSelectedMarket(key);
+                          setAddMode(false);
+                          setSelected(null);
+                          setActionError(null);
+                          setActionMessage(null);
+                        }}
+                      >
+                        <ConfigSidebarText className="is-grow">{entry.name}</ConfigSidebarText>
+                        {entry.version && (
+                          <span style={{ fontSize: "var(--fs-micro)", color: "var(--text-dim)" }}>
+                            {entry.version}
+                          </span>
+                        )}
+                        {installed && (
+                          <span title={t("plugins.marketplaceInstalled")} style={{ color: "var(--accent)" }}>
+                            ✓
+                          </span>
+                        )}
+                      </ConfigSidebarItem>
+                    );
+                  })
+                )}
+              </div>
             </ConfigSidebarList>
             <ConfigListAction
                 active={addMode}
                 onClick={() => {
                   setAddMode(true);
+                  setSelectedMarket(null);
                   setActionError(null);
                   setActionMessage(null);
                 }}
@@ -1006,7 +1343,20 @@ export function PluginsConfig({
 
           <ConfigDetail>
             <ConfigDetailStack className="is-fill">
-              {addMode ? (
+              {selectedMarketEntry ? (
+              <MarketplaceDetail
+                entry={selectedMarketEntry}
+                cwd={cwd}
+                scope={installScope}
+                projectResourcesLoaded={projectResourcesLoaded}
+                installed={isMarketplaceEntryInstalled(selectedMarketEntry, packages, installScope)}
+                busy={marketInstallBusy}
+                actionError={actionError}
+                actionMessage={actionMessage}
+                onScopeChange={setInstallScope}
+                onInstall={() => void installMarketEntry(selectedMarketEntry)}
+              />
+            ) : addMode ? (
               <AddPluginPanel
                 cwd={cwd}
                 source={installSource}

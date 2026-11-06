@@ -93,6 +93,7 @@ app/api/
   models-config/discover/route.ts POST fetch a configured provider's upstream model list
   models-config/test/route.ts     POST test a configured model/provider
   plugins/route.ts                GET/POST package plugin management
+  plugins/marketplace/route.ts    GET the pi-extensions catalog (fixed URL, read-only)
   skills/route.ts                 GET/PATCH loaded skills and disable-model-invocation
   skills/install/route.ts         POST install skills through npx skills add
   skills/search/route.ts          GET/POST skills.sh search
