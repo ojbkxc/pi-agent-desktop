@@ -128,6 +128,7 @@ lib/
   markdown.ts          shared markdown helpers
   npx.ts               npx runner used by skill install
   pi-types.ts          local structural types for pi SDK objects
+  plugin-marketplace.ts  pi-extensions catalog: parse/validate + source mapping (fixed URL, see app/api/plugins/marketplace)
   rpc-manager.ts      AgentSessionWrapper + registry + startRpcSession
   scheduled-tasks/    scheduler, runner, cron, store, run index for scheduled tasks (see docs/agents/scheduled-tasks.md)
   session-reader.ts   SessionManager wrappers + path cache + buildSessionContext adapter
