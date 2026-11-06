@@ -11,7 +11,7 @@ import * as undici from "undici";
  * mid-response and seen upstream as "client disconnected before the response
  * completed". Override with PI_WEB_HTTP_IDLE_TIMEOUT_MS (ms, or "disabled").
  */
-export const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 30 * 60_000;
+export const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 10 * 60_000;
 
 type DispatcherGlobal = typeof globalThis & {
   __piWebHttpDispatcherConfigured?: boolean;
