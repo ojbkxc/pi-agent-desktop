@@ -131,6 +131,19 @@ jobs:
             - The two extensions resolve from their Git sources, so a plain `clone` + `npm ci` is enough — no sibling checkout required.
             - Updates point at **this fork's** releases.
 
+            ### Also in this build
+
+            - **Reach this server from anywhere (Cloudflare tunnel).** Settings › General › **Server** now holds the listener port and a Cloudflare tunnel, so your own computer can open this server from a network that is not the LAN. Authentication is the existing web password, and the tunnel hostname is trusted only while the tunnel is online *and* a password is set. Quick tunnels get a new `trycloudflare.com` address each time they start; named tunnels take a Tunnel Token. The `cloudflared` binary is pinned and SHA-256 verified (`npm run prepare:cloudflared`, or the Download button in Settings).
+            - **The server port is configurable** (1024–65535, applies on restart).
+
+            ### Fixed
+
+            - Tool-result details the UI reads — the saved-file card, the MCP `server/tool` label — were being stripped before they reached the browser.
+            - A team member's session no longer loses its sidebar completion notification and unread suppression; the sidebar running count and the swimlane tickets/acks read correctly again.
+            - `entry_appended` reaches the browser again, so an extension write while the session is idle refreshes the transcript instead of waiting for a manual reload.
+            - A network blip mid-run no longer leaves a tool stuck on "running" with a missing result card until the run ends.
+            - The outgoing-HTTP idle timeout is 10 minutes instead of 5, and configurable with `PI_WEB_HTTP_IDLE_TIMEOUT_MS`.
+
             Bundled components: pi 1.5.0, pi-web 0.10.0.
 
             ---
@@ -151,6 +164,19 @@ jobs:
 
             - 两个扩展的依赖走 Git 源，clone 后 `npm ci` 即可，**不需要三仓并列**。
             - 更新源指向**本 fork** 的 Release。
+
+            ### 本版同样包含
+
+            - **从任何网络访问这台服务器（Cloudflare 隧道）。** 设置 › 通用 › **服务器**现在同时管监听端口和 Cloudflare 隧道，自己的电脑在**非局域网**下也能打开这个服务。鉴权沿用现有 web 密码；隧道域名只在**隧道在线**且**已设密码**时才被信任。quick 隧道每次启动会拿到新的 `trycloudflare.com` 地址；named 隧道填 Tunnel Token。`cloudflared` 二进制是固定版本 + SHA-256 校验（`npm run prepare:cloudflared`，或设置页里的下载按钮）。
+            - **端口可配置**（1024–65535，重启后生效）。
+
+            ### 修复
+
+            - 界面真正要读的工具结果字段被抹掉了 —— 已保存文件卡片、MCP 的 `server/tool` 标签。
+            - 团队成员的会话不再丢侧栏完成通知与未读抑制；侧栏运行数徽标、泳道 tickets/acks 恢复正确。
+            - `entry_appended` 重新送达浏览器：扩展在空闲时写入条目会自动刷新转写，不用手动重载。
+            - 一轮运行中途网络抖动，不再把工具卡在"运行中"、结果卡片缺失直到本轮结束。
+            - 出站 HTTP 空闲超时由 5 分钟改为 10 分钟，可用 `PI_WEB_HTTP_IDLE_TIMEOUT_MS` 配置。
 
             内置组件版本：pi 1.5.0、pi-web 0.10.0。
           releaseDraft: true
