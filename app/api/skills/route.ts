@@ -7,6 +7,7 @@ import { loadSkillsWithInstallInfo } from "@/lib/skills-service";
 import { setDisableModelInvocation } from "@/lib/skill-frontmatter";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { userHome } from "@/lib/user-home";
+import { ccHahaSkillsDir, hasCcHahaSkills } from "@/lib/cc-haha-skills";
 import { replaceFileAtomicSync } from "@/lib/atomic-file";
 
 export const dynamic = "force-dynamic";
@@ -39,6 +40,10 @@ async function getSkillEditRoots(): Promise<Set<string>> {
   // too (the SDK always treats ~/.agents/skills as trusted).
   const globalSkillsDir = path.join(userHome(), ".agents", "skills");
   if (existsSync(globalSkillsDir)) allowedRoots.add(globalSkillsDir);
+  // cc-haha downloads skills into ~/.claude/skills, which the runtime now loads
+  // as an additional skill root (lib/cc-haha-skills.ts). Allow it for editing
+  // too, or toggling disable-model-invocation on a cc-haha skill would 403.
+  if (hasCcHahaSkills()) allowedRoots.add(ccHahaSkillsDir());
   return allowedRoots;
 }
 

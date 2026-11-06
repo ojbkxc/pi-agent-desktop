@@ -60,6 +60,7 @@ import { isAutoTitleEnabled } from "./session-title-settings";
 import { resolveShellTools } from "./powershell-settings";
 import { CHAT_ONLY_RESOURCE_LOADER_OPTIONS, contextFilesSystemPrompt } from "./chat-only";
 import { isLeanMode, LEAN_RESOURCE_LOADER_OPTIONS, LEAN_TOOL_NAMES } from "./lean-mode";
+import { additionalCcHahaSkillPaths } from "./cc-haha-skills";
 import { createExactSystemPromptExtension } from "./exact-system-prompt";
 import { createArtifactGuideExtension } from "./artifact-guide-extension";
 import { createPiWebBuiltinExtensions, createSubagentBuiltinExtensions, snapshotWantsSubagentExtensions } from "./builtin-extensions";
@@ -3004,6 +3005,7 @@ export async function startRpcSession(
         ? {
             noExtensions: !subagentResources.loadExtensions,
             noSkills: !subagentResources.loadSkills,
+            additionalSkillPaths: additionalCcHahaSkillPaths(subagentResources.loadSkills),
             noPromptTemplates: true,
             noThemes: true,
             noContextFiles: true,
@@ -3032,6 +3034,8 @@ export async function startRpcSession(
               // global, ancestor or project instructions may leak into a chat's prompt.
               noContextFiles: true,
               systemPrompt: chatWorkspacePrompt(chatFilesEnabled, { folder: chatFolder, unlocked: chatUnlocked }),
+              // 与普通会话一致：cc-haha 下载的技能在聊天里也可见（聊天本身允许技能）。
+              additionalSkillPaths: additionalCcHahaSkillPaths(true),
               extensionFactories: [
                 ...(builtins?.extensions ?? []),
                 createArtifactGuideExtension(),
@@ -3060,6 +3064,8 @@ export async function startRpcSession(
               extensionFactories: [exactSystemPromptExtension],
             }
         : {
+            // 普通会话：把 cc-haha 的用户级技能根一并加载（技能已启用，故传 true）。
+            additionalSkillPaths: additionalCcHahaSkillPaths(true),
             extensionFactories: [
               ...(builtins?.extensions ?? []),
               createReadOnlyMcpPolicyExtension(),

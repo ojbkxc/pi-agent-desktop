@@ -120,3 +120,21 @@ test("only markdown files are edited, however they are named in the request", as
   assert.deepEqual(await batch.json(), { results: [{ filePath: authPath, error: "Not a skill file" }] });
   assert.equal(await readFile(authPath, "utf8"), auth);
 });
+
+test("a skill under the cc-haha root (~/.claude/skills) is editable", async () => {
+  // The runtime loads ~/.claude/skills as an additional skill root (lib/cc-haha-skills.ts);
+  // the panel must allow edits there too, or toggling a cc-haha skill would 403.
+  const previousHome = process.env.PI_AGENT_HOME;
+  const ccHome = join(root, "cc-home");
+  process.env.PI_AGENT_HOME = ccHome;
+  try {
+    const filePath = await writeSkill(join(ccHome, ".claude", "skills"), "from-cc-haha");
+    const response = await patchSkills({ filePath, disableModelInvocation: true });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { success: true });
+    assert.match(await readFile(filePath, "utf8"), /disable-model-invocation: true/);
+  } finally {
+    if (previousHome === undefined) delete process.env.PI_AGENT_HOME;
+    else process.env.PI_AGENT_HOME = previousHome;
+  }
+});
