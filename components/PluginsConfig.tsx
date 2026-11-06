@@ -1269,17 +1269,7 @@ export function PluginsConfig({
               )}
 
               <div className="config-sidebar-group">
-                <ConfigSidebarGroupLabel
-                  aside={
-                    <ConfigButton
-                      size="small"
-                      onClick={() => void loadMarketplace()}
-                      disabled={marketplaceLoading}
-                    >
-                      {t("i18n.refresh")}
-                    </ConfigButton>
-                  }
-                >
+                <ConfigSidebarGroupLabel>
                   {t("plugins.marketplace")}
                 </ConfigSidebarGroupLabel>
                 {marketplaceError ? (
@@ -1326,6 +1316,18 @@ export function PluginsConfig({
                     );
                   })
                 )}
+                {/* A plain list row, like the entries above: the group heading's
+                    `aside` is reserved for the group switch, and the footer's
+                    Refresh only reloads installed packages. */}
+                <ConfigSidebarItem
+                  onClick={() => void loadMarketplace()}
+                  disabled={marketplaceLoading}
+                  title={t("plugins.marketplaceRefreshHint")}
+                >
+                  <ConfigSidebarText className="is-grow">
+                    {marketplaceLoading ? t("i18n.loading") : t("plugins.marketplaceRefresh")}
+                  </ConfigSidebarText>
+                </ConfigSidebarItem>
               </div>
             </ConfigSidebarList>
             <ConfigListAction

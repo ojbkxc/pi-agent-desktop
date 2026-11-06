@@ -137,6 +137,8 @@ test("every marketplace string exists in all three locales", async () => {
     "plugins.marketplaceEmpty",
     "plugins.marketplaceLoadFailed",
     "plugins.marketplaceInstalled",
+    "plugins.marketplaceRefresh",
+    "plugins.marketplaceRefreshHint",
     "plugins.marketplaceUnsupported",
     "plugins.marketplaceInstallSource",
     "plugins.marketplaceLicense",
