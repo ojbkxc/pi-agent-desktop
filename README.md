@@ -32,14 +32,7 @@ Repository: [ojbkxc/pi-agent-desktop](https://github.com/ojbkxc/pi-agent-desktop
 Builds are available from [GitHub Releases](https://github.com/ojbkxc/pi-agent-desktop/releases):
 
 - Apple Silicon Mac: download the `aarch64.dmg`, open it, and drag the app into `Applications`. Official releases do not build for Intel Macs.
-- Apple Silicon Mac with [Homebrew](https://brew.sh): install from this repository's tap. The tap is added from the repo URL, so the first command is needed once:
-
-  ```bash
-  brew tap abcwyc/pi-agent-desktop https://github.com/abcwyc/pi-agent-desktop
-  brew install --cask pi-agent
-  ```
-
-  The app upgrades itself from Settings, so `brew upgrade` leaves it alone unless you pass `--greedy`. `brew uninstall --cask --zap pi-agent` removes the app and its window state but never `~/.pi`, which the pi CLI shares.
+- Apple Silicon Mac with [Homebrew](https://brew.sh): this fork publishes no Homebrew tap — its release workflow keeps the tap job upstream-only, so `brew tap` here would install a different build. Use the `.dmg`, or the app's own updater.
 - Linux x64: download the `.deb` package and install it with your distribution's package manager. A community-maintained Flatpak is also available at [flatpark.org](https://flatpark.org/apps/io.github.abcwyc.pi-agent-desktop/) — not an official release, but Flatpak works across most distributions and handles updates for you.
 
 - Windows x64: download the installer whose name ends in `x64-setup.exe` and run it. The installer pulls in Microsoft WebView2 when it is missing.
@@ -76,9 +69,9 @@ Model keys and session data stay on your machine. The file-browsing API only all
 
 ## Update Checks And Upgrades
 
-Pi Agent checks the latest stable release of `abcwyc/pi-agent-desktop` at most once every seven days:
+Pi Agent checks the latest stable release of `ojbkxc/pi-agent-desktop` at most once every seven days:
 
-- `abcwyc/pi-agent-desktop`
+- `ojbkxc/pi-agent-desktop`
 - `earendil-works/pi`
 - `agegr/pi-web`
 
