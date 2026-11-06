@@ -86,6 +86,11 @@ test("subagent completion stays silent and never becomes unread", () => {
     source,
     /filter\(\(session\) => session\.relation\?\.kind !== "subagent"\)[\s\S]*?unreadEligibleIds\.has\(id\)/,
   );
+  // The ref must also be FILLED from the response. Asserting only the filter let a
+  // ref that is declared and read but never assigned — always empty, so the
+  // suppression was silently off — pass this test.
+  assert.match(source, /setSuppressedCompletionSessionIds\(new Set\(data\.completionNotificationSuppressedSessionIds \?\? \[\]\)\)/);
+  assert.match(source, /previousSuppressedCompletionSessionIdsRef\.current = suppressedCompletionSessionIds/);
 });
 
 test("includes project activity counts in accessible labels", () => {

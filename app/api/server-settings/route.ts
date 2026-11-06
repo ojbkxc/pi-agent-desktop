@@ -8,10 +8,11 @@ export const runtime = "nodejs";
 
 const NO_STORE = { "Cache-Control": "no-store" } as const;
 
-// `PORT` is what a hosting/desktop launcher sets; the fork's own launchers pass
-// PI_WEB_PORT so a `next start -p` port is still visible to this route.
+// The port this process actually bound. Next's own start-server sets PORT from
+// the `-p` argument (dev and start alike), so this is the running port whether
+// the launcher passed a flag, PORT, or the port saved in Settings.
 function runningPort(): number | null {
-  const parsed = Number(process.env.PORT ?? process.env.PI_WEB_PORT);
+  const parsed = Number(process.env.PORT);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 

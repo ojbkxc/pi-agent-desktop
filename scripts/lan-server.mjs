@@ -32,6 +32,6 @@ const nextBin = path.join(root, "node_modules", "next", "dist", "bin", "next");
 const child = spawn(process.execPath, [nextBin, mode, "-H", HOSTNAME, "-p", port], {
   cwd: root,
   stdio: "inherit",
-  env: { ...process.env, PI_WEB_HOSTNAME: HOSTNAME, PI_WEB_PORT: port },
+  env: { ...process.env, PI_WEB_HOSTNAME: HOSTNAME },
 });
 wireChildProcessLifecycle(child);

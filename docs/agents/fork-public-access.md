@@ -102,8 +102,10 @@ the same script, so the digest table stays in one place). The staged binaries un
 ## The port
 
 `serverPort` is read by the launchers through `bin/pi-web-options.js`
-(`--port` > `PORT` > saved port > 30141) and mirrored into the child as `PI_WEB_PORT`,
-which is what `GET /api/server-settings` reports as the running port. `scripts/lan-server.mjs`
+(`--port` > `PORT` > saved port > 30141). The running port reported by
+`GET /api/server-settings` comes from `process.env.PORT`, which Next's own
+start-server sets from the `-p` argument — so it is correct for `dev` and `start`
+alike, and nothing has to be mirrored into the child. `scripts/lan-server.mjs`
 no longer hard-codes 30141. Tauri's `choose_port` prefers the saved port too. Changing the
 port takes effect on restart; the UI says so.
 

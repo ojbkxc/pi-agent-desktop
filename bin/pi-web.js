@@ -84,7 +84,7 @@ nextArgs.push("-H", hostname);
 const child = spawn(process.execPath, getNextNodeArgs(nextBin, nextArgs), {
   cwd: pkgDir,
   stdio: ["inherit", "pipe", "inherit"],
-  env: { ...process.env, PI_WEB_HOSTNAME: hostname, PI_WEB_PORT: port, PI_WEB_VERBOSE: launchOptions.verbose ? "1" : "0" },
+  env: { ...process.env, PI_WEB_HOSTNAME: hostname, PI_WEB_VERBOSE: launchOptions.verbose ? "1" : "0" },
 });
 attachReadyHandoff(child.stdout, { port, wantOpen });
 wireChildProcessLifecycle(child);

@@ -493,6 +493,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // The chat whose conversation is being copied into a project (the picker is open for it).
   const [continueChat, setContinueChat] = useState<SessionInfo | null>(null);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
+  // Sessions whose completion is deliberately silent (team members run in the background and
+  // report through their team). /api/sessions and /api/agent/running both return this.
+  const [suppressedCompletionSessionIds, setSuppressedCompletionSessionIds] = useState<Set<string>>(() => new Set());
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   const previousSuppressedCompletionSessionIdsRef = useRef<Set<string>>(new Set());
@@ -569,6 +572,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       if (!sseAuthoritativeRef.current) {
         setRunningSessionIds(new Set(data.runningSessionIds ?? []));
       }
+      // No SSE source for this one, so the fetched value always wins.
+      setSuppressedCompletionSessionIds(new Set(data.completionNotificationSuppressedSessionIds ?? []));
       // Drop markers for deleted sessions and for subagents, whose completion
       // is intentionally silent even if an older client marked them unread.
       const unreadEligibleIds = new Set(
@@ -847,7 +852,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     }
 
     previousRunningSessionIdsRef.current = runningSessionIds;
-  }, [runningSessionIds, selectedSessionId, loadSessions, allSessions, onBackgroundTaskDone]);
+    previousSuppressedCompletionSessionIdsRef.current = suppressedCompletionSessionIds;
+  }, [runningSessionIds, suppressedCompletionSessionIds, selectedSessionId, loadSessions, allSessions, onBackgroundTaskDone]);
 
   // A session that just started running has no row yet: pi had not flushed it
   // to disk when the list was last fetched. /api/sessions merges live runs, so

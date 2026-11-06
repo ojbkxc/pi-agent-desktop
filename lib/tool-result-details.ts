@@ -10,9 +10,19 @@
 // Keep KEPT_DETAIL_KEYS in sync with the UI readers:
 // - `patch` / `diff`           MessageView getResultDiff (edit/write diffs)
 // - `preview` / `result`       apply_patch rendering + lib/turn-written-files.ts
+// - `path` / `name` / `size`   save_to_downloads → components/SavedFileCard.tsx
+// - `server` / `tool`          MCP results → lib/mcp-tool-display.ts (`server/tool` label)
 // - `kind === "pi-web-subagent"` details are kept whole (MessageView subagent card)
+//
+// `calls` (codemode snapshots) is deliberately absent: it is one of the bulk
+// payloads, and the codemode path skips this projection entirely (see
+// docs/merge-history.md) — listing it here would start shipping it twice.
 
-const KEPT_DETAIL_KEYS = ["patch", "diff", "preview", "result"] as const;
+const KEPT_DETAIL_KEYS = [
+  "patch", "diff", "preview", "result",
+  "path", "name", "size",
+  "server", "tool",
+] as const;
 
 const SUBAGENT_DETAILS_KIND = "pi-web-subagent";
 

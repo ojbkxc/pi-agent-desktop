@@ -56,7 +56,6 @@ const child = spawn(
     env: {
       ...process.env,
       PI_WEB_HOSTNAME: "127.0.0.1",
-      PI_WEB_PORT: launchOptions.port,
       PI_WEB_VERBOSE: launchOptions.verbose ? "1" : "0",
     },
   },
