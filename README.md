@@ -21,15 +21,15 @@
 
 ![Pi Agent dark mode](./docs/screenshots/pi-agent-dark.webp)
 
-**[⬇️ Download Pi Agent (macOS / Windows)](https://github.com/abcwyc/pi-agent-desktop/releases)**
+**[⬇️ Download Pi Agent (macOS / Windows)](https://github.com/ojbkxc/pi-agent-desktop/releases)**
 
-Repository: [abcwyc/pi-agent-desktop](https://github.com/abcwyc/pi-agent-desktop)
+Repository: [ojbkxc/pi-agent-desktop](https://github.com/ojbkxc/pi-agent-desktop) — fork of [abcwyc/pi-agent-desktop](https://github.com/abcwyc/pi-agent-desktop)
 
 ## Installation And Usage
 
 ### Install The Desktop App
 
-Builds are available from [GitHub Releases](https://github.com/abcwyc/pi-agent-desktop/releases):
+Builds are available from [GitHub Releases](https://github.com/ojbkxc/pi-agent-desktop/releases):
 
 - Apple Silicon Mac: download the `aarch64.dmg`, open it, and drag the app into `Applications`. Official releases do not build for Intel Macs.
 - Apple Silicon Mac with [Homebrew](https://brew.sh): install from this repository's tap. The tap is added from the repo URL, so the first command is needed once:
