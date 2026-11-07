@@ -16,6 +16,7 @@ import { TaskBoardCanvas, countTaskStates } from "@/components/AgentTeams/TaskBo
 import { FormationBand } from "@/components/AgentTeams/FormationBand";
 import { TeamMemberModelPanel } from "@/components/AgentTeams/TeamMemberModelPanel";
 import { TeamLifecycleActions } from "@/components/AgentTeams/TeamLifecycleActions";
+import { FallbackSettings } from "@/components/AgentTeams/FallbackSettings";
 import { formationNaturalWidth } from "@/lib/agent-teams-formation-layout";
 
 interface Props {
@@ -357,6 +358,11 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
             )}
           </>
         )}
+
+        <section className="agent-teams-section" aria-label={t("teams.fallback.heading")}>
+          <h3 className="agent-teams-section-title">{t("teams.fallback.heading")}</h3>
+          <FallbackSettings />
+        </section>
       </div>
     </main>
   );

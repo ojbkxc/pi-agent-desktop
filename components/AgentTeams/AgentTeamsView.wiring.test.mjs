@@ -28,3 +28,9 @@ test("生命周期操作被挂上，且确认文案用 displayName + memberCount
   // currentDisplayName 取 displayName（config.name），绝不拿 sanitize 目录名渲染
   assert.match(source, /const currentDisplayName = currentTeam\?\.displayName \?\? selected \?\? ""/);
 });
+
+test("无人值守兜底设置面被挂上（含 manualNeeds 清除入口）", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(source, /import \{ FallbackSettings \}/);
+  assert.match(source, /<FallbackSettings \/>/);
+});

@@ -42,9 +42,9 @@ interface WebPushEnvironment {
 
 /** What happened in a session: a run finished, failed, or is waiting on a dialog. */
 export type SessionPushEvent =
-  | { kind: "complete" }
-  | { kind: "failed"; detail?: string }
-  | { kind: "attention"; detail?: string };
+  | { kind: "complete"; tag?: string }
+  | { kind: "failed"; detail?: string; tag?: string }
+  | { kind: "attention"; detail?: string; tag?: string };
 
 export interface WebPushNotifier {
   getVapidPublicKey: () => string;
@@ -199,12 +199,15 @@ export function sessionPushPayload(
   locale: string,
 ): { title: string; body: string; url: string; tag: string } {
   const url = `/?session=${encodeURIComponent(sessionId)}`;
+  // 默认一个会话一条通知（新状态顶掉旧状态）；调用方可给独立 tag 与别的通道并存
+  // （例如无人值守兜底提醒不能被随后真正的「会话完成」推送顶掉）。
+  const tag = event.tag ?? `pi-session-complete:${sessionId}`;
   if (event.kind === "complete") {
     return {
       title: sessionName ?? localeText(locale, "sessionComplete"),
       body: localeText(locale, "taskFinished"),
       url,
-      tag: `pi-session-complete:${sessionId}`,
+      tag,
     };
   }
   const text = EVENT_TEXT[pushLocale(locale)];
@@ -214,8 +217,7 @@ export function sessionPushPayload(
     title: sessionName ? `${label} · ${sessionName}` : label,
     body: detail || (event.kind === "failed" ? text.failedBody : text.attentionBody),
     url,
-    // One notification per session: a newer state replaces the older one.
-    tag: `pi-session-complete:${sessionId}`,
+    tag,
   };
 }
 

@@ -93,6 +93,8 @@ async function defaultNotify(event: NotifyEvent): Promise<void> {
     await notifySessionEvent(event.sessionId, {
       kind: event.kind === "needs-human" || event.kind === "exhausted" ? "failed" : "attention",
       detail: event.detail,
+      // 独立 tag：兜底提醒不能被随后真正的「会话完成」推送顶掉（两者同一 lead 会话）。
+      tag: `teams-fallback:${event.sessionId}`,
     });
   } catch (error) {
     console.error("[teams-fallback] 通知用户失败:", error instanceof Error ? error.message : error);

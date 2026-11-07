@@ -138,6 +138,35 @@ export function writeUnattendedState(state: UnattendedState, path = unattendedSe
   writeUnattendedFile({ config: current.config, state }, path);
 }
 
+/**
+ * 只替换 config、保留磁盘上的 state（approvalNudges / failureNudges / manualNeeds 原样保留）。
+ * 与 writeUnattendedState 相对：设置面改阈值绝不能顺手清账本。
+ */
+export function writeUnattendedConfig(config: UnattendedConfig, path = unattendedSettingsPath()): void {
+  const current = readUnattendedFile(path);
+  writeUnattendedFile({ config, state: current.state }, path);
+}
+
+/**
+ * 只从 manualNeeds 删除指定 key，其余（config、approvalNudges、failureNudges）一个不动。
+ * 返回落盘后的 state，供调用方回显。
+ */
+export function clearManualNeeds(keys: readonly string[], path = unattendedSettingsPath()): UnattendedState {
+  const current = readUnattendedFile(path);
+  const manual = { ...(current.state.manualNeeds ?? {}) };
+  for (const key of keys) delete manual[key];
+  const state: UnattendedState = { ...current.state };
+  if (Object.keys(manual).length > 0) state.manualNeeds = manual;
+  else delete state.manualNeeds;
+  writeUnattendedFile({ config: current.config, state }, path);
+  return state;
+}
+
+/** 兜底是否被环境变量整体关闭（instrumentation-node.ts 用它决定是否起循环）。 */
+export function isUnattendedDisabledByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.PI_WEB_DISABLE_TEAMS_FALLBACK === "1";
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 读盘投影
 // ─────────────────────────────────────────────────────────────────────────────
