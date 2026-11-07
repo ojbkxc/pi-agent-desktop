@@ -3,6 +3,7 @@ import { build } from "esbuild";
 import { mkdir, readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { chromium } from "playwright";
+import { pinLocale } from "./helpers/locale.mjs";
 
 const out = "test-results/sidebar-menu-placement";
 await mkdir(out, { recursive: true });
@@ -52,10 +53,8 @@ try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 620 }, colorScheme: theme });
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
-    await page.addInitScript(({ theme, locale }) => {
-      localStorage.setItem("pi-locale", locale);
-      localStorage.setItem("pi-theme", theme);
-    }, { theme, locale });
+    await page.addInitScript((theme) => localStorage.setItem("pi-theme", theme), theme);
+    await pinLocale(page, locale);
     await page.goto(base);
 
     // The session row's "…" menu, opened on a row near the bottom edge.

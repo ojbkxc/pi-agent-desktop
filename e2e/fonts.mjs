@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { chromium } from "playwright";
+import { pinLocale } from "./helpers/locale.mjs";
 
 const out = "test-results/fonts";
 await mkdir(out, { recursive: true });
@@ -68,7 +69,8 @@ const browser = await chromium.launch({ channel: process.env.E2E_BROWSER_CHANNEL
 const results = [];
 async function open({ width = 1280, theme = "light", locale = "en", url = urls[0] } = {}) {
   const page = await browser.newPage({ viewport: { width, height: 960 }, colorScheme: theme, reducedMotion: "reduce" });
-  await page.addInitScript(({ theme, locale }) => { localStorage.setItem("pi-theme", theme); localStorage.setItem("pi-locale", locale); }, { theme, locale });
+  await page.addInitScript((theme) => localStorage.setItem("pi-theme", theme), theme);
+  await pinLocale(page, locale);
   await page.goto(url);
   await page.locator(".settings-font-section").waitFor();
   return page;

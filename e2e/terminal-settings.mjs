@@ -3,6 +3,7 @@ import { build } from "esbuild";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { chromium } from "playwright";
+import { pinLocale } from "./helpers/locale.mjs";
 
 const out = "test-results/terminal-settings";
 await mkdir(out, { recursive: true });
@@ -47,7 +48,8 @@ try {
       if (put) shell = route.request().postDataJSON().shell;
       await route.fulfill({ json: { shell, options, defaultShell: options[0].label, unavailable: shell !== "auto" && !options.some(option => option.value === shell) } });
     });
-    await page.addInitScript(({ locale, theme }) => { localStorage.setItem("pi-locale", locale); localStorage.setItem("pi-theme", theme); }, { locale, theme });
+    await page.addInitScript((theme) => localStorage.setItem("pi-theme", theme), theme);
+    await pinLocale(page, locale);
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     const section = page.locator(".settings-terminal-section");
     const picker = section.getByRole("combobox");

@@ -3,6 +3,7 @@ import { build } from "esbuild";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { chromium } from "playwright";
+import { pinLocale } from "./helpers/locale.mjs";
 
 const out = "test-results/session-delete";
 await mkdir(out, { recursive: true });
@@ -73,10 +74,8 @@ try {
     const page = await browser.newPage({ viewport: {width,height:720}, colorScheme:theme });
     const errors=[];
     page.on("pageerror",error=>errors.push(error.message));
-    await page.addInitScript(({theme,locale})=>{
-      localStorage.setItem("pi-locale",locale);
-      localStorage.setItem("pi-theme",theme);
-    },{theme,locale});
+    await page.addInitScript(theme=>localStorage.setItem("pi-theme",theme),theme);
+    await pinLocale(page,locale);
     await page.goto(base);
     await page.waitForFunction(locale=>document.documentElement.lang===locale,locale);
     const row=page.getByRole("treeitem");
@@ -171,7 +170,7 @@ try {
     await page.close();
   }
   const page=await browser.newPage({viewport:{width:390,height:720}});
-  await page.addInitScript(()=>localStorage.setItem("pi-locale","zh-CN"));
+  await pinLocale(page,"zh-CN");
   await page.goto(`${base}/?long&folder`);
   const row=page.getByRole("treeitem"); await row.focus(); await page.keyboard.press("Delete");
   const dialog=page.getByRole("dialog"); await dialog.waitFor();

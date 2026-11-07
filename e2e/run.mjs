@@ -17,6 +17,7 @@ import { checkMcpManager } from "./mcp-manager.mjs";
 import { checkMissingWorkspace, MISSING_WORKSPACE, missingWorkspaceReply } from "./missing-workspace.mjs";
 import { checkCodeBackground } from "./code-background.mjs";
 import { createE2EServerEnv } from "../scripts/e2e-server-env.mjs";
+import { pinLocale } from "./helpers/locale.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const mode = process.env.E2E_SERVER_MODE || "dev";
@@ -248,9 +249,7 @@ try {
   browser = await chromium.launch();
   for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
     context = await browser.newContext({ viewport, locale: "en-US" });
-    // The app's readInitialLocale ignores the browser language, so the context
-    // locale alone cannot pin the UI language — seed the stored preference too.
-    await context.addInitScript(() => localStorage.setItem("pi-locale", "en"));
+    await pinLocale(context);
     await context.tracing.start({ screenshots: true, snapshots: true });
     page = await context.newPage();
     page.setDefaultTimeout(30_000);

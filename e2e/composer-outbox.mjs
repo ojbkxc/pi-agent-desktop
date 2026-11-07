@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { chromium } from 'playwright';
 import { createJiti } from 'jiti';
 import { checkComposerGeometry } from './composer-geometry.mjs';
+import { pinLocale } from './helpers/locale.mjs';
 
 const dir = 'test-results/composer-outbox';
 await mkdir(dir, { recursive: true });
@@ -66,7 +67,7 @@ try {
     current = makeSession();
     const page = await browser.newPage({ viewport: { width, height: 760 }, hasTouch: width === 320, isMobile: width === 320, reducedMotion: 'reduce' });
     const errors = []; page.on('pageerror', error => errors.push(error.message));
-    await page.addInitScript(() => localStorage.setItem('pi-locale', 'zh-CN'));
+    await pinLocale(page, 'zh-CN');
     await page.route('**/*', route => route.request().url().startsWith(base) ? route.continue() : route.abort());
     await page.goto(base); await page.evaluate(theme => document.documentElement.classList.toggle('dark', theme === 'dark'), theme);
     const editor = page.locator('textarea'), main = page.locator('.composer-send-button');

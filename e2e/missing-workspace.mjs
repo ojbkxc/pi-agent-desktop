@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir, rm } from "node:fs/promises";
+import { pinLocale } from "./helpers/locale.mjs";
 
 export const MISSING_WORKSPACE = "e2e-missing-workspace-session";
 export const missingWorkspaceReply = "E2E missing workspace reply";
@@ -11,8 +12,7 @@ export async function checkMissingWorkspace(browser, base, folder) {
   await rm(folder, { recursive: true, force: true });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
   try {
-    // readInitialLocale ignores the browser language; pin the stored preference.
-    await context.addInitScript(() => localStorage.setItem("pi-locale", "en"));
+    await pinLocale(context);
     const page = await context.newPage();
     page.setDefaultTimeout(30_000);
     const errors = [];

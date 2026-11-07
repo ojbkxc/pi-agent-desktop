@@ -3,6 +3,7 @@ import { build } from "esbuild";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { chromium } from "playwright";
+import { pinLocale } from "./helpers/locale.mjs";
 
 const out = "test-results/conversation-navigator";
 await mkdir(out, { recursive: true });
@@ -27,8 +28,8 @@ try {
     const errors = []; page.on("pageerror", (error) => errors.push(error.message));
     await page.addInitScript((theme) => {
       document.addEventListener("DOMContentLoaded", () => document.documentElement.classList.toggle("dark", theme === "dark"));
-      localStorage.setItem("pi-locale", "en");
     }, theme);
+    await pinLocale(page);
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.locator("article").first().waitFor();
     const navigator = page.getByRole("slider", { name: "Conversation navigation" });

@@ -20,6 +20,15 @@ the application in a clean checkout and runs the same browser tests with
 `E2E_SERVER_MODE=start` against `next start`. Do not build in a checkout used
 for development.
 
+## UI language
+
+`readInitialLocale` (hooks/useI18n.tsx) reads only the stored `pi-locale`
+preference and ignores the browser language, so a browser context's `locale`
+option pins nothing. Every spec pins through `e2e/helpers/locale.mjs`
+(`pinLocale(pageOrContext, locale)`, default `en`). `scripts/e2e-locale-pins.test.mjs`
+runs under `npm test` and fails if a spec in the `test:e2e` chain opens a page or
+context without pinning, or writes `pi-locale` by hand.
+
 Coverage:
 
 - `node e2e/terminal-settings.mjs` checks the General terminal picker with Windows

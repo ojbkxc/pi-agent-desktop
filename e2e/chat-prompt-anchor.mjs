@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
 import { chromium } from "playwright";
+import { pinLocale } from "./helpers/locale.mjs";
 import { getPromptAnchorSpacerHeight } from "../lib/chat-lazy-load.ts";
 
 // Exercise the actual hook callbacks against browser scroll geometry, without
@@ -24,7 +25,7 @@ const browser = await chromium.launch({ channel: process.platform === "win32" ? 
 try {
   for (const width of [1280, 390, 320]) {
     const page = await browser.newPage({ viewport: { width, height: 760 } });
-    await page.addInitScript(() => localStorage.setItem("pi-locale", "en"));
+    await pinLocale(page);
     await page.setContent(`<style>
       * { box-sizing: border-box } body { margin: 0 }
       header { height: 48px; background: #222 }

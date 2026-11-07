@@ -3,6 +3,7 @@ import {build} from 'esbuild';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {chromium} from 'playwright';
+import {pinLocale} from './helpers/locale.mjs';
 
 const out='test-results/appearance';await mkdir(out,{recursive:true});
 await build({entryPoints:['e2e/appearance.fixture.jsx'],bundle:true,platform:'browser',format:'iife',
@@ -28,7 +29,8 @@ try{
   for(const theme of ['light','dark'])for(const width of [1464,1280,1024,800,640,390,320]){
     const page=await browser.newPage({viewport:{width,height:820},colorScheme:theme,reducedMotion:'reduce'});
     const errors=[];page.on('pageerror',e=>errors.push(e.message));
-    await page.addInitScript(theme=>{localStorage.setItem('pi-theme',theme);localStorage.setItem('pi-locale','en');},theme);
+    await page.addInitScript(theme=>localStorage.setItem('pi-theme',theme),theme);
+    await pinLocale(page);
     await page.goto(url);await page.locator('.settings-font-section').waitFor();
     // Appearance offers colour mode only: no background washes, one flat neutral canvas.
     assert.equal(await page.locator('input[name="background"]').count(),0,'Background choices were removed');

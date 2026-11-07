@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { build } from "esbuild";
 import { chromium } from "playwright";
+import { pinLocale } from "./helpers/locale.mjs";
 
 const out = "test-results/streaming-markdown";
 await mkdir(out, { recursive: true });
@@ -59,7 +60,7 @@ const prefix = Array.from({ length: 90 }, (_, i) => `## Stable section ${i}\n\nä
 const results = [];
 async function pageFor(mode = "current", reducedMotion = "no-preference", width = 1280) {
   const page = await browser.newPage({ viewport: { width, height: 850 }, reducedMotion });
-  await page.addInitScript(() => { localStorage.setItem("pi-locale", "en"); });
+  await pinLocale(page);
   await page.goto(`${base}/${mode}`);
   await page.waitForFunction(() => window.markdownFixture);
   return page;

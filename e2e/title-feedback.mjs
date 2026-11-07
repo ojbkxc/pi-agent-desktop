@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { pinLocale } from "./helpers/locale.mjs";
 import { createE2EServerEnv } from "../scripts/e2e-server-env.mjs";
 
 // Real AppShell and notice shelf; only the title model response is synthetic.
@@ -65,7 +66,7 @@ try {
   assert.ok(ready, logs.join(""));
   browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "en-US" });
-  await context.addInitScript(() => localStorage.setItem("pi-locale", "en"));
+  await pinLocale(context);
   page = await context.newPage();
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -144,7 +145,7 @@ try {
   await page.locator(".session-item-title").getByText("Background generated title", { exact: true }).waitFor();
   assert.deepEqual(errors, []);
   const localized = await browser.newContext({ viewport: { width: 390, height: 844 }, locale: "zh-CN", colorScheme: "dark" });
-  await localized.addInitScript(() => localStorage.setItem("pi-locale", "zh-CN"));
+  await pinLocale(localized, "zh-CN");
   const narrowPage = await localized.newPage();
   await narrowPage.route(`**/api/sessions/${first}/auto-name`, route =>
     route.fulfill({ status: 500, json: { error: "401: authentication_error" } }));

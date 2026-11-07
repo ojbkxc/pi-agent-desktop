@@ -4,6 +4,7 @@ import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {chromium} from 'playwright';
 import {checkComposerGeometry} from './composer-geometry.mjs';
+import {pinLocale} from './helpers/locale.mjs';
 await mkdir('test-results/ui-send',{recursive:true});
 await build({entryPoints:['e2e/option-controls.fixture.jsx'],bundle:true,platform:'browser',format:'iife',outfile:'test-results/ui-send/consistency-preview.js',define:{'process.env':'{"NODE_ENV":"production"}'},jsx:'automatic',logLevel:'warning'});
 const css=(await Promise.all(['app/globals.css','app/settings.css','app/native-theme.css'].map(p=>readFile(p,'utf8')))).map(x=>x.replace(/^@import[^;]*;/gm,'')).join('\n');
@@ -41,7 +42,8 @@ async function assertChoiceGeometry(surface,rows,label){
 try{
  for(const theme of ['dark','light'])for(const width of [1280,390,320]){
   const page=await browser.newPage({viewport:{width,height:720},hasTouch:width===320,isMobile:width===320,deviceScaleFactor:2,reducedMotion:'reduce'});await page.addInitScript(()=>Object.defineProperty(navigator,'platform',{get:()=>'Linux x86_64'}));/* the vertical Settings navigation is the Windows/Linux layout; macOS draws it as tabs */const errors=[];page.on('pageerror',e=>errors.push(e.message));
-  await page.addInitScript(theme=>{localStorage.setItem('pi-locale','zh-CN');localStorage.setItem('pi-theme',theme);},theme);
+  await page.addInitScript(theme=>localStorage.setItem('pi-theme',theme),theme);
+  await pinLocale(page,'zh-CN');
   await page.route('**/*',route=>route.request().url().startsWith(base)?route.continue():route.abort());await page.goto(base);
   await page.evaluate(theme=>document.documentElement.classList.toggle('dark',theme==='dark'),theme);
   const trigger=page.getByRole('combobox',{name:'Thinking fixture',exact:true});await trigger.click();

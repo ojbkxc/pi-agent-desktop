@@ -3,6 +3,7 @@ import {build} from 'esbuild';
 import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {chromium} from 'playwright';
+import {pinLocale} from './helpers/locale.mjs';
 
 const out = 'test-results/settings-controls';
 await mkdir(out, {recursive:true});
@@ -90,7 +91,8 @@ try {
     const page = await browser.newPage({viewport:{width,height:900},colorScheme:theme});
     const errors=[];page.on('pageerror',e=>errors.push(e.message));
     await page.route('**/*',route=>route.request().url().startsWith(base)?route.continue():route.abort());
-    await page.addInitScript(theme=>{localStorage.setItem('pi-theme',theme);localStorage.setItem('pi-locale','en');},theme);
+    await page.addInitScript(theme=>localStorage.setItem('pi-theme',theme),theme);
+    await pinLocale(page);
     for(const section of ['general','appearance','agents','models','skills','plugins','mcp']) {
       await page.goto(base+'/?section='+section);
       const host = page.locator('.settings-section-host:not([hidden])');
@@ -161,6 +163,7 @@ try {
     assert.deepEqual(errors,[]);await page.close();
   }
   const touch = await browser.newPage({viewport:{width:390,height:900},hasTouch:true,isMobile:true});
+  await pinLocale(touch);
   await touch.goto(base+'/?section=general');
   await touch.locator('.settings-language-option').first().waitFor();
   await touch.locator('.settings-dialog-surface').evaluate(el=>Promise.all(el.getAnimations({subtree:true}).map(animation=>animation.finished)));
