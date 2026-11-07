@@ -27,6 +27,15 @@ export function toggleModelRef(value: string[], ref: string): string[] {
 }
 
 /**
+ * 行点击后的新选中集：多选走 toggleModelRef；单选（single）点已选项取消、点别的项替换。
+ * 导出以便单测。
+ */
+export function nextSelection(value: string[], ref: string, single: boolean): string[] {
+  if (!single) return toggleModelRef(value, ref);
+  return value.includes(ref) ? [] : [ref];
+}
+
+/**
  * Flash 档判定：模型 id 匹配 /flash/i。数据驱动，将来任何 provider 新增 flash
  * 模型都自动纳入，不需要改代码。
  */
@@ -68,6 +77,8 @@ export interface ModelPickerProps {
   error?: string | null;
   disabled?: boolean;
   ariaLabel?: string;
+  /** 单选：点已选项取消、点别的项替换；此时不显示「Flash 全部」预设。 */
+  single?: boolean;
 }
 
 /**
@@ -83,6 +94,7 @@ export function ModelPicker({
   error = null,
   disabled = false,
   ariaLabel,
+  single = false,
 }: ModelPickerProps) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
@@ -141,18 +153,20 @@ export function ModelPicker({
             {t("teams.modelPicker.enabledOnly")}
           </button>
         )}
-        <button
-          type="button"
-          className="model-picker-flash"
-          aria-pressed={flash.active}
-          disabled={disabled || flash.refs.length === 0}
-          title={flash.refs.length === 0
-            ? t("teams.modelPicker.flashNone")
-            : t("teams.modelPicker.flashAll")}
-          onClick={toggleFlash}
-        >
-          {t("teams.modelPicker.flashAll")}
-        </button>
+        {!single && (
+          <button
+            type="button"
+            className="model-picker-flash"
+            aria-pressed={flash.active}
+            disabled={disabled || flash.refs.length === 0}
+            title={flash.refs.length === 0
+              ? t("teams.modelPicker.flashNone")
+              : t("teams.modelPicker.flashAll")}
+            onClick={toggleFlash}
+          >
+            {t("teams.modelPicker.flashAll")}
+          </button>
+        )}
         <span
           className="model-picker-count"
           aria-live="polite"
@@ -198,7 +212,7 @@ export function ModelPicker({
                         className={`model-picker-model${selected ? " is-selected" : ""}`}
                         aria-pressed={selected}
                         disabled={disabled}
-                        onClick={() => onChange(toggleModelRef(value, model.ref))}
+                        onClick={() => onChange(nextSelection(value, model.ref, single))}
                         title={model.ref}
                       >
                         <span className="model-picker-check" aria-hidden="true" />

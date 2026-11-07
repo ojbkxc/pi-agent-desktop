@@ -7,7 +7,7 @@ const jiti = createJiti(import.meta.url, {
   jsx: { runtime: "automatic" },
   tsconfigPaths: true,
 });
-const { ModelPicker, filterCatalogEntries, toggleModelRef, isFlashModelId, flashPresetState } =
+const { ModelPicker, filterCatalogEntries, toggleModelRef, nextSelection, isFlashModelId, flashPresetState } =
   await jiti.import("./ModelPicker.tsx");
 const { buildModelCatalog } = await jiti.import("@/hooks/useModelCatalog.ts");
 const React = await jiti.import("react");
@@ -63,6 +63,19 @@ test("toggleModelRef adds and removes without disturbing order", () => {
   assert.deepEqual(toggleModelRef([], "a/b"), ["a/b"]);
   assert.deepEqual(toggleModelRef(["a/b", "c/d"], "c/d"), ["a/b"]);
   assert.deepEqual(toggleModelRef(["a/b"], "e/f"), ["a/b", "e/f"]);
+});
+
+test("nextSelection: multi toggles, single replaces or clears", () => {
+  assert.deepEqual(nextSelection(["a"], "b", false), ["a", "b"]);
+  assert.deepEqual(nextSelection(["a"], "b", true), ["b"], "单选点别的项即替换");
+  assert.deepEqual(nextSelection(["a"], "a", true), [], "单选再点已选项即取消");
+  assert.deepEqual(nextSelection([], "a", true), ["a"]);
+});
+
+test("single mode hides the Flash preset (it selects many)", () => {
+  const html = render({ value: [], single: true });
+  assert.doesNotMatch(html, /model-picker-flash/);
+  assert.match(html, /model-picker-model/, "模型行仍在");
 });
 
 test("renders every model flat, grouped by provider, as real buttons", () => {

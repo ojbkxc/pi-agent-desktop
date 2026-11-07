@@ -11207,3 +11207,229 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   color: var(--text-dim);
   font-size: var(--fs-micro);
 }
+
+/* ==========================================================================
+   Agent Teams · member model change + team lifecycle
+   (TeamMemberModelPanel.tsx / TeamLifecycleActions.tsx).
+   Fusion of the ModelPicker with per-member receipts and destructive actions.
+   ========================================================================== */
+.agent-teams-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agent-teams-batch-model,
+.agent-teams-member-model {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: var(--fs-micro);
+  cursor: pointer;
+}
+
+.agent-teams-batch-model:hover,
+.agent-teams-member-model:hover { background: var(--bg-hover); color: var(--text); }
+
+.agent-teams-batch-model:focus-visible,
+.agent-teams-member-model:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.agent-teams-batch-model:disabled,
+.agent-teams-member-model:disabled { cursor: default; opacity: 0.5; }
+
+.agent-teams-member { display: inline-flex; align-items: center; gap: 4px; }
+
+.team-member-model-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+}
+
+.team-member-model-title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-small);
+  font-weight: var(--fw-semibold);
+}
+
+.team-member-model-members { display: flex; flex-direction: column; gap: 6px; }
+
+.team-member-model-members-label,
+.team-member-model-picker-label {
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+}
+
+.team-member-model-member-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.team-member-model-member {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-small);
+  cursor: pointer;
+}
+
+.team-member-model-member.is-selected { border-color: var(--accent); background: var(--bg-hover); }
+
+.team-member-model-member:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.team-member-model-check {
+  position: relative;
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs, 4px);
+  background: var(--bg);
+}
+
+.team-member-model-member.is-selected .team-member-model-check {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.team-member-model-member.is-selected .team-member-model-check::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 3px;
+  height: 7px;
+  border: solid var(--bg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.team-member-model-single { margin: 0; color: var(--text); font-size: var(--fs-small); }
+
+.team-member-model-picker { display: flex; flex-direction: column; gap: 6px; }
+
+.team-member-model-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--fs-small);
+}
+
+.team-member-model-actions { display: flex; gap: 8px; }
+
+.team-member-model-submit,
+.team-member-model-cancel {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-small);
+  cursor: pointer;
+}
+
+.team-member-model-submit { border-color: var(--accent); }
+.team-member-model-submit:disabled { cursor: default; opacity: 0.6; }
+
+.team-member-model-submit:focus-visible,
+.team-member-model-cancel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.team-model-receipts { display: flex; flex-direction: column; gap: 4px; }
+
+.team-model-receipts-title {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+}
+
+.team-model-receipt {
+  margin: 0;
+  padding: 0;
+  font-size: var(--fs-small);
+  list-style: none;
+}
+
+.team-model-receipt--applied { color: var(--success); }
+.team-model-receipt--saved { color: var(--warning); }
+.team-model-receipt--failed { color: var(--danger); }
+
+.team-lifecycle-actions { display: flex; flex-direction: column; gap: 10px; }
+.team-lifecycle-buttons { display: flex; gap: 8px; }
+
+.team-lifecycle-stop,
+.team-lifecycle-reclaim,
+.team-lifecycle-cancel,
+.team-lifecycle-confirm-danger {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-small);
+  cursor: pointer;
+}
+
+.team-lifecycle-reclaim { border-color: var(--danger); color: var(--danger); }
+.team-lifecycle-confirm-danger { border-color: var(--danger); background: var(--danger); color: var(--bg); }
+.team-lifecycle-stop:disabled,
+.team-lifecycle-reclaim:disabled,
+.team-lifecycle-cancel:disabled,
+.team-lifecycle-confirm-danger:disabled { cursor: default; opacity: 0.6; }
+
+.team-lifecycle-stop:focus-visible,
+.team-lifecycle-reclaim:focus-visible,
+.team-lifecycle-cancel:focus-visible,
+.team-lifecycle-confirm-danger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.team-lifecycle-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-md);
+  background: var(--bg-hover);
+}
+
+.team-lifecycle-confirm-text { margin: 0; color: var(--text); font-size: var(--fs-small); }
+.team-lifecycle-confirm-actions { display: flex; gap: 8px; }
+
+.team-lifecycle-error { margin: 0; color: var(--danger); font-size: var(--fs-small); }
+
+.team-lifecycle-outcome { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-small); }
+.team-lifecycle-outcome--success { color: var(--success); }
+.team-lifecycle-outcome--warning { color: var(--warning); }
+.team-lifecycle-outcome--error { color: var(--danger); }
+.team-lifecycle-outcome-message { margin: 0; }
+.team-lifecycle-outcome-failed { margin: 0; padding-left: 18px; }

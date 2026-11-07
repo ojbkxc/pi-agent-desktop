@@ -14,6 +14,8 @@ import {
 import { AppSelect } from "@/components/AppSelect";
 import { TaskBoardCanvas, countTaskStates } from "@/components/AgentTeams/TaskBoardCanvas";
 import { FormationBand } from "@/components/AgentTeams/FormationBand";
+import { TeamMemberModelPanel } from "@/components/AgentTeams/TeamMemberModelPanel";
+import { TeamLifecycleActions } from "@/components/AgentTeams/TeamLifecycleActions";
 import { formationNaturalWidth } from "@/lib/agent-teams-formation-layout";
 
 interface Props {
@@ -55,6 +57,7 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
   const [selected, setSelected] = useState<string | null>(teamName ?? null);
   const [listFailed, setListFailed] = useState(false);
   const [listLoading, setListLoading] = useState(!teamName);
+  const [modelPanel, setModelPanel] = useState<{ mode: "single" | "batch"; memberIds: string[] } | null>(null);
   const timeline = useTeamTimeline(selected);
   const rootRef = useRef<HTMLElement>(null);
 
@@ -110,6 +113,13 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
     () => (snapshot ? formationNaturalWidth(snapshot.members.length) : 0),
     [snapshot],
   );
+  // 当前团队的展示名与成员数（生命周期确认文案要用 displayName，URL 用 name）。
+  const currentTeam = useMemo(
+    () => teams.find((team) => team.name === selected) ?? null,
+    [teams, selected],
+  );
+  const currentDisplayName = currentTeam?.displayName ?? selected ?? "";
+  const currentMemberCount = currentTeam?.memberCount ?? snapshot?.members.length ?? 0;
 
   return (
     <main ref={rootRef} tabIndex={-1} className="scheduled-view agent-teams-view" aria-label={t("teams.title")}>
@@ -233,7 +243,17 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
             <p className="scheduled-hint">{t("teams.progress", { done: progress.done, total: progress.total })}</p>
 
             <section className="agent-teams-section" aria-label={t("teams.membersHeading")}>
-              <h3 className="agent-teams-section-title">{t("teams.membersHeading")}</h3>
+              <div className="agent-teams-section-head">
+                <h3 className="agent-teams-section-title">{t("teams.membersHeading")}</h3>
+                <button
+                  type="button"
+                  className="agent-teams-batch-model"
+                  disabled={!selected || snapshot.members.length === 0}
+                  onClick={() => setModelPanel({ mode: "batch", memberIds: snapshot.members.map((member) => member.id) })}
+                >
+                  {t("teams.memberModel.batchOpen")}
+                </button>
+              </div>
               <ul className="agent-teams-members">
                 {snapshot.members.map((member) => (
                   <li key={member.id} className="agent-teams-member">
@@ -248,9 +268,26 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
                       <span className="agent-teams-member-role">{roleLabel(member.role)}</span>
                       <span className="agent-teams-member-status">{t(statusLabelKey(member.status))}</span>
                     </button>
+                    <button
+                      type="button"
+                      className="agent-teams-member-model"
+                      disabled={!selected}
+                      onClick={() => setModelPanel({ mode: "single", memberIds: [member.id] })}
+                    >
+                      {t("teams.memberModel.change")}
+                    </button>
                   </li>
                 ))}
               </ul>
+              {modelPanel && selected && (
+                <TeamMemberModelPanel
+                  team={selected}
+                  members={snapshot.members.map((member) => ({ id: member.id, name: member.name }))}
+                  memberIds={modelPanel.memberIds}
+                  mode={modelPanel.mode}
+                  onClose={() => setModelPanel(null)}
+                />
+              )}
             </section>
 
             <section className="agent-teams-section" aria-label={t("teams.lanesHeading")}>
@@ -306,6 +343,18 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
                 formation={(width) => <FormationBand snapshot={snapshot} width={width} />}
               />
             </section>
+
+            {selected && (
+              <section className="agent-teams-section" aria-label={t("teams.lifecycle.heading")}>
+                <h3 className="agent-teams-section-title">{t("teams.lifecycle.heading")}</h3>
+                <p className="scheduled-hint">{t("teams.lifecycle.memberCount", { count: currentMemberCount })}</p>
+                <TeamLifecycleActions
+                  team={selected}
+                  displayName={currentDisplayName}
+                  memberCount={currentMemberCount}
+                />
+              </section>
+            )}
           </>
         )}
       </div>
