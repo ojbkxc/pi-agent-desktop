@@ -1,0 +1,241 @@
+import assert from "node:assert/strict";
+import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { createJiti } from "jiti";
+
+const jiti = createJiti(import.meta.url, {
+  alias: { "@": process.cwd() },
+  interopDefault: true,
+  moduleCache: false,
+});
+const route = await jiti.import("./route.ts");
+const { sanitizeTeamName } = await jiti.import("@/lib/agent-teams-swimlane-store.ts");
+
+/**
+ * 路由层：HTTP 契约（200/400/404/409）+ 与 pi-team 进程级生命周期 registry 的真实接线。
+ * 这里只在 globalThis.__piTeamLifecycles 里放**假实例**（不 import pi-team 的真实类），
+ * 以验证「key 用原始团队名、实例不存在必须失败、reclaim 强顺序」三条硬要求。
+ */
+
+const RAW_NAME = "前端重构队";
+const DIR_NAME = sanitizeTeamName(RAW_NAME); // "-----"
+
+function fakeLifecycle({ failFor = [], silentFailFor = [], staleFor = [] } = {}) {
+  const calls = [];
+  const entries = new Map();
+  return {
+    calls,
+    entries,
+    async get(name) {
+      return entries.get(name);
+    },
+    async release(name, options) {
+      calls.push({ name, options });
+      if (failFor.includes(name)) throw new Error(`host stop failed: ${name}`);
+      const before = entries.get(name) ?? { name, status: "idle", generation: 1 };
+      const after = silentFailFor.includes(name)
+        ? { ...before, status: "idle", generation: before.generation + 1 }
+        : staleFor.includes(name)
+          ? { ...before, status: "parked", generation: before.generation }
+          : { ...before, status: options?.tombstone ? "aborted" : "parked", generation: before.generation + 1 };
+      entries.set(name, after);
+      return after;
+    },
+    dispose() {},
+  };
+}
+
+async function setup(t, { rawName = RAW_NAME, members, lifecycleEntries = {}, instance = true } = {}) {
+  const root = await mkdtemp(join(tmpdir(), "pi-teams-lifecycle-"));
+  const previousDir = process.env.PI_TEAM_DIR;
+  const previousRegistry = globalThis.__piTeamLifecycles;
+  process.env.PI_TEAM_DIR = root;
+  t.after(async () => {
+    if (previousDir === undefined) delete process.env.PI_TEAM_DIR;
+    else process.env.PI_TEAM_DIR = previousDir;
+    if (previousRegistry === undefined) delete globalThis.__piTeamLifecycles;
+    else globalThis.__piTeamLifecycles = previousRegistry;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const dir = join(root, DIR_NAME);
+  await mkdir(join(dir, "inboxes"), { recursive: true });
+  await writeFile(join(dir, "config.json"), JSON.stringify({
+    name: rawName,
+    members: members ?? [
+      { agentId: "m-impl", name: "impl", joinedAt: 1, cwd: "" },
+      { agentId: "m-qa", name: "qa", joinedAt: 1, cwd: "" },
+    ],
+  }));
+  await writeFile(join(dir, "lifecycle.json"), JSON.stringify({
+    version: 1,
+    members: lifecycleEntries,
+  }));
+
+  const lifecycle = fakeLifecycle();
+  lifecycle.entries.set("impl", { name: "impl", status: "idle", generation: 1 });
+  lifecycle.entries.set("qa", { name: "qa", status: "running", generation: 2 });
+  globalThis.__piTeamLifecycles = new Map(instance ? [[rawName, lifecycle]] : []);
+
+  return { root, dir, lifecycle };
+}
+
+const post = (body, team = DIR_NAME) => route.POST(
+  new Request(`http://localhost/api/teams/${encodeURIComponent(team)}/lifecycle`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  }),
+  { params: Promise.resolve({ team }) },
+);
+
+// ── 基础 ───────────────────────────────────────────────────────────────────────
+
+test("stop：200、逐成员 stopped、不删目录、用原始团队名取实例", async (t) => {
+  const { dir, lifecycle } = await setup(t);
+  const res = await post({ action: "stop" });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+
+  assert.equal(body.ok, true);
+  assert.equal(body.removed, false);
+  assert.equal(body.team, DIR_NAME, "响应里的 team 是目录名（HTTP 契约的 [team]）");
+  assert.equal(body.action, "stop");
+  assert.deepEqual(body.results.map((r) => r.status), ["stopped", "stopped"]);
+
+  assert.deepEqual(lifecycle.calls.map((call) => call.name), ["impl", "qa"], "逐成员顺序停止");
+  assert.ok(lifecycle.calls.every((call) => call.options?.tombstone === false), "stop 用 release(tombstone:false)，保留可复活");
+  assert.ok((await readdir(dir)).includes("config.json"), "目录还在");
+});
+
+test("registry key 用 config.name：拿目录名当 key 不会有实例 → 409 而非假成功", async (t) => {
+  // 只有原始名注册了实例；目录名（-----）没注册。
+  const { dir } = await setup(t);
+  assert.ok((await readdir(dir)).length > 0);
+
+  const res = await post({ action: "stop" }, DIR_NAME);
+  assert.equal(res.status, 200, "正常路径：路由按原始名找到了实例");
+
+  // 反向验证：把实例注册到目录名下（错误做法）→ 按原始名查不到，必须失败。
+  const wrong = fakeLifecycle();
+  globalThis.__piTeamLifecycles = new Map([[DIR_NAME, wrong]]);
+  const bad = await post({ action: "stop" });
+  assert.equal(bad.status, 409, "实例不存在时不得返回成功");
+  const body = await bad.json();
+  assert.equal(body.ok, false);
+  assert.match(body.error, /生命周期实例不存在/);
+  assert.equal(wrong.calls.length, 0, "不会去动错 key 下的实例");
+});
+
+test("生命周期实例完全不存在：409、全员 failed、目录保留", async (t) => {
+  const { dir } = await setup(t, { instance: false });
+  const res = await post({ action: "reclaim" });
+  assert.equal(res.status, 409);
+  const body = await res.json();
+  assert.equal(body.ok, false);
+  assert.equal(body.removed, false);
+  assert.deepEqual(body.results.map((r) => r.status), ["failed", "failed"]);
+  assert.ok((await readdir(dir)).includes("config.json"), "目录必须保留");
+});
+
+test("团队不存在：404", async (t) => {
+  await setup(t);
+  const res = await post({ action: "stop" }, "ghost-team");
+  assert.equal(res.status, 404);
+  assert.equal((await res.json()).error, "团队不存在");
+});
+
+test("body 非法：400（缺 action / 未知 action / 非 JSON）", async (t) => {
+  await setup(t);
+  assert.equal((await post({})).status, 400);
+  assert.equal((await post({ action: "nuke" })).status, 400);
+  assert.equal((await post("not json")).status, 400);
+});
+
+// ── 回执校验 ───────────────────────────────────────────────────────────────────
+
+test("成员停止抛错：409，该成员 failed 且原因原样透传", async (t) => {
+  const { lifecycle } = await setup(t);
+  lifecycle.release = async (name, options) => {
+    lifecycle.calls.push({ name, options });
+    if (name === "impl") throw new Error("host stop failed: impl");
+    return { name, status: "parked", generation: 99 };
+  };
+
+  const res = await post({ action: "stop" });
+  assert.equal(res.status, 409);
+  const body = await res.json();
+  assert.equal(body.ok, false);
+  const byName = Object.fromEntries(body.results.map((r) => [r.name, r]));
+  assert.equal(byName.impl.status, "failed");
+  assert.equal(byName.impl.reason, "host stop failed: impl");
+  assert.equal(byName.qa.status, "stopped");
+});
+
+test("release 静默失败（status 未落到 parked）：409，不认成功", async (t) => {
+  const { lifecycle } = await setup(t);
+  const base = lifecycle.entries.get("impl");
+  lifecycle.release = async (name, options) => {
+    lifecycle.calls.push({ name, options });
+    if (name === "impl") return { ...base, status: "idle", generation: base.generation + 1 };
+    return { name, status: "parked", generation: 50 };
+  };
+
+  const res = await post({ action: "stop" });
+  assert.equal(res.status, 409);
+  const body = await res.json();
+  const impl = body.results.find((r) => r.name === "impl");
+  assert.equal(impl.status, "failed");
+  assert.match(impl.reason, /回执异常/);
+});
+
+test("已 parked 成员：already-stopped，不调用 release", async (t) => {
+  const { lifecycle } = await setup(t, {
+    lifecycleEntries: { qa: { name: "qa", status: "parked", generation: 5 } },
+  });
+  const res = await post({ action: "stop" });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  const byName = Object.fromEntries(body.results.map((r) => [r.name, r]));
+  assert.equal(byName.qa.status, "already-stopped");
+  assert.deepEqual(lifecycle.calls.map((call) => call.name), ["impl"], "已停成员不重复 release");
+});
+
+// ── reclaim ────────────────────────────────────────────────────────────────────
+
+test("reclaim 全部成功：200、removed=true、目录被删", async (t) => {
+  const { root } = await setup(t);
+  const res = await post({ action: "reclaim" });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.removed, true);
+  assert.deepEqual(await readdir(root), [], "团队目录已删除");
+});
+
+test("reclaim 中途失败：409、removed=false、目录完整保留", async (t) => {
+  const { root, dir, lifecycle } = await setup(t);
+  lifecycle.release = async (name, options) => {
+    lifecycle.calls.push({ name, options });
+    if (name === "qa") throw new Error("boom");
+    return { name, status: "parked", generation: 10 };
+  };
+
+  const res = await post({ action: "reclaim" });
+  assert.equal(res.status, 409);
+  const body = await res.json();
+  assert.equal(body.ok, false);
+  assert.equal(body.removed, false);
+  assert.deepEqual(body.results.map((r) => r.status), ["stopped", "failed"]);
+  assert.deepEqual(await readdir(root), [DIR_NAME], "根目录仍只有该团队");
+  assert.ok((await readdir(dir)).includes("config.json"), "团队文件未被删除");
+});
+
+test("stop 即使全部成功也不删目录", async (t) => {
+  const { dir } = await setup(t);
+  const res = await post({ action: "stop" });
+  assert.equal((await res.json()).removed, false);
+  assert.ok((await readdir(dir)).includes("config.json"));
+});
