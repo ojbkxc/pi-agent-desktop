@@ -1,6 +1,7 @@
 import { configureHttpDispatcher } from "@/lib/http-dispatcher";
 import { closeAllAgentEventStreams } from "@/lib/agent-event-stream";
 import { startScheduler } from "@/lib/scheduled-tasks";
+import { startUnattendedSweepLoop } from "@/lib/agent-teams-unattended-runtime";
 import { restartRelayFromConfig } from "@/lib/relay/runtime";
 import { restartPublicAccessFromConfig } from "@/lib/public-access/runtime";
 
@@ -10,6 +11,12 @@ export function registerNodeInstrumentation(): void {
   // Scheduled tasks must fire without anyone having opened a page, and the
   // packaged app keeps this server alive while its window is hidden in the tray.
   if (process.env.PI_WEB_DISABLE_SCHEDULER !== "1") startScheduler();
+
+  // 无人值守兜底：团队计划久等不批、成员执行失败时，提醒 lead 自己降级/重派/接管
+  // （桌面不替 AI 做决定）。默认开，与调度同一开关族；小循环独立于用户的 Scheduled 列表。
+  if (process.env.PI_WEB_DISABLE_SCHEDULER !== "1" && process.env.PI_WEB_DISABLE_TEAMS_FALLBACK !== "1") {
+    startUnattendedSweepLoop();
+  }
 
   // The relay connection (Settings › Remote relay) must also come up without a page:
   // a phone reaches this computer through it.
