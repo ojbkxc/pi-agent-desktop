@@ -8,7 +8,7 @@ const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { HtmlPreviewErrorBar, formatPreviewErrors } = await jiti.import("./HtmlPreviewErrorBar.tsx");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 
-const render = (props) => renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HtmlPreviewErrorBar, props)));
+const render = (props) => renderToStaticMarkup(React.createElement(I18nProvider, { initialLocale: "en" }, React.createElement(HtmlPreviewErrorBar, props)));
 
 test("fences errors so backticks inside cannot close the block", () => {
   assert.equal(formatPreviewErrors(["a", "b"]), "```\na\nb\n```");

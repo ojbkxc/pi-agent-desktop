@@ -20,7 +20,7 @@ function renderMermaid(props) {
   return renderToStaticMarkup(
     React.createElement(
       I18nProvider,
-      null,
+      { initialLocale: "en" },
       React.createElement(MermaidBlock, props),
     ),
   );
@@ -62,7 +62,7 @@ function renderCode(props) {
   return renderToStaticMarkup(
     React.createElement(
       I18nProvider,
-      null,
+      { initialLocale: "en" },
       React.createElement(CodeBlock, props),
     ),
   );

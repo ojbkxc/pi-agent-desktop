@@ -22,7 +22,7 @@ function renderWidgets(props) {
   return renderToStaticMarkup(
     React.createElement(
       I18nProvider,
-      null,
+      { initialLocale: "en" },
       React.createElement(ExtensionWidgets, props),
     ),
   );

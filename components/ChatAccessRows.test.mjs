@@ -13,7 +13,7 @@ const { ChatAccessRows } = await jiti.import("./ChatAccessRows.tsx");
 const { ChatConfirmDialog } = await jiti.import("./ChatConfirmDialog.tsx");
 const { ChatShellPrompt } = await jiti.import("./ChatShellPrompt.tsx");
 
-const render = (element) => renderToStaticMarkup(React.createElement(I18nProvider, null, element));
+const render = (element) => renderToStaticMarkup(React.createElement(I18nProvider, { initialLocale: "en" }, element));
 const access = (state, extra = {}) => ({
   state: { chat: true, folder: "/home/me/.pi/agent/chats/20261022-101500-ab12cd34", unlocked: false, available: true, ...state },
   busy: false,

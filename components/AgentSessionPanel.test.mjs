@@ -46,7 +46,7 @@ test("running sub-agents expose steer and stop controls wired to the runtime rou
   const runningSub = { id: "sub1", name: null, firstMessage: "task", modified: "2026-01-01T00:00:00Z", relation: { kind: "subagent", status: "running", profile: "researcher", description: "research" } };
   const doneSub = { id: "sub2", name: null, firstMessage: "done task", modified: "2026-01-01T00:00:00Z", relation: { kind: "subagent", status: "completed", profile: "researcher", description: "done" } };
 
-  const html = renderToStaticMarkup(React.createElement(I18nProvider, null,
+  const html = renderToStaticMarkup(React.createElement(I18nProvider, { initialLocale: "en" },
     React.createElement(AgentSessionPanel, {
       rootSession: root,
       subagents: [runningSub, doneSub],

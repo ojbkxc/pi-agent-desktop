@@ -13,7 +13,7 @@ const { SavedFileCard, isSavedFileInfo } = await jiti.import("./SavedFileCard.ts
 
 test("a saved file shows its name, size and a way to reveal it", () => {
   const html = renderToStaticMarkup(
-    React.createElement(I18nProvider, null,
+    React.createElement(I18nProvider, { initialLocale: "en" },
       React.createElement(SavedFileCard, { file: { path: "/Users/me/Downloads/a.md", name: "a.md", size: 2048 } })),
   );
   assert.match(html, /a\.md/);

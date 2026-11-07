@@ -13,7 +13,7 @@ const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 
 function render(props) {
   return renderToStaticMarkup(
-    React.createElement(I18nProvider, null, React.createElement(TurnWrittenFiles, props)),
+    React.createElement(I18nProvider, { initialLocale: "en" }, React.createElement(TurnWrittenFiles, props)),
   );
 }
 

@@ -23,7 +23,7 @@ const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 
 const render = (snapshot) => renderToStaticMarkup(React.createElement(
   I18nProvider,
-  null,
+  { initialLocale: "en" },
   React.createElement(TaskBoardCanvas, { snapshot }),
 ));
 

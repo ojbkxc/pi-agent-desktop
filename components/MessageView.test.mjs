@@ -24,7 +24,7 @@ function renderMessage(message, props = {}) {
   return renderToStaticMarkup(
     React.createElement(
       I18nProvider,
-      null,
+      { initialLocale: "en" },
       React.createElement(MessageView, { message, ...props }),
     ),
   );
@@ -69,7 +69,7 @@ test("previews the first thinking line and reveals the full text with the saved 
       globalThis.window = { localStorage: { getItem: () => String(expanded) } };
       const html = renderToStaticMarkup(React.createElement(
         I18nProvider,
-        null,
+        { initialLocale: "en" },
         React.createElement(ThinkingBlock, {
           block: { type: "thinking", thinking: "**Independent reasoning**\n\nDetailed second line." },
           blockIndex: 2,

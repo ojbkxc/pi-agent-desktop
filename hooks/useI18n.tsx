@@ -6,7 +6,7 @@ import { getLocalePlugin, getSupportedLocales } from "@/lib/i18n/registry";
 import { translateMessage } from "@/lib/i18n/format";
 import type { Locale, LocalePlugin, TranslationParams } from "@/lib/i18n/types";
 
-const defaultLocale: Locale = "en";
+const defaultLocale: Locale = "zh-CN";
 
 interface I18nContextValue {
   locale: Locale;
@@ -27,18 +27,19 @@ function getMessages(): Record<string, Record<string, string>> {
 function readInitialLocale(): Locale {
   const stored = getPref(APP_PREF_KEYS.locale);
   if (stored === "en" || stored === "zh-CN" || stored === "zh-TW") return stored;
-  // UI defaults to English; browser language is intentionally not consulted
-  // (the topbar language switcher was removed).
+  // UI 默认简体中文；浏览器语言仍不读取（顶栏语言切换器已移除），
+  // 用户显式选择过的语言（localStorage）优先。
   return defaultLocale;
 }
 
 /**
  * 提供 Pi Web 的界面语言状态和翻译能力。
- * @param props React 子节点
+ * @param props React 子节点；`initialLocale` 仅供测试把语言钉在某个包上
+ *   （行为断言与语言策略解耦），产品代码不传、走默认语言。
  * @returns 包含语言上下文的 React 节点
  */
-export function I18nProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(defaultLocale);
+export function I18nProvider({ children, initialLocale }: { children: React.ReactNode; initialLocale?: Locale }) {
+  const [locale, setLocaleState] = useState<Locale>(initialLocale ?? defaultLocale);
   const [hydrated, setHydrated] = useState(false);
   const supportedLocales = useMemo(
     () => getSupportedLocales().map((id) => getLocalePlugin(id)).filter((plugin): plugin is LocalePlugin => Boolean(plugin)),
@@ -61,7 +62,8 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const t = useCallback((key: string, params?: TranslationParams) => translateMessage(locale, key, messages, params), [locale, messages]);
-  const value = useMemo(() => ({ locale: hydrated ? locale : defaultLocale, setLocale, t, supportedLocales }), [hydrated, locale, setLocale, t, supportedLocales]);
+  const effective = hydrated ? locale : initialLocale ?? defaultLocale;
+  const value = useMemo(() => ({ locale: effective, setLocale, t, supportedLocales }), [effective, setLocale, t, supportedLocales]);
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }

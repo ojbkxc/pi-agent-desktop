@@ -22,7 +22,7 @@ const { clearDraft, getDraft, mergeRestoredSubmissionDraft, mergeRestoredSubmiss
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 
 function renderWithI18n(element) {
-  return renderToStaticMarkup(React.createElement(I18nProvider, null, element));
+  return renderToStaticMarkup(React.createElement(I18nProvider, { initialLocale: "en" }, element));
 }
 
 test("renders the upstream model error", () => {
@@ -256,7 +256,7 @@ test("renders the upstream model error", () => {
   const html = renderToStaticMarkup(
     React.createElement(
       I18nProvider,
-      null,
+      { initialLocale: "en" },
       React.createElement(ModelErrorBanner, {
         error: "Invalid models.json schema:\nproviders.custom.models.0.id must not be empty",
       }),
@@ -271,7 +271,7 @@ test("renders the upstream model error", () => {
 test("does not render an empty model error", () => {
   assert.equal(
     renderToStaticMarkup(
-      React.createElement(I18nProvider, null, React.createElement(ModelErrorBanner, { error: null })),
+      React.createElement(I18nProvider, { initialLocale: "en" }, React.createElement(ModelErrorBanner, { error: null })),
     ),
     "",
   );
@@ -281,7 +281,7 @@ test("renders enabledModels scope warnings", () => {
   const html = renderToStaticMarkup(
     React.createElement(
       I18nProvider,
-      null,
+      { initialLocale: "en" },
       React.createElement(ModelScopeWarningBanner, {
         warnings: [
           { code: "no-match", pattern: "ghost-gateway/*", message: 'No models match pattern "ghost-gateway/*"' },
@@ -297,7 +297,7 @@ test("keeps the model selector visible when a model error leaves no options", ()
   const html = renderToStaticMarkup(
     React.createElement(
       I18nProvider,
-      null,
+      { initialLocale: "en" },
       React.createElement(ChatInput, {
         onSend() {},
         onAbort() {},
@@ -318,7 +318,7 @@ test("renders the read-only tool preset as the active selection", () => {
   const html = renderToStaticMarkup(
     React.createElement(
       I18nProvider,
-      null,
+      { initialLocale: "en" },
       React.createElement(ChatInput, {
         onSend() {},
         onAbort() {},
@@ -338,7 +338,7 @@ test("renders the empty tool preset as Chat only", () => {
   const html = renderToStaticMarkup(
     React.createElement(
       I18nProvider,
-      null,
+      { initialLocale: "en" },
       React.createElement(ChatInput, {
         onSend() {},
         onAbort() {},
@@ -357,7 +357,7 @@ test("renders the compact composer with the standard Send button and no session 
   const html = renderToStaticMarkup(
     React.createElement(
       I18nProvider,
-      null,
+      { initialLocale: "en" },
       React.createElement(ChatInput, {
         onSend() {},
         onAbort() {},
@@ -378,7 +378,7 @@ test("shows and locks the optimistic model while a switch is pending", () => {
   const html = renderToStaticMarkup(
     React.createElement(
       I18nProvider,
-      null,
+      { initialLocale: "en" },
       React.createElement(ChatInput, {
         onSend() {},
         onAbort() {},
@@ -417,7 +417,7 @@ test("renders the shared field model selector as a disabled gray control", () =>
   const html = renderToStaticMarkup(
     React.createElement(
       I18nProvider,
-      null,
+      { initialLocale: "en" },
       React.createElement(ModelSelector, {
         options: [{ provider: "openai", modelId: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
         value: null,
@@ -852,7 +852,7 @@ test("renders compact errors above the input as a wrapping alert", () => {
   const html = renderToStaticMarkup(
     React.createElement(
       I18nProvider,
-      null,
+      { initialLocale: "en" },
       React.createElement(ChatInput, {
         onSend() {},
         onAbort() {},
@@ -904,7 +904,7 @@ test("renders image warnings for known text-only defaults without an explicit mo
       const html = renderToStaticMarkup(
         React.createElement(
           I18nProvider,
-          null,
+          { initialLocale: "en" },
           React.createElement(ChatInput, {
             onSend() {},
             onAbort() {},

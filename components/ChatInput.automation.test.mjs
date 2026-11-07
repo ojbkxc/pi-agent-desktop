@@ -20,7 +20,7 @@ function render(props) {
   return renderToStaticMarkup(
     React.createElement(
       I18nProvider,
-      null,
+      { initialLocale: "en" },
       React.createElement(ChatInput, {
         onSend() {},
         onAbort() {},

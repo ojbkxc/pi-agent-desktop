@@ -185,7 +185,7 @@ test("a locked navigator keeps the tree readable but offers no branch to switch 
   ])];
   const render = (locked) => renderToStaticMarkup(React.createElement(
     I18nProvider,
-    null,
+    { initialLocale: "en" },
     React.createElement(BranchNavigator, {
       tree,
       activeLeafId: "a1",
