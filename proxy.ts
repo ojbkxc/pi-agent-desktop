@@ -117,6 +117,11 @@ export function proxy(request: NextRequest) {
       : NextResponse.next();
   }
   if (request.nextUrl.pathname === "/api/web-auth") return NextResponse.next();
+  // The Tauri shell's startup probe is a bare GET with no cookie or Basic
+  // header; with a web password set it would otherwise 401 for the whole
+  // startup window and the shell would quit. The endpoint only echoes this
+  // process's random instance id, so exempting it widens nothing.
+  if (request.nextUrl.pathname === "/api/desktop/identity") return NextResponse.next();
 
   if (!authenticated) {
     if (!isApiRequest) {

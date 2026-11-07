@@ -5,6 +5,7 @@ use tauri::{
     WebviewWindowBuilder,
 };
 
+use super::webview_recovery;
 #[cfg(target_os = "macos")]
 use super::window_appkit::{self, set_title_keeping_traffic_lights};
 use crate::logging::{desktop_log, since_process_start_ms};
@@ -14,7 +15,6 @@ use crate::native_prefs::{
 #[cfg(not(target_os = "macos"))]
 use crate::native_prefs::{is_wayland, theme_background_color};
 use crate::shell::{open_external, schedule_reveal_after_page_load, WINDOW_LABEL};
-use super::webview_recovery;
 
 /// Where the macOS traffic lights go, in logical points from the window's
 /// top-left corner: X is the close button's left edge, CENTRE_Y the buttons'

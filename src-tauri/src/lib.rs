@@ -24,6 +24,7 @@ mod shell;
 use logging::{desktop_log, install_panic_hook, mark_process_start, since_process_start_ms};
 use native_prefs::{
     clear_app_cache, reconcile_webview_cache_for_version, set_ui_theme, write_last_version,
+    NODE_COMPILE_CACHE_DIR,
 };
 #[cfg(feature = "custom-protocol")]
 use native_prefs::{read_configured_server_port, read_last_server_port, write_last_server_port};
@@ -398,18 +399,59 @@ async fn open_path_with(path: String, app: String) -> Result<(), String> {
     }
 }
 
+/// How long the login shell may take to print its environment before startup
+/// gives up on it and falls back to the inherited PATH. A profile that blocks
+/// here (a keychain unlock prompt, a slow network mount, a hanging init) must
+/// not stall the launch: this runs before the server is spawned, so the
+/// server-start timeout below never gets a chance to fire.
+#[cfg(all(feature = "custom-protocol", unix))]
+const LOGIN_SHELL_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[cfg(all(feature = "custom-protocol", unix))]
 fn login_shell_path() -> Option<String> {
     let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let output = Command::new(shell)
+    let mut child = Command::new(shell)
         .args(["-l", "-c", "/usr/bin/env"])
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .ok()?;
-    if !output.status.success() {
+    // Drain the pipe on a thread, so a chatty profile cannot block the child
+    // on a full pipe while this thread only waits for it to exit.
+    let mut stdout_pipe = child.stdout.take()?;
+    let reader = thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let _ = stdout_pipe.read_to_end(&mut buffer);
+        buffer
+    });
+
+    let started = Instant::now();
+    let exited = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if started.elapsed() < LOGIN_SHELL_TIMEOUT => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            _ => break None,
+        }
+    };
+    let status = match exited {
+        Some(status) => status,
+        // Still running past the deadline, or a wait error: stop it and fall
+        // back to the inherited PATH, as the Windows branch always does.
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+    };
+    if !status.success() {
         return None;
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout_bytes = reader.join().ok()?;
+    let stdout = String::from_utf8_lossy(&stdout_bytes);
     stdout
         .lines()
         .rev()
@@ -533,8 +575,16 @@ fn response_has_instance_id(response: &[u8], expected_instance_id: &str) -> bool
 #[cfg(feature = "custom-protocol")]
 fn response_mismatch_reason(response: &[u8]) -> String {
     let text = String::from_utf8_lossy(response);
-    match text.lines().next().map(str::trim).filter(|line| !line.is_empty()) {
-        Some(status) => format!("unexpected response: {}", status.chars().take(80).collect::<String>()),
+    match text
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        Some(status) => format!(
+            "unexpected response: {}",
+            status.chars().take(80).collect::<String>()
+        ),
         None => "empty response".to_string(),
     }
 }
@@ -726,7 +776,12 @@ fn server_log_tail(log_path: &Path) -> String {
         return String::new();
     };
     let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
-    if io::Seek::seek(&mut file, io::SeekFrom::Start(len.saturating_sub(TAIL_BYTES))).is_err() {
+    if io::Seek::seek(
+        &mut file,
+        io::SeekFrom::Start(len.saturating_sub(TAIL_BYTES)),
+    )
+    .is_err()
+    {
         return String::new();
     }
     let mut bytes = Vec::new();
@@ -778,7 +833,10 @@ fn start_packaged_server(
     let port = choose_port(app)?;
     let mut command = Command::new(&node_path);
     if let Ok(cache_dir) = app.path().app_cache_dir() {
-        command.env(COMPILE_CACHE_DIR_ENV, cache_dir.join("node-compile-cache"));
+        command.env(
+            COMPILE_CACHE_DIR_ENV,
+            cache_dir.join(NODE_COMPILE_CACHE_DIR),
+        );
     }
     command
         .arg(&server_script)
@@ -811,11 +869,15 @@ fn start_packaged_server(
     } else {
         SERVER_START_TIMEOUT
     };
-    if let Err(error) = wait_for_server(&mut child, address, desktop_instance_id, &log_path, timeout)
+    if let Err(error) =
+        wait_for_server(&mut child, address, desktop_instance_id, &log_path, timeout)
     {
         desktop_log(
             app,
-            &format!("server start failed: {error}\nserver.log tail:\n{}", server_log_tail(&log_path)),
+            &format!(
+                "server start failed: {error}\nserver.log tail:\n{}",
+                server_log_tail(&log_path)
+            ),
         );
         let server = DesktopServer::running(child);
         server.stop();
@@ -829,7 +891,10 @@ fn start_packaged_server(
 #[cfg(all(test, feature = "custom-protocol"))]
 mod tests {
     use super::shell::popup::PopupMenuEntry;
-    use super::{child_process_compatible_path, probe_server, response_has_instance_id, response_mismatch_reason};
+    use super::{
+        child_process_compatible_path, probe_server, response_has_instance_id,
+        response_mismatch_reason,
+    };
     use super::{logging::format_utc_millis, native_prefs::is_inline_frame_document};
 
     use std::path::{Path, PathBuf};
@@ -853,7 +918,10 @@ mod tests {
             response_mismatch_reason(b"HTTP/1.1 503 Service Unavailable\r\nx: y\r\n\r\n"),
             "unexpected response: HTTP/1.1 503 Service Unavailable"
         );
-        assert!(!response_has_instance_id(b"HTTP/1.1 503 Service Unavailable\r\n\r\n", "id"));
+        assert!(!response_has_instance_id(
+            b"HTTP/1.1 503 Service Unavailable\r\n\r\n",
+            "id"
+        ));
     }
 
     #[test]
@@ -867,7 +935,10 @@ mod tests {
         assert!(reason.starts_with("no response within"), "{reason}");
 
         // Nothing listening: the port is closed again by the time we probe.
-        let closed = TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap();
+        let closed = TcpListener::bind(("127.0.0.1", 0))
+            .unwrap()
+            .local_addr()
+            .unwrap();
         let reason = probe_server(closed, "id", wait, wait).unwrap_err();
         assert!(reason.starts_with("connect failed"), "{reason}");
     }
@@ -952,7 +1023,12 @@ mod tests {
         let apps = apps.unwrap();
         for app in apps.as_array().expect("an array of apps") {
             let path = app["path"].as_str().expect("path");
-            for office in ["Microsoft Word.app", "Microsoft Excel.app", "Numbers.app", "Notes.app"] {
+            for office in [
+                "Microsoft Word.app",
+                "Microsoft Excel.app",
+                "Numbers.app",
+                "Notes.app",
+            ] {
                 assert!(!path.ends_with(office), "{path} only claims generic text");
             }
         }

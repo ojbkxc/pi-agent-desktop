@@ -94,17 +94,23 @@ fn clear_runtime_caches(app: &AppHandle) -> u64 {
     freed
 }
 
+/// Directory name under `app_cache_dir` where the packaged server keeps its
+/// Node compile cache (`PI_DESKTOP_COMPILE_CACHE_DIR`, set in lib.rs). It is
+/// the server's cache, not a webview cache, so no cache clear may remove it.
+pub const NODE_COMPILE_CACHE_DIR: &str = "node-compile-cache";
+
 /// On Windows app_cache_dir and app_local_data_dir are the same folder,
-/// %LOCALAPPDATA%\<id>, which also holds the WebView2 profile (localStorage)
-/// and app_log_dir. Only the caches in it may go.
+/// %LOCALAPPDATA%\<id>, which also holds the WebView2 profile (localStorage),
+/// app_log_dir and the server's Node compile cache. Only the caches in it may
+/// go.
 #[cfg(target_os = "windows")]
 fn keeps_in_cache_dir(name: &std::ffi::OsStr) -> bool {
-    name == "EBWebView" || name == "logs"
+    name == "EBWebView" || name == "logs" || name == NODE_COMPILE_CACHE_DIR
 }
 
 #[cfg(not(target_os = "windows"))]
-fn keeps_in_cache_dir(_name: &std::ffi::OsStr) -> bool {
-    false
+fn keeps_in_cache_dir(name: &std::ffi::OsStr) -> bool {
+    name == NODE_COMPILE_CACHE_DIR
 }
 
 /// Clear the webview's disk caches on demand (Settings › General).
@@ -217,10 +223,14 @@ fn clear_webview_caches(app: &AppHandle) {
     // macOS WKWebView: the HTTP cache lives in ~/Library/Caches/<identifier>.
     // Never touch ~/Library/WebKit/<identifier>: its WebsiteData holds the
     // origin's localStorage (every Settings switch, sidebar state, drafts), so
-    // removing it wiped the user's preferences on every upgrade.
+    // removing it wiped the user's preferences on every upgrade. The server's
+    // Node compile cache shares this directory and stays.
     #[cfg(target_os = "macos")]
     if let Ok(cache_dir) = app.path().app_cache_dir() {
         for entry in fs::read_dir(&cache_dir).into_iter().flatten().flatten() {
+            if entry.file_name() == NODE_COMPILE_CACHE_DIR {
+                continue;
+            }
             remove_counting(&entry.path());
         }
     }

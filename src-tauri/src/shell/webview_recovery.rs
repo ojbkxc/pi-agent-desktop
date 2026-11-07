@@ -183,7 +183,10 @@ pub(crate) fn handle_process_failure(app: &AppHandle, kind: i32, details: Option
         match recovery {
             Recovery::Reload => {
                 if let Err(error) = window.reload() {
-                    desktop_log(&on_main, &format!("webview recovery: reload failed: {error}"));
+                    desktop_log(
+                        &on_main,
+                        &format!("webview recovery: reload failed: {error}"),
+                    );
                 }
             }
             Recovery::Rebuild => {
@@ -191,7 +194,10 @@ pub(crate) fn handle_process_failure(app: &AppHandle, kind: i32, details: Option
                 REBUILDING.store(true, Ordering::SeqCst);
                 if let Err(error) = window.destroy() {
                     REBUILDING.store(false, Ordering::SeqCst);
-                    desktop_log(&on_main, &format!("webview recovery: destroy failed: {error}"));
+                    desktop_log(
+                        &on_main,
+                        &format!("webview recovery: destroy failed: {error}"),
+                    );
                 }
             }
             Recovery::LogOnly => {}
