@@ -238,7 +238,7 @@ export async function PATCH(
  */
 async function reattachSessionFile(
   childPath: string,
-  rewrite: { header: { parentSession?: string }; parentSessionPath: string; parentSessionId?: string },
+  rewrite: { header: { parentSession?: string }; parentSessionPath: string | undefined; parentSessionId?: string },
 ): Promise<void> {
   await replaceFileAtomicStream(childPath, async (tempPath) => {
     // The temp file already exists ("wx"/0600, created by the helper), so the
@@ -251,7 +251,13 @@ async function reattachSessionFile(
     try {
       for await (const line of lines) {
         if (lineIndex === 0) {
-          output.write(`${JSON.stringify({ ...rewrite.header, parentSession: rewrite.parentSessionPath })}\n`);
+          // Re-parent (or un-parent) the header. Without a new parent the key
+          // is omitted entirely: the baseline never wrote `parentSession: ""`,
+          // and the old value points at the file being deleted anyway.
+          const nextHeader: Record<string, unknown> = { ...rewrite.header };
+          if (rewrite.parentSessionPath) nextHeader.parentSession = rewrite.parentSessionPath;
+          else delete nextHeader.parentSession;
+          output.write(`${JSON.stringify(nextHeader)}\n`);
         } else if (
           rewrite.parentSessionId
           && !metaReplaced
@@ -406,7 +412,7 @@ export async function DELETE(
           ) continue;
           await reattachSessionFile(childPath, {
             header,
-            parentSessionPath: parentSessionPath ?? "",
+            parentSessionPath,
             ...(parentSessionPath && parentSessionId ? { parentSessionId } : {}),
           });
         } catch { /* skip malformed */ }

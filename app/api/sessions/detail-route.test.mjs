@@ -52,3 +52,12 @@ test("detail route with an out-of-range tail still caps at 1000", () => {
   const ctx = buildSessionContext(entries, "e4999", { tail: 5000 });
   assert.equal(ctx.messages.length, 5000);
 });
+
+test("re-parenting omits the parentSession key when there is no grandparent", () => {
+  // Byte form: the baseline never wrote `parentSession: ""`. The header write
+  // must be conditional on an actual new parent — which also drops the stale
+  // path to the file being deleted — and the call site must not fall back to "".
+  assert.match(routeSrc, /const nextHeader: Record<string, unknown> = \{ \.\.\.rewrite\.header \};/);
+  assert.match(routeSrc, /else delete nextHeader\.parentSession;/);
+  assert.doesNotMatch(routeSrc, /parentSessionPath: parentSessionPath \?\? ""/);
+});

@@ -29,3 +29,14 @@ test("connected is emitted only after the watcher exists", () => {
   assert.ok(watcher >= 0, "watcher creation missing");
   assert.ok(connected > watcher, "connected emitted before watcher creation");
 });
+
+test("every server-side close path stops the heartbeat and the watcher", () => {
+  // A heartbeat left running after the server itself closes the stream
+  // (watcher error, fs.watch failure) would tick forever; unref only keeps it
+  // from blocking process exit. Both handlers end every path via cleanup(),
+  // which only stops timers and closes the watcher — never enqueues.
+  assert.equal((watchBlock.match(/cleanup\(\);\s*try \{ controller\.close\(\);/g) ?? []).length, 4);
+  assert.equal((watchBlock.match(/cancel\(\) \{\s*cleanup\(\);/g) ?? []).length, 2);
+  assert.doesNotMatch(watchBlock, /controller\.close\(\);\s*\n\s*cleanup\(\);/);
+  assert.match(watchBlock, /const cleanup = \(\) => \{\s*if \(heartbeat\) clearInterval\(heartbeat\);/);
+});

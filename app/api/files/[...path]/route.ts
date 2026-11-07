@@ -787,6 +787,15 @@ export async function GET(
       let lastIno = stat?.ino ?? 0;
       let lastSize = stat?.size ?? 0;
       let lastExists = stat !== undefined;
+      // Every path that ends this stream must also stop its timer and watcher
+      // — an interval left behind would tick forever (the unref only keeps it
+      // from blocking process exit).
+      const cleanup = () => {
+        if (heartbeat) clearInterval(heartbeat);
+        heartbeat = null;
+        try { watcher?.close(); } catch { /* ignore */ }
+        watcher = null;
+      };
       const stream = new ReadableStream({
         start(controller) {
           const send = (eventName: string, data: Record<string, unknown>) => {
@@ -835,8 +844,7 @@ export async function GET(
               }
             });
             watcher.on("error", () => {
-              try { watcher?.close(); } catch { /* ignore */ }
-              watcher = null;
+              cleanup();
               try { controller.close(); } catch { /* ignore */ }
             });
             // The client snapshots only after this event, so emit it after the
@@ -844,12 +852,12 @@ export async function GET(
             send("connected", { filePath });
           } catch {
             send("error", { message: "Failed to watch file" });
-            controller.close();
+            cleanup();
+            try { controller.close(); } catch { /* ignore */ }
           }
         },
         cancel() {
-          if (heartbeat) clearInterval(heartbeat);
-          try { watcher?.close(); } catch { /* ignore */ }
+          cleanup();
         },
       });
       return new Response(stream, {
@@ -869,6 +877,16 @@ export async function GET(
       let watcher: fs.FSWatcher | null = null;
       let debounceTimer: ReturnType<typeof setTimeout> | null = null;
       let heartbeat: ReturnType<typeof setInterval> | null = null;
+      // Same rule as the per-file watch below: every ending path stops the
+      // timers and the watcher, none of them may outlive the stream.
+      const cleanup = () => {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = null;
+        if (heartbeat) clearInterval(heartbeat);
+        heartbeat = null;
+        try { watcher?.close(); } catch { /* ignore */ }
+        watcher = null;
+      };
       const isIgnoredEventPath = (eventPath: string | Buffer | null | undefined): boolean => {
         if (typeof eventPath !== "string" || eventPath.length === 0) return false;
         return eventPath
@@ -914,17 +932,17 @@ export async function GET(
             watcher = fs.watch(filePath, handleEvent);
           } catch {
             send("error", { message: "Failed to watch directory" });
-            controller.close();
+            cleanup();
+            try { controller.close(); } catch { /* ignore */ }
             return;
           }
           watcher.on("error", () => {
+            cleanup();
             try { controller.close(); } catch { /* ignore */ }
           });
         },
         cancel() {
-          if (debounceTimer) clearTimeout(debounceTimer);
-          if (heartbeat) clearInterval(heartbeat);
-          try { watcher?.close(); } catch { /* ignore */ }
+          cleanup();
         },
       });
       return new Response(stream, {
