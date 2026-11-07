@@ -12,6 +12,7 @@ import {
   type SwimlaneEventType,
 } from "@/lib/agent-teams-swimlane";
 import { AppSelect } from "@/components/AppSelect";
+import { TaskBoardCanvas, countTaskStates } from "@/components/AgentTeams/TaskBoardCanvas";
 
 interface Props {
   /** 指定团队名；缺省时自动挑选本机最新创建的团队。 */
@@ -86,10 +87,8 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
     return { done, total, percent: total > 0 ? Math.round((done / total) * 100) : 0 };
   }, [snapshot]);
 
-  const ownerName = useMemo(() => {
-    const map = new Map((snapshot?.members ?? []).map((member) => [member.id, member.name]));
-    return (id: string | null) => (id ? map.get(id) ?? id : t("teams.unassigned"));
-  }, [snapshot, t]);
+  // 四态计数：口径与任务画布完全一致（lib/agent-teams-task-layout.ts）。
+  const counts = useMemo(() => countTaskStates(snapshot?.tickets ?? []), [snapshot]);
 
   return (
     <main ref={rootRef} tabIndex={-1} className="scheduled-view agent-teams-view" aria-label={t("teams.title")}>
@@ -100,9 +99,29 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
             <p className="scheduled-subtitle">{t("teams.subtitle")}</p>
           </div>
           {snapshot && (
-            <span className={`agent-teams-phase agent-teams-phase--${snapshot.team.status}`}>
-              {t(`teams.phase.${snapshot.team.status}`)}
-            </span>
+            <div className="agent-teams-board-header-meta">
+              <span className={`agent-teams-phase agent-teams-phase--${snapshot.team.status}`}>
+                {t(`teams.phase.${snapshot.team.status}`)}
+              </span>
+              <div className="agent-teams-board-stats" role="group" aria-label={t("teams.ticketsHeading")}>
+                <div className="agent-teams-board-stat">
+                  <span className="agent-teams-board-stat-label">{t("teams.stats.completed")}</span>
+                  <span className="agent-teams-board-stat-value">{counts.completed}/{snapshot.tickets.length}</span>
+                </div>
+                <div className="agent-teams-board-stat agent-teams-board-stat--info">
+                  <span className="agent-teams-board-stat-label">{t("teams.stats.running")}</span>
+                  <span className="agent-teams-board-stat-value">{counts.in_progress}</span>
+                </div>
+                <div className="agent-teams-board-stat">
+                  <span className="agent-teams-board-stat-label">{t("teams.stats.available")}</span>
+                  <span className="agent-teams-board-stat-value">{counts.available}</span>
+                </div>
+                <div className="agent-teams-board-stat agent-teams-board-stat--muted">
+                  <span className="agent-teams-board-stat-label">{t("teams.stats.blocked")}</span>
+                  <span className="agent-teams-board-stat-value">{counts.blocked}</span>
+                </div>
+              </div>
+            </div>
           )}
         </header>
 
@@ -252,19 +271,7 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
 
             <section className="agent-teams-section" aria-label={t("teams.ticketsHeading")}>
               <h3 className="agent-teams-section-title">{t("teams.ticketsHeading")}</h3>
-              <ul className="agent-teams-tickets">
-                {snapshot.tickets.map((ticket) => (
-                  <li key={ticket.id} className={`agent-teams-ticket agent-teams-ticket--${ticket.status}`}>
-                    <span className="agent-teams-ticket-subject">{ticket.subject}</span>
-                    <span className="agent-teams-ticket-owner">{ownerName(ticket.ownerId)}</span>
-                    {ticket.dependencies.length > 0 && (
-                      <span className="agent-teams-ticket-deps">
-                        {t("teams.dependsOn", { deps: ticket.dependencies.join(", ") })}
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
+              <TaskBoardCanvas snapshot={snapshot} />
             </section>
           </>
         )}
