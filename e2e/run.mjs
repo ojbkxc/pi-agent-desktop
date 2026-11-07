@@ -248,6 +248,9 @@ try {
   browser = await chromium.launch();
   for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
     context = await browser.newContext({ viewport, locale: "en-US" });
+    // The app's readInitialLocale ignores the browser language, so the context
+    // locale alone cannot pin the UI language — seed the stored preference too.
+    await context.addInitScript(() => localStorage.setItem("pi-locale", "en"));
     await context.tracing.start({ screenshots: true, snapshots: true });
     page = await context.newPage();
     page.setDefaultTimeout(30_000);

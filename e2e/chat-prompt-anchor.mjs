@@ -24,6 +24,7 @@ const browser = await chromium.launch({ channel: process.platform === "win32" ? 
 try {
   for (const width of [1280, 390, 320]) {
     const page = await browser.newPage({ viewport: { width, height: 760 } });
+    await page.addInitScript(() => localStorage.setItem("pi-locale", "en"));
     await page.setContent(`<style>
       * { box-sizing: border-box } body { margin: 0 }
       header { height: 48px; background: #222 }

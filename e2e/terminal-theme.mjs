@@ -39,6 +39,7 @@ await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
 const browser = await chromium.launch();
 try {
   const page = await browser.newPage({ viewport: { width: 900, height: 650 } });
+  await page.addInitScript(() => localStorage.setItem("pi-locale", "en"));
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.address().port}`);
