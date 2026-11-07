@@ -188,7 +188,11 @@ Source(事件流) → Trigger(不可变事件) → Thread(按时间排序) → E
 - 机制：`agent_settled` 事件自动投递邮箱消息为 `<teammate-message>`；identity-based claim 防双消费；Windows rename 重试（EPERM/EACCES/EBUSY）
 - 类型细节：ToolDefinition.execute 必须返回带 `details` 字段；参数 schema 用 TypeBox `Type.Object` + `StringEnum`
 
-**已知限制**：文件层团队——teammate 进程 spawn 未实现。成员需以 `PI_TEAM_NAME`/`PI_AGENT_NAME` 环境变量独立启动 pi 实例才收信。
+**已知限制（改造前）**：文件层团队——teammate 进程 spawn 未实现。成员需以 `PI_TEAM_NAME`/`PI_AGENT_NAME` 环境变量独立启动 pi 实例才收信。
+
+> **2026-11-07 注**：上面是 pi-team 作为**起点**的状态，本设计已完成这次升级 —— spawn 走 §3 的
+> durable worker session（`lib/pi-team-host.ts` 的 `createSubagentTeamHost()` 把 subagent runtime
+> 适配成 pi-team 的 `TeamHost`，成员由宿主派发），成员资源面见 §8.5。成员不再需要手工启动实例。
 
 **这是本次改造的起点**：把「文件层团队」升级为「真实 durable worker session + 生命周期工具 + 泳道」。
 
@@ -225,6 +229,13 @@ D:\GitHub\pi-agent-desktop\
 - `agent-teams-registry.ts` + `agent-teams-mailbox.ts` 是纯数据层（文件 I/O + lock），不依赖 session runtime
 - `agent-teams-runtime.ts` 是编排层，依赖 session runtime（通过 dependencies 注入），不直接做文件 I/O
 - 扩展（`agent-teams-extension.ts`）是工具/命令注册层，调用 runtime
+
+> **2026-11-07 注（实际落地形态）**：上图的 `lib/agent-teams-runtime.ts` / `-registry.ts` /
+> `-mailbox.ts` / `-types.ts` / `-extension.ts` **没有新建** —— 这些职责由 pi-team 包本身承担，
+> 桌面侧只加了两层：`lib/pi-team-host.ts`（把 subagent runtime 适配成 pi-team 的 `TeamHost`）与
+> `lib/agent-teams-swimlane{,-store}.ts`（泳道投影 + 磁盘读取）。扩展注册在
+> `lib/pi-extension-builtins.ts` / `lib/builtin-extensions.ts`（`builtin:pi-team`）。API 路由在
+> `app/api/teams/`。以实际文件树为准。
 
 ### 2.2 扩展注册方式
 
@@ -412,6 +423,12 @@ await inner.prompt(task, { source: "rpc" });
 
 ### 4.1 工具清单
 
+> **2026-11-07 注**：本清单是**设计稿**。实际落地的工具面是 pi-team 扩展注册的 11 个：
+> `team_create` / `team_plan` / `team_delete` / `team_message` / `team_status` / `team_wait` /
+> `team_result` / `team_accept` / `team_cancel` / `team_list` / `team_ticket`。下表里的
+> `team_spawn` / `team_send` 未实现（派发改走 `team_plan` 的 `launch`，发消息走 `team_message`）。
+> 差异清单见 §12.2。
+
 | 工具 | 功能 | 对标 |
 |---|---|---|
 | `team_create` | 建团队 + 初始成员 | pi-team 已有 |
@@ -495,6 +512,7 @@ parameters: Type.Object({ team_name: Type.String(), member_id: Type.String(), ev
 returns: { ready: boolean, result?: string, error?: string, status: string }
 ```
 **验收语义（借鉴 teamflow 防假交付）**：交付判定基于**证据**而非措辞——`evidence[]` 每项是「命令 + 退出码 + 断言数」；`ready=true` 时若未附证据，父会话应追问或标记「未验证」；验收需 worker 在 result 文本中给显式结论行（如 `结论：通过/不通过`），缺失则挂起等待人工。QA 类 worker 的对抗探针结果同样走 evidence。
+> **2026-11-07 注**：这一段是**目标语义，尚未实现**——实际 `team_result` 只接受 `member/wait/timeout_ms`，没有 `evidence[]`（见 §12.2）。
 
 #### team_accept
 ```typescript
@@ -611,6 +629,14 @@ draft ──submit──> review_pending ──approve──> launching ──al
         }
 ```
 
+> **2026-11-07 注（落盘以代码为准）**：上面的 `tickets/<id>.json` 是**设计草稿**。pi-team 钉住的
+> 提交实际写的是 `schemaVersion: 1`, `id`, `teamName`, `subject`, `description?`, `status`
+> (`open|ended`), `createdBy`, `createdAt`, `updatedAt`, `endedAt?`, `mandates[]`
+> (`id/issuedBy/statement/createdAt/revokedBy?`), `assignments[]`
+> (`id/assignee/status/createdAt/updatedAt/result?/outcome?`), `subscribers[]`, `thread[]` ——
+> 没有 `mandate` 单对象、`channels`、`inputs`、`decisions`。`config.json` 成员里的
+> `subscriptions` 字段也没有写路径，恒为 `[]`（见 §12.2）。
+
 ### 5.2 会话文件内元数据（durable，跨重启可读）
 
 每个 worker session 的 `.jsonl` 文件内写 custom entry（同 subagent 的 `pi-web:subagent` 模式）：
@@ -707,14 +733,14 @@ Ticket 与 Thread（团队讨论）多对多订阅。后续讨论（如 PR 上�
 ```json
 {
   "version": 1,
-  "generatedAt": "2026-11-04T12:00:00.000Z",
+  "generatedAt": "2026-11-07T12:00:00.000Z",
   "team": {
-    "id": "team-xxx",
+    "id": "<团队名>",
     "name": "pi-desktop-upgrade",
     "description": "改造 agent teams",
     "createdAt": "2026-11-04T11:00:00.000Z",
-    "leadSessionId": "<uuid>",
-    "status": "running",
+    "leadSessionId": "<uuid> | null",
+    "status": "forming | running | finishing | completed | ended",
     "incarnationId": "inc-1"
   },
   "members": [
@@ -725,9 +751,9 @@ Ticket 与 Thread（团队讨论）多对多订阅。后续讨论（如 PR 上�
       "model": "claude-sonnet-4-6",
       "providerName": "穿透天翼",
       "color": "blue",
-      "status": "running",
-      "activity": "active",
-      "sessionId": "<uuid>",
+      "status": "running | idle | completed | failed | aborted | queued",
+      "activity": "active | idle",
+      "sessionId": "<uuid> | null",
       "cwd": "D:\\GitHub\\pi-agent-desktop",
       "worktreePath": null,
       "lastError": null,
@@ -737,14 +763,24 @@ Ticket 与 Thread（团队讨论）多对多订阅。后续讨论（如 PR 上�
   "tickets": [
     {
       "id": "ticket-1",
-      "subject": "实现 team_spawn 工具",
+      "subject": "实现 team_ticket 工具",
       "description": "...",
-      "ownerId": "member-impl",
-      "status": "open",
-      "dependencies": [],
+      "ownerId": "member-impl | null",
+      "status": "open | ended",
+      "dependencies": ["ticket-0"],
       "assignments": [
-        { "id": "asg-1", "status": "running", "sessionId": "<uuid>", "startedAt": "..." }
-      ]
+        {
+          "id": "asg-1",
+          "status": "pending | running | ended",
+          "memberId": "member-impl | null",
+          "assignee": "impl",
+          "sessionId": "<uuid> | null",
+          "startedAt": "2026-11-04T11:10:00.000Z | null",
+          "result": null,
+          "outcome": "completed | failed | cancelled | null"
+        }
+      ],
+      "source": "plan | runtime | merged"
     }
   ],
   "lanes": [
@@ -755,51 +791,67 @@ Ticket 与 Thread（团队讨论）多对多订阅。后续讨论（如 PR 上�
       "color": "gray",
       "status": "running",
       "events": [
-        { "seq": 1, "at": "...", "type": "spawn", "detail": "spawned member-impl" },
-        { "seq": 2, "at": "...", "type": "task", "taskId": "ticket-1", "text": "实现 team_spawn" },
-        { "seq": 3, "at": "...", "type": "message", "from": "team-lead", "to": "member-impl", "text": "...", "kind": "message" }
-      ]
-    },
-    {
-      "memberId": "member-impl",
-      "name": "impl",
-      "role": "impl",
-      "color": "green",
-      "status": "running",
-      "events": [
-        { "seq": 1, "at": "...", "type": "spawn", "detail": "session created" },
-        { "seq": 2, "at": "...", "type": "turn_start", "turnId": "..." },
-        { "seq": 3, "at": "...", "type": "tool_call", "tool": "Write", "detail": "lib/agent-teams-runtime.ts" },
-        { "seq": 4, "at": "...", "type": "turn_end", "turnId": "...", "status": "completed" },
-        { "seq": 5, "at": "...", "type": "report", "state": "ready", "text": "实现完成" }
+        { "seq": 1, "at": "...", "type": "spawn", "detail": "team-lead 加入团队" },
+        { "seq": 2, "at": "...", "type": "task", "detail": "实现 team_ticket 工具", "taskId": "ticket-1" },
+        { "seq": 3, "at": "...", "type": "message", "detail": "...", "from": "team-lead", "to": "member-impl", "text": "..." }
       ]
     }
   ],
   "flows": [
-    { "from": "member-lead", "to": "member-impl", "at": "...", "text": "...", "kind": "message", "ticketId": "ticket-1" },
-    { "from": "member-impl", "to": "member-lead", "at": "...", "text": "实现完成", "kind": "report", "state": "ready" }
+    { "from": "team-lead", "to": "member-impl", "at": "...", "text": "...", "kind": "message", "ticketId": "ticket-1" },
+    { "from": "member-impl", "to": "team-lead", "at": "...", "text": "已交付", "kind": "report", "ticketId": "ticket-1" }
   ],
   "taskAnchors": [
-    { "ticketId": "ticket-1", "memberId": "member-impl", "status": "in_progress", "messageId": "msg-1", "timestamp": "..." }
+    { "ticketId": "ticket-1", "memberId": "member-impl", "status": "pending | in_progress | completed | aborted", "messageId": null, "timestamp": "..." }
+  ],
+  "tasks": [
+    { "id": "ticket-1", "subject": "实现 team_ticket 工具", "owner": "impl", "status": "pending | in_progress | completed", "blockedBy": ["ticket-0"] }
+  ],
+  "receipts": [
+    { "messageId": "mailbox-1", "reader": "impl", "readerId": "member-impl | null", "ackedAt": "2026-11-04T11:20:00.000Z" }
   ]
 }
 ```
 
+**字段口径**（以 `lib/agent-teams-swimlane.ts` 的接口为准）：
+
+- `team.id` 是**团队名**（投影没有独立 id）；`team.status` 由 tickets 与 plan 状态推导（无票 = `forming`，
+  全 ended = `completed`，plan running 且已有 ended = `finishing`，plan draft/review_pending = `forming`）。
+- `members[].status` 来自 `lifecycle.json`（parked 视作 idle，lead 恒 running）；`activity` 由 status 派生（running = active，其余 idle）；`color` 取名册显式值，否则 lead = gray、其余按名册顺序取调色板。
+- `tickets[].source`：`plan` = plan.json 任务派生，`runtime` = `tickets/<id>.json`（`team_ticket` 落盘），
+  `merged` = 同 id 两者合并（运行时的 assignments/status 覆盖派生值，subject/依赖保留计划口径）。
+- `tickets[].dependencies` 只来自 plan.json：runtime 独有的票恒为 `[]`；同 id 合并时保留计划依赖。
+- `assignments[].startedAt` 对 plan 票取成员 lifecycle 的 `updatedAt`，对 runtime 票取 assignment 的 `createdAt`。
+- `lanes[].events[].type` 只有 **spawn / task / message / report** 四种；旧示例里的
+  `turn_start` / `tool_call` / `turn_end` 从未实现，节点细节在 `detail` 文本里。
+- `taskAnchors[].messageId` 目前恒为 `null`（锚点是任务→成员的，不指向具体消息）。
+- `flows[].state` 在类型里保留，投影从不赋值。
+- `tasks[]` 是给 `public/lane-diagram.html` 的兼容数组，由 `tickets[]` 投影；`owner` 是成员名，不在名册时为 `""`。
+- `receipts[]` 来自 `acks/receipts.jsonl`（`team_ticket` 的 `ack` 写入）；`readerId` 按成员名映射，不在名册则为 `null`。
+
 ### 7.2 H5 渲染映射
 
 - **lanes[]** → 水平泳道（每成员一条），y 轴 = 成员，x 轴 = 时间
-- **lanes[].events[]** → 泳道上的事件节点（spawn/task/turn_start/turn_end/report/message/tool_call）
+- **lanes[].events[]** → 泳道上的事件节点（spawn / task / message / report 四种）
 - **flows[]** → 跨泳道箭头（消息/报告流动）
-- **tickets[]** → 泳道上方的任务依赖条（DAG）
+- **tickets[]** → 泳道上方的任务依赖条（DAG）；状态口径见 `getTeamTaskState()`（`lib/agent-teams-task-layout.ts`，四态 completed / in_progress / blocked / available）
 - **taskAnchors[]** → 成员对话按任务切分的锚点（哪个任务上工作了哪段）
+- **tasks[]** → `public/lane-diagram.html` 直接消费的兼容数组（按依赖深度分行）
+- **receipts[]** → 消息已读回执（当前只在快照里提供，画布尚未渲染）
 
-H5 只消费这个 JSON，不碰会话内部状态。服务端 `agent-teams-swimlane.ts` 负责从 registry + session entries + mailbox 投影出这个快照。
+H5 只消费这个 JSON，不碰会话内部状态。服务端 `lib/agent-teams-swimlane-store.ts` 读盘，
+`lib/agent-teams-swimlane.ts` 做纯投影（registry + 生命周期 + 邮箱 + 验收账本 + 运行时工单 + 回执）。
 
 ### 7.3 快照 API
 
-- `GET /api/agent-teams/[team]/workbench` → 当前快照（live）
-- `GET /api/agent-teams/[team]/workbench?at=<ts>` → 历史快照（archive，落盘 `teams/<team>/workbench/<ts>.json`）
-- `GET /api/agent-teams/[team]/members/[id]/transcript` → 成员 transcript 页（incremental + afterOrdinal）
+> **2026-11-07 对账**：实际路由挂在 `/api/teams/*` 下（`app/api/teams/`），不是早期草稿的
+> `/api/agent-teams/*`；历史快照（`?at=` / 落盘 `workbench/<ts>.json`）与成员 transcript 路由
+> **均未实现**，回放由客户端 `hooks/useTeamTimeline.ts` 自己攒内存快照实现。
+
+- `GET /api/teams` → 团队名册（`{ teams: [{ name, description, memberCount, createdAt, memberSessionIds }] }`）
+- `GET /api/teams/[team]/workbench` → 当前快照（live）
+- `GET /api/teams/workbench` → 最新创建团队的快照（`lane-diagram.html` 不带 `?session=` 时的回退）
+- `GET /api/teams/session/[id]/workbench` → 按 lead 或成员会话 id 反查团队并返回快照
 
 ---
 
@@ -976,15 +1028,15 @@ DeepSeek：有界并发槽位，**留一个额外槽位给人的消息/状态请
 
 **目标**：Ticket/Mandate/Assignment 三段式 + 并发槽位留人优先。
 
-**落地状态（2026-11-05）**
+**落地状态（2026-11-07 对账；以 `package-lock.json` 钉住的 pi-team `138c5d9` 与本仓代码为准）**
 
 | 步骤 | 状态 | 说明 |
 |---|---|---|
-| 5. team_plan 审批后自动 launch | ✅ 已实现 | `teamPlanStore.approveTeamPlan()` 原本是死代码（无人调用）；现补上 `claimPlanLaunch()` / `completePlanLaunch()` / `failPlanLaunch()`，并把 `team_plan` 扩展到 `operation: approve \| launch`。幂等靠 plan 状态机：`launch.status` 一旦不是 `pending` 就返回"没有待派发的计划" |
+| 5. team_plan 审批后自动 launch | ✅ 已实现 | `teamPlanStore.approveTeamPlan()` 原本是死代码（无人调用）；现补上 `claimPlanLaunch()` / `completePlanLaunch()` / `failPlanLaunch()`，并把 `team_plan` 扩展到 `operation: approve \| launch`。幂等靠 plan 状态机：`launch.status` 一旦不是 `pending` 就返回"没有待派发的计划"；launch 逐成员 `host.start()` 后 `lifecycle.adopt()` |
 | 人类优先槽 | ✅ 已实现 | `teamBus.#isHumanPriority()`：`from === 'human'` 的直发消息跳过 `#scheduleWake()` 的静默合并窗口，直接 `#flush()` |
-| 1. Ticket/Mandate/Assignment | ⬜ 未实现 | 只有 `message-protocol.ts` 的 `TaskAssignmentMessage` 消息类型；无 `tickets/<id>.json` 落盘实体与状态机 |
-| 2. Subscription 扇出 | ⬜ 未实现 | `TeamMember.subscriptions` 字段恒为 `[]`，无扇出逻辑 |
-| 3. Read receipt | ⚠️ 部分 | 只有 `teamBus.#flush()` 的"注入即标记已读"，无 ack 回执与未 ack 查询 |
+| 1. Ticket/Mandate/Assignment | ✅ 实体已实现 / ⚠️ 授权语义未实现 | pi-team `src/teamTickets.ts` 落盘 `tickets/<ticketId>.json`（proper-lockfile + rename）：Ticket `open → ended`、Assignment `pending → running → ended`（同票多个各自独立）、Mandate 不可变（`addMandate`；`updateMandate()` 一律 409，改语义只能新建并 `revokes` 旧的）。入口是 `team_ticket` 工具（create/list/show/mandate/assign/progress/end/subscribe/post/ack/unacked）。**但** Mandate 只是不可变审计记录：没有 DeepSeek 的 `policyVersion/scope/strength/rules`，也没有「人 stop / Policy 变化撤销」的执行联动。desktop 泳道只投影 ticket/assignment 子集（`mandates` / `subscribers` / `thread` 不进快照） |
+| 2. Subscription 扇出 | ✅ ticket 级已实现 / ⚠️ 成员级字段未用 | `team_ticket` 的 `subscribe` 设订阅者、`post` 写讨论帖并按「订阅者 − 发言者」经 `teamBus.send()` 扇出。**但** config.json 的 `TeamMember.subscriptions` 字段仍恒为 `[]`，没有写路径；快照也不投影 `subscribers` / `thread` |
+| 3. Read receipt | ✅ 回执已落盘 / ⚠️ 自动已读未实现 | `acks/receipts.jsonl` 由 `team_ticket` 的 `ack` 写入（同 `(messageId, reader)` 去重），`unacked` 按 expected 查询缺口；desktop 已把它投影成 `TeamWorkbenchSnapshot.receipts[]`。**但** 只有**显式 ack** 才产生回执：DeepSeek 的「claim + report/turn_end 自动算已读」没有实现，`listUnacked()` 只查询、不重投（「未 ack 回 Eval」交给调用方） |
 
 **原始步骤**：
 1. 实现 `tickets/<ticket_id>.json`（Mandate 不可变、Ticket open/ended、Assignment pending/running/ended）
@@ -994,9 +1046,10 @@ DeepSeek：有界并发槽位，**留一个额外槽位给人的消息/状态请
 5. team_plan 审批后自动 launch 成员（server 端启动，非 agent 端）
 
 **验证**：
-- `node --test lib/agent-teams-runtime.test.mjs`（Mandate 撤销、Ticket 状态机、Assignment 独立状态、Subscription 扇出、Read receipt）
-- 手动：提交 plan → 审批 → 成员自动 launch → 后续 PR 评论扇到订阅 ticket
-- 并发：8 worker 满载时人的消息插队成功
+- 实体与投影：`node --test lib/agent-teams-swimlane.test.mjs`（运行时工单合并、assignee 名→成员 id、回执投影、撕裂行忽略）
+- 真实接缝：`node --test lib/agent-teams-e2e.test.mjs`（pi-team 工具实际写盘 → desktop `readTeamWorkbench` 读回）
+- 手动：提交 plan → 审批 → `team_plan launch` 派发 → `team_ticket` 建票/派活/`post` 扇出 → 泳道显示 ticket 与回执
+- 并发：满载时人的消息插队成功
 
 ### Phase 5：集成与端到端（0.5 周）
 
@@ -1059,6 +1112,43 @@ DeepSeek：有界并发槽位，**留一个额外槽位给人的消息/状态请
 - worker 崩溃会拖垮父进程（in-process 的代价，未来 process backend 缓解）
 - 模型能力是上限：多 agent 协作的质量取决于模型是否能理解角色分工与任务边界
 - 不实现 A2A channel / message bus / DAG engine（PI-Desktop ADR 0237 明确不做，用 Ticket 依赖图代替）
+
+---
+
+## 12. 2026-11-07 对账：与代码的真实差距
+
+本节只记**仍然存在**的缺口，不重复已落地项。核对基准：本仓代码 + `package-lock.json` 钉住的
+pi-team `138c5d98a7`（`package.json` 的 `pi-team` 依赖解析到该提交）。
+
+### 12.1 已落地、但本文早期草稿写成「未实现」的（勿再当缺口）
+
+- **Ticket / Assignment / Mandate 实体**：`tickets/<id>.json` 已由 `team_ticket` 落盘并带锁；
+  泳道已合并运行时工单（`lib/agent-teams-swimlane.ts` 的 `RuntimeTicketLike` → `WorkbenchTicket`，
+  `source: plan | runtime | merged`）。
+- **Read receipt**：`acks/receipts.jsonl` 已写入并被投影成 `receipts[]`（`WorkbenchReceipt`）。
+- **成员 spawn**：`lib/pi-team-host.ts` 的 `createSubagentTeamHost()` 已把 subagent runtime 接成
+  pi-team 的 `TeamHost`；`team_plan launch` 逐成员 `host.start()`，不再需要手工起实例。
+- **人类优先槽**：`teamBus.#isHumanPriority()`（`from === 'human'` 且非 progress）。
+
+### 12.2 真实剩余缺口
+
+| 缺口 | 现状（代码为准） | 影响 |
+|---|---|---|
+| **成员级 Subscription** | `TeamMember.subscriptions` 在 config.json 里**没有写路径**，恒为 `[]`；ticket 级订阅（`team_ticket subscribe/post`）已实现 | DeepSeek 的「thread 订阅扇出到活着的 ticket」只有 ticket 内讨论一种入口；成员换票/长期关注没有成员级载体 |
+| **快照不投影订阅与授权** | `WorkbenchTicket` 只有 id/subject/description/ownerId/status/dependencies/assignments/source；`RuntimeTicketLike` 虽然声明了 `subscribers?` 但投影从不读取，`thread` / `mandates` 连输入类型都没有 —— 三者都不进快照 | UI 看不到订阅者、讨论帖与授权历史；需要时得直接读盘 |
+| **Mandate 只是审计记录** | 有不可变约束（`updateMandate` 恒 409，`revokes` 显式撤销），但没有 DeepSeek 的 `policyVersion/scope/strength/rules` 分离，也没有「人 stop / Policy 变化 → 自动撤销」的执行联动；`revokedBy` 只影响记录有效性，不拦 assignment | 三段式的「授权」语义只到位一半：能追溯「谁授权了什么」，不能据 Mandate 拒绝一次派活 |
+| **自动已读 / 未 ack 回 Eval** | 只有显式 `team_ticket ack` 产生回执；`listUnacked()` 只查询（不重投、不拦截）；`teamBus` 的 claim/注入不写 `acks/` | 「claim + report/turn_end 就算已读」未实现；未确认消息不会自动回到待处理 |
+| **证据式验收未并入 `team_result`** | `team_result` 只有 `member/wait/timeout_ms/team_name`，没有 `evidence[]`（命令+退出码+断言数）；`team_accept` 只读成员结果、在 bus 上记一次 reply（防重复通知）并把 `summary/result` 追加进 `accepted.jsonl`，不校验结论行 | 「报告即完成」仍成立；teamflow 式防假交付（§4.2 目标语义）未落地 |
+| **历史快照与 transcript API** | §7.3 草稿的 `?at=` 归档（`workbench/<ts>.json`）与 `/members/[id]/transcript` 都不存在；回放靠客户端 `useTeamTimeline` 的内存快照 | 进程重启后泳道历史丢失；成员 transcript 只能走通用会话接口 |
+| **生命周期工具命名漂移** | §4.1 的 `team_spawn` / `team_send` 从未实现；实际派发是 `team_plan launch` + `team_message`。pi-team 钉住的提交注册 11 个工具：`team_create` / `team_plan` / `team_delete` / `team_message` / `team_status` / `team_wait` / `team_result` / `team_accept` / `team_cancel` / `team_list` / `team_ticket` | 按 §4.1 找工具会找不到；§4.1 是设计稿，实际名单以本节为准 |
+| **§5.1 工单落盘草稿** | 草稿字段 `mandate: {policyVersion,scope,strength,rules}`、`channels`、`inputs`、`decisions` 均未实现；实际 schema 是 `mandates[]`、`assignments[]`、`subscribers[]`、`thread[]`（`schemaVersion: 1`） | 以本表为准；§5.1 是设计稿而非落盘契约 |
+
+### 12.3 口径说明（状态推导尚未收敛）
+
+任务画布与统计头使用 `getTeamTaskState()`（`lib/agent-teams-task-layout.ts`，四态
+completed / in_progress / blocked / available）；泳道 `taskAnchors[].status` 用另一套四态
+（pending / in_progress / completed / aborted），`tasks[].status` 只有三态。三处口径目前**未收敛**，
+收敛方案另案处理；本节只记录事实，不预设实现方式。
 
 ---
 
