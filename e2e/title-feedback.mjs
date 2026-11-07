@@ -65,6 +65,7 @@ try {
   assert.ok(ready, logs.join(""));
   browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "en-US" });
+  await context.addInitScript(() => localStorage.setItem("pi-locale", "en"));
   page = await context.newPage();
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
