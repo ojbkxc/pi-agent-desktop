@@ -7,29 +7,32 @@
  * 细节——只借用它导出的 getTicketUrgency 作为「是否完成」的单一状态口径。
  *
  * 语义（全部按确定性定义）：
- * - 依赖边：票 v 依赖 u ⇒ 有向边 u → v（u 先于 v）。关键路径 = 该依赖图上的最长链
- *   （按票数计长，覆盖全部票，不区分是否完成），从根（无依赖）到叶。
+ * - 只算「剩余工作」：先按 getTicketUrgency 求每张票的紧急度，丢弃 completed 的票；
+ *   依赖边只在两端都未完成时保留——穿过已完成票的连接自然断开，被断开的未完成票
+ *   成为新的根。关键路径 = 剩余子图上的最长链（按票数计长），从根（无依赖）到叶。
+ *   若把已完成票算进去，一条全历史完成的长链会霸占 path、把 nextCriticalTask 顶成
+ *   null，而实际还有活没干——这是必须避免的产品语义错误。
+ * - 依赖边方向：票 v 依赖 u ⇒ 有向边 u → v（u 先于 v）。
  * - 环：先用迭代式 Tarjan 缩点把依赖环坍缩成一个分量，再在缩点后的 DAG 上求最长
  *   路径；链经过某分量时按确定顺序展开该分量的全部票。有环不会死循环、不会爆栈。
  * - 缺失依赖：指向不存在票的依赖视为已解除（与 getTeamTaskState 口径一致），不成边。
  * - 自依赖：忽略（等价于无依赖，不计入 hasCycle）。
- * - 确定性：节点按 (createdAt 升序, id 升序) 定序并据此分配 rank；等长前驱取 rank
+ * - 确定性：剩余票按 (createdAt 升序, id 升序) 定序并据此分配 rank；等长前驱取 rank
  *   最小者，等长链端取 rank 最小者。同输入恒同输出，不依赖 Map 迭代顺序。
  *
- * nextCriticalTask：沿关键路径从根到叶，第一张「未完成」的票。完成与否用
- * getTicketUrgency(ticket, byId) 判定——只有 completed 算完成，failed 视为仍需盯。
- * 整条链都已完成（或链为空）时返回 null。
+ * nextCriticalTask：剩余链上第一张未完成的票（过滤后即链的根）。只有
+ * getTicketUrgency === "completed" 算完成，failed 视为仍需盯。剩余图为空时返回 null。
  */
 
 import type { WorkbenchTicket } from "./agent-teams-swimlane";
 import { getTicketUrgency } from "./agent-teams-task-layout";
 
 export interface CriticalPathResult {
-  /** 最长依赖链（从根到叶）；同输入恒同输出。 */
+  /** 剩余工作子图上的最长依赖链（从根到叶）；同输入恒同输出。全部完成时为空数组。 */
   path: WorkbenchTicket[];
-  /** 链上第一张未完成的票（getTicketUrgency !== "completed"）；全链已完成或链为空时 null。 */
+  /** 剩余链上第一张未完成的票（过滤后即链的根）；剩余图为空时 null。 */
   nextCriticalTask: WorkbenchTicket | null;
-  /** 依赖图是否存在长度 ≥ 2 的环（自依赖不计）。 */
+  /** 剩余工作子图上是否存在长度 ≥ 2 的环（自依赖不计）。 */
   hasCycle: boolean;
 }
 
@@ -39,20 +42,28 @@ function emptyResult(): CriticalPathResult {
 }
 
 /**
- * 在依赖 DAG 上求最长链（关键路径）。
+ * 在「剩余工作」子图上求最长链（关键路径）。
  *
- * 复杂度：缩点 O(V + E)，排序 O(E log E)，DP O(V + E)；V=票数，E=依赖边数。
+ * 复杂度：缩点 O(V + E)，排序 O(E log E)，DP O(V + E)；V=剩余票数，E=剩余依赖边数。
  * 全程迭代实现，深链（1000+）不爆栈。
  */
 export function criticalPath(tickets: readonly WorkbenchTicket[]): CriticalPathResult {
   if (tickets.length === 0) return emptyResult();
 
-  // 1) 按 id 去重（保留首次出现，确定性），再按 (createdAt 升序, id 升序) 定序。
+  // 1) 按 id 去重（保留首次出现，确定性）。
   const ticketsById = new Map<string, WorkbenchTicket>();
   for (const ticket of tickets) {
     if (!ticketsById.has(ticket.id)) ticketsById.set(ticket.id, ticket);
   }
-  const ids = [...ticketsById.keys()].sort((left, right) => {
+
+  // 2) 只保留剩余工作：urgency !== "completed" 的票。全部完成 → 剩余图为空。
+  const remaining = [...ticketsById.values()].filter(
+    (ticket) => getTicketUrgency(ticket, ticketsById) !== "completed",
+  );
+  if (remaining.length === 0) return emptyResult();
+
+  // 3) 按 (createdAt 升序, id 升序) 对剩余票定序并分配 rank。
+  const ids = remaining.map((ticket) => ticket.id).sort((left, right) => {
     const leftAt = ticketsById.get(left)?.createdAt ?? "";
     const rightAt = ticketsById.get(right)?.createdAt ?? "";
     if (leftAt !== rightAt) return leftAt < rightAt ? -1 : 1;
@@ -62,7 +73,8 @@ export function criticalPath(tickets: readonly WorkbenchTicket[]): CriticalPathR
   ids.forEach((id, index) => rank.set(id, index));
   const validIds = new Set(ids);
 
-  // 2) 建图：depsOf[v]=v 的依赖（存在的、非自身，按 rank 排序）；outgoing[u]=依赖 u 的票。
+  // 4) 建图：只保留两端都在剩余集里的依赖边。
+  //    depsOf[v]=v 的剩余依赖（存在的、非自身，按 rank 排序）；outgoing[u]=依赖 u 的票。
   const depsOf = new Map<string, string[]>();
   const outgoing = new Map<string, string[]>();
   for (const id of ids) {
@@ -83,11 +95,11 @@ export function criticalPath(tickets: readonly WorkbenchTicket[]): CriticalPathR
     list.sort((left, right) => (rank.get(left) ?? 0) - (rank.get(right) ?? 0));
   }
 
-  // 3) 迭代式 Tarjan 求强连通分量（缩点）。
+  // 5) 迭代式 Tarjan 求强连通分量（缩点）。
   const { componentOf, componentCount } = computeComponents(ids, outgoing);
   if (componentCount === 0) return emptyResult();
 
-  // 4) 分量成员（按 rank 顺序）、分量 rank（成员最小 rank）。
+  // 6) 分量成员（按 rank 顺序）、分量 rank（成员最小 rank）。
   const componentMembers = new Map<number, string[]>();
   const componentRank = new Map<number, number>();
   for (const id of ids) {
@@ -106,7 +118,7 @@ export function criticalPath(tickets: readonly WorkbenchTicket[]): CriticalPathR
     }
   }
 
-  // 5) 缩点后的前驱表（同分量内边丢弃；跨分量边去重，按前驱 rank 排序）。
+  // 7) 缩点后的前驱表（同分量内边丢弃；跨分量边去重，按前驱 rank 排序）。
   const predecessors = new Map<number, number[]>();
   const predecessorSets = new Map<number, Set<number>>();
   for (const id of ids) {
@@ -129,7 +141,7 @@ export function criticalPath(tickets: readonly WorkbenchTicket[]): CriticalPathR
     );
   }
 
-  // 6) 缩点 DAG 上的最长路径 DP（Kahn 拓扑序；longest 单位是分量内票数）。
+  // 8) 缩点 DAG 上的最长路径 DP（Kahn 拓扑序；longest 单位是分量内票数）。
   const longest = new Map<number, number>();
   const chosenPredecessor = new Map<number, number | null>();
   const remainingIndegree = new Map<number, number>();
@@ -171,7 +183,7 @@ export function criticalPath(tickets: readonly WorkbenchTicket[]): CriticalPathR
     }
   }
 
-  // 7) 选链端：最长；等长取分量 rank 最小者（遍历已按 rank 升序，strict > 即取首个）。
+  // 9) 选链端：最长；等长取分量 rank 最小者（遍历已按 rank 升序，strict > 即取首个）。
   const componentsByRank = [...componentMembers.keys()].sort(
     (left, right) => (componentRank.get(left) ?? 0) - (componentRank.get(right) ?? 0),
   );
@@ -186,7 +198,7 @@ export function criticalPath(tickets: readonly WorkbenchTicket[]): CriticalPathR
   }
   if (endComponent < 0) return emptyResult();
 
-  // 8) 回溯分量链并展开为票（分量内按 rank 顺序；guard 防止任何意外环）。
+  // 10) 回溯分量链并展开为票（分量内按 rank 顺序；guard 防止任何意外环）。
   const componentChain: number[] = [];
   const guard = new Set<number>();
   let cursor: number | null = endComponent;
@@ -205,7 +217,7 @@ export function criticalPath(tickets: readonly WorkbenchTicket[]): CriticalPathR
     }
   }
 
-  // 9) 第一个未完成票（getTicketUrgency 口径：仅 completed 算完成）。
+  // 11) 第一个未完成票（getTicketUrgency 口径；过滤后即剩余链的根）。
   let nextCriticalTask: WorkbenchTicket | null = null;
   for (const ticket of path) {
     if (getTicketUrgency(ticket, ticketsById) !== "completed") {
