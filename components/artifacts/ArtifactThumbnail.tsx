@@ -155,9 +155,14 @@ function request(key: string, wanted: () => boolean, run: () => Promise<Thumb>, 
 
 // --- Rendering -------------------------------------------------------------
 
+/** One job at a time only holds if a hung request cannot stall the queue: a
+ * thumbnail fetch that never answers must fail into the existing catch (not
+ * cached, retried on the next visit) instead of blocking every later row. */
+const THUMBNAIL_FETCH_TIMEOUT_MS = 10_000;
+
 async function fetchLatestContent(item: ArtifactSummary): Promise<string | null> {
   const params = new URLSearchParams({ session: item.sessionId, identifier: item.identifier, latest: "1" });
-  const response = await fetch(`/api/artifacts/item?${params}`, { cache: "no-store" });
+  const response = await fetch(`/api/artifacts/item?${params}`, { cache: "no-store", signal: AbortSignal.timeout(THUMBNAIL_FETCH_TIMEOUT_MS) });
   if (!response.ok) {
     if (response.status === 404) return null;
     throw new Error(`HTTP ${response.status}`);
@@ -213,7 +218,7 @@ function fileApiUrl(item: FileOutputSummary): string {
 }
 
 async function fetchFileText(item: FileOutputSummary): Promise<string | null> {
-  const response = await fetch(fileApiUrl(item), { cache: "no-store" });
+  const response = await fetch(fileApiUrl(item), { cache: "no-store", signal: AbortSignal.timeout(THUMBNAIL_FETCH_TIMEOUT_MS) });
   if (!response.ok) {
     if (response.status === 403 || response.status === 404) return null;
     throw new Error(`HTTP ${response.status}`);

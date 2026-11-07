@@ -27,7 +27,7 @@ assert.ok(leafChangeNode, "handleLeafChange not found");
 const helperJs = compile(helperNode.getText(branchSummarySource).replace(/^export /, ""));
 const branchSummaryHolds = new Script(`${helperJs}; branchSummaryHolds`).runInNewContext({});
 
-function leafChangeHarness({ pendingSummarySessionId, currentSessionId }) {
+function leafChangeHarness({ pendingSummarySessionId, currentSessionId, loadContextResult = false }) {
   const calls = { activeLeaf: [], summarize: [], loadContext: [] };
   const context = {
     branchSummaryHolds,
@@ -37,10 +37,11 @@ function leafChangeHarness({ pendingSummarySessionId, currentSessionId }) {
     branchSummarySessionIdRef: { current: pendingSummarySessionId },
     sessionIdRef: { current: currentSessionId },
     sessionReadIdRef: { current: 0 },
+    activeLeafIdRef: { current: "leaf-0" },
     summarizeAndNavigate: async (leafId) => { calls.summarize.push(leafId); },
     setActiveLeafId: (leafId) => { calls.activeLeaf.push(leafId); },
     invalidateSessionData: () => {},
-    loadContext: async (sid, leafId) => { calls.loadContext.push([sid, leafId]); return false; },
+    loadContext: async (sid, leafId) => { calls.loadContext.push([sid, leafId]); return loadContextResult; },
     sendAgentCommand: async () => {},
     addNotice: () => {},
     t: (key) => key,
@@ -63,6 +64,34 @@ test("a summary still running for the previous session does not lock branch swit
   await handleLeafChange("leaf-1");
   assert.deepEqual(calls.activeLeaf, ["leaf-1"]);
   assert.deepEqual(calls.loadContext, [["b", "leaf-1"]]);
+});
+
+test("a failed navigate_tree rolls the view back to the branch the agent is on", async () => {
+  const calls = { activeLeaf: [], loadContext: [], notices: [] };
+  const context = {
+    branchSummaryHolds,
+    bashRunningRef: { current: false },
+    agentRunningRef: { current: false },
+    isCompacting: false,
+    branchSummarySessionIdRef: { current: null },
+    sessionIdRef: { current: "a" },
+    sessionReadIdRef: { current: 0 },
+    activeLeafIdRef: { current: "leaf-0" },
+    summarizeAndNavigate: async () => {},
+    setActiveLeafId: (leafId) => { calls.activeLeaf.push(leafId); },
+    invalidateSessionData: () => {},
+    loadContext: async (sid, leafId) => { calls.loadContext.push([sid, leafId]); return true; },
+    sendAgentCommand: async () => { throw new Error("navigation rejected"); },
+    addNotice: (notice) => { calls.notices.push(notice.type); },
+    t: (key) => key,
+  };
+  const handlerJs = compile(leafChangeNode.initializer.arguments[0].getText(source));
+  const handleLeafChange = new Script(`(${handlerJs})`).runInNewContext(context);
+  await handleLeafChange("leaf-1");
+  // Optimistic switch to leaf-1, then the rollback restores leaf-0 and reloads it.
+  assert.deepEqual(calls.activeLeaf, ["leaf-1", "leaf-0"]);
+  assert.deepEqual(calls.loadContext, [["a", "leaf-1"], ["a", "leaf-0"]]);
+  assert.deepEqual(calls.notices, ["error"]);
 });
 
 test("a summary running for the current session still locks its branch switches", async () => {

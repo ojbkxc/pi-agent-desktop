@@ -36,10 +36,14 @@ function ProviderUsageContent({ providerId, enabled }: { providerId: string; ena
   const [error, setError] = useState<string | null>(null);
   const [refreshDone, setRefreshDone] = useState(false);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const querySeqRef = useRef(0);
   const { locale, t } = useI18n();
 
   useEffect(() => {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    // Invalidate any in-flight query for the previous provider: its late
+    // response must not paint into this provider's panel.
+    querySeqRef.current += 1;
     setRefreshDone(false);
     setSnapshot(null);
     try {
@@ -60,6 +64,7 @@ function ProviderUsageContent({ providerId, enabled }: { providerId: string; ena
   }, [providerId]);
 
   const query = useCallback(async () => {
+    const requestId = ++querySeqRef.current;
     setQuerying(true);
     setError(null);
     try {
@@ -69,6 +74,10 @@ function ProviderUsageContent({ providerId, enabled }: { providerId: string; ena
         body: JSON.stringify({ providerId }),
       });
       const result = await response.json() as UsageResponse & { error?: string };
+      // A response that lands after the user switched providers (or fired a
+      // newer query) belongs to another panel: drop it instead of painting the
+      // old provider's usage onto the current one.
+      if (requestId !== querySeqRef.current) return;
       if (!response.ok) throw new Error(result.error ?? `HTTP ${response.status}`);
       if (result.status === "ready") {
         setSnapshot(result);
@@ -80,9 +89,10 @@ function ProviderUsageContent({ providerId, enabled }: { providerId: string; ena
         setError(result.message ?? t("providerUsage.queryFailed"));
       }
     } catch (caught) {
+      if (requestId !== querySeqRef.current) return;
       setError(caught instanceof Error ? caught.message : t("providerUsage.queryFailed"));
     } finally {
-      setQuerying(false);
+      if (requestId === querySeqRef.current) setQuerying(false);
     }
   }, [providerId, t]);
 

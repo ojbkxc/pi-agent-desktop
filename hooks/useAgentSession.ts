@@ -226,8 +226,10 @@ function asConcreteThinkingLevel(value?: string | null): ConcreteThinkingLevel |
   return value as ConcreteThinkingLevel;
 }
 
-// Session id -> user entry being edited. ChatWindow remounts per session, so a
-// pending edit lives here as long as that session's in-memory draft does.
+// Session id -> user entry being edited. ChatWindow stays mounted across a
+// session switch (AppShell swaps the session in place), so the switch reset
+// below clears the departing session's pending edit; the map only carries one
+// across a full remount of the same session's draft.
 const pendingHistoryEdits = new Map<string, string>();
 
 const PROMPT_SETTLE_INITIAL_DELAY_MS = 800;
@@ -439,6 +441,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // follows settings.json defaultTools and the picker must say so rather than
   // labelling it with whichever preset the resolved tools happen to match.
   const sessionToolsPinnedRef = useRef(false);
+  const toolPresetRef = useRef<ToolPreset>(chatWorkspace ? "none" : CONFIGURED_TOOL_PRESET);
   const agentRunningRef = useRef(false);
   const sdkAgentActiveRef = useRef(false);
   const rpcPromptPendingRef = useRef(false);
@@ -520,7 +523,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     });
   }
 
-  const setToolPresetState = opts.setToolPreset ?? setToolPreset;
+  const applyToolPresetState = opts.setToolPreset ?? setToolPreset;
+  // Every displayed preset flows through here, so the failure rollback below
+  // can restore the value the picker actually showed before the failed change.
+  const setToolPresetState = useCallback((preset: ToolPreset) => {
+    toolPresetRef.current = preset;
+    applyToolPresetState(preset);
+  }, [applyToolPresetState]);
   const existingSessionId = session?.id;
 
   useLayoutEffect(() => {
@@ -548,6 +557,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // shows it: the message list is emptied in this same commit and the browser
   // clamps scrollTop to 0 before any effect cleanup runs — a cleanup-time
   // read would record 0 for every switch (#scroll-restore).
+  // The edit state is declared up here because the switch reset below must
+  // clear it: leaving it pointing at the departing session's entry would
+  // hijack the first send in the new session as a navigate_tree.
+  const [editEntryId, setEditEntryId] = useState(() => {
+    const sid = session?.id;
+    if (sid && !getDraft(sid)) pendingHistoryEdits.delete(sid);
+    return (sid && pendingHistoryEdits.get(sid)) || null;
+  });
   const sessionIdentity = isNew
     ? (newSessionDraftKey ?? "new")
     : (existingSessionId ?? "");
@@ -632,6 +649,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     // just picked in the previous one, and an in-flight set_model keeps writing it.
     setCurrentModelOverride(null);
     setCurrentThinkingOverride(null);
+    // A pending edit belongs to the departing session: without this its entry id
+    // would hijack the first send in the new session as a navigate_tree to the
+    // old session's entry (ChatWindow stays mounted across a switch).
+    if (previousIdentity) {
+      pendingHistoryEdits.delete(previousIdentity);
+      setEditEntryId(null);
+    }
     modelSwitchPendingRef.current = false;
     setModelSwitching(false);
   }
@@ -696,13 +720,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [newSessionDraftKey, opts.chatInputRef, resolveComposerDraftKey]);
 
-  // Editing a past message only prefills the composer; the branch moves when it is sent,
-  // so cancelling or reloading never hides the rest of the conversation.
-  const [editEntryId, setEditEntryId] = useState(() => {
-    const sid = session?.id;
-    if (sid && !getDraft(sid)) pendingHistoryEdits.delete(sid);
-    return (sid && pendingHistoryEdits.get(sid)) || null;
-  });
   const setEdit = useCallback((entryId: string | null) => {
     if (!session?.id) return;
     if (entryId) pendingHistoryEdits.set(session.id, entryId);
@@ -1650,8 +1667,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (!sid) break;
           loadSession(sid);
           fetch(`/api/agent/${encodeURIComponent(sid)}`)
-            .then((r) => r.json())
-            .then((d: { state?: AgentStateResponse }) => {
+            .then((r) => {
+              // An error body has no state: consuming it would clear the live
+              // model and the composer's queued messages while the server
+              // still holds them (same guard as reconcileAgentState).
+              if (!r.ok) return null;
+              return r.json() as Promise<{ state?: AgentStateResponse }>;
+            })
+            .then((d) => {
+              if (!d) return;
               if (
                 sessionIdRef.current !== sid
                 || sessionGenerationRef.current !== sessionGeneration
@@ -2155,13 +2179,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setActiveLeafId(leafId);
     const sid = sessionIdRef.current;
     if (!sid) return;
+    const previousLeafId = activeLeafIdRef.current;
     const loaded = await loadContext(sid, leafId);
     if (loaded && leafId && sessionIdRef.current === sid) {
       // The view already shows the chosen branch; if the agent's pointer cannot
-      // follow, the next prompt would continue the old one — say so.
-      sendAgentCommand(sid, { type: "navigate_tree", targetId: leafId }).catch((e) => {
+      // follow, the next prompt would continue the old one — so on failure the
+      // view rolls back to the branch the agent is actually on instead of
+      // silently diverging.
+      sendAgentCommand(sid, { type: "navigate_tree", targetId: leafId }).catch(async (e) => {
         if (sessionIdRef.current !== sid) return;
         addNotice({ type: "error", message: t("chat.navigateFailed", { error: e instanceof Error ? e.message : String(e) }) });
+        setActiveLeafId(previousLeafId);
+        await loadContext(sid, previousLeafId);
       });
     }
   }, [addNotice, branchSummarySessionIdRef, isCompacting, loadContext, summarizeAndNavigate, t]);
@@ -2664,6 +2693,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       return;
     }
     const toolNames = getToolNamesForPreset(preset);
+    const previousPreset = toolPresetRef.current;
     setPreferredToolPreset(preset);
     setToolPresetState(preset);
     const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
@@ -2706,6 +2736,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
     } catch (e) {
       console.error("Failed to set tools:", e);
+      // The optimistic writes already flipped the picker chip and persisted the
+      // preference; the session still runs the old tools, so undo both before
+      // the UI claims a change that never landed.
+      setPreferredToolPreset(previousPreset);
+      setToolPresetState(previousPreset);
+      sessionToolsPinnedRef.current = getToolNamesForPreset(previousPreset) !== undefined;
     }
   }, [cancelEventStreamGrace, chatWorkspace, clearSlashCommands, closeEvents, loadTools, maintainEventsConnected, setToolPresetState, syncLiveModel]);
 

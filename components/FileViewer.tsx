@@ -682,6 +682,7 @@ function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
   const [duration, setDuration] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
+  const syncRequestRef = useRef(0);
 
   const ext = getFileName(filePath).toLowerCase().split(".").pop() ?? "";
 
@@ -698,17 +699,24 @@ function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
       esRef.current = null;
     }
 
+    let active = true;
     const synchronize = () => {
+      const requestId = ++syncRequestRef.current;
       fetch(getFileApiUrl(filePath, "meta", sourceSessionId))
         .then((response) => response.json())
         .then((next: { size?: number; error?: string }) => {
+          // A meta response for a file that is no longer shown must not write
+          // its size or error onto the new file's view.
+          if (!active || requestId !== syncRequestRef.current) return;
           if (next.error) {
             setError(next.error);
             return;
           }
           if (typeof next.size === "number") setSize(next.size);
         })
-        .catch((nextError) => setError(String(nextError)));
+        .catch((nextError) => {
+          if (active && requestId === syncRequestRef.current) setError(String(nextError));
+        });
     };
 
     const es = new EventSource(getFileApiUrl(filePath, "watch", sourceSessionId));
@@ -731,8 +739,9 @@ function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
     es.onerror = () => setWatching(false);
 
     return () => {
+      active = false;
       es.close();
-      esRef.current = null;
+      if (esRef.current === es) esRef.current = null;
     };
   }, [filePath, sourceSessionId, watchEnabled]);
 
@@ -938,6 +947,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, initialPage, watchEnab
   const [size, setSize] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
+  const syncRequestRef = useRef(0);
 
   const ext = getFileExt(filePath);
   const isPdf = ext === "pdf";
@@ -958,10 +968,15 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, initialPage, watchEnab
       esRef.current = null;
     }
 
+    let active = true;
     const synchronize = () => {
+      const requestId = ++syncRequestRef.current;
       fetch(getFileApiUrl(filePath, "meta", sourceSessionId))
         .then((r) => r.json())
         .then((d: { size?: number; error?: string }) => {
+          // A meta response for a file that is no longer shown must not write
+          // its size or error onto the new file's view.
+          if (!active || requestId !== syncRequestRef.current) return;
           if (d.error) setError(d.error);
           if (typeof d.size === "number") {
             setSize(d.size);
@@ -970,7 +985,9 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, initialPage, watchEnab
             }
           }
         })
-        .catch((e) => setError(String(e)));
+        .catch((e) => {
+          if (active && requestId === syncRequestRef.current) setError(String(e));
+        });
     };
     synchronize();
 
@@ -999,8 +1016,9 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, initialPage, watchEnab
     es.onerror = () => setWatching(false);
 
     return () => {
+      active = false;
       es.close();
-      esRef.current = null;
+      if (esRef.current === es) esRef.current = null;
     };
   }, [filePath, isPdf, sourceSessionId, watchEnabled]);
 

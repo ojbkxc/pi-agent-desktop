@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { refreshScheduledTasks, useScheduledTasks } from "@/hooks/useScheduledTasks";
 import { useI18n } from "@/hooks/useI18n";
+import { useModalDismiss } from "@/hooks/useModalDismiss";
 import { formatRelativeTime } from "@/lib/i18n/format";
 import { apiErrorText, scheduledApi } from "@/lib/scheduled-tasks/client";
 import type { ScheduledRun, ScheduledTaskView } from "@/lib/scheduled-tasks/types";
@@ -260,23 +261,17 @@ function DeleteDialog({ task, onCancel, onConfirm }: {
   onConfirm: () => void;
 }) {
   const { t } = useI18n();
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.stopPropagation();
-      onCancel();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [onCancel]);
+  // Escape and Tab go through the shared modal stack so a higher-layer modal
+  // (e.g. the settings panel opened above this dialog) closes first.
+  const dialogRef = useModalDismiss<HTMLDivElement>(onCancel);
 
   return (
     <div className="scheduled-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
-      <div className="scheduled-dialog" role="alertdialog" aria-modal="true" aria-labelledby="scheduled-delete-title">
+      <div ref={dialogRef} className="scheduled-dialog" role="alertdialog" aria-modal="true" aria-labelledby="scheduled-delete-title">
         <h3 id="scheduled-delete-title">{t("scheduled.deleteTitle", { name: task.name })}</h3>
         <p>{t("scheduled.deleteBody")}</p>
         <div className="scheduled-actions">
-          <button type="button" className="scheduled-button" autoFocus onClick={onCancel}>{t("scheduled.cancel")}</button>
+          <button type="button" className="scheduled-button" data-autofocus onClick={onCancel}>{t("scheduled.cancel")}</button>
           <button type="button" className="scheduled-button scheduled-button--danger" onClick={onConfirm}>{t("scheduled.confirmDelete")}</button>
         </div>
       </div>

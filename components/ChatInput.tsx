@@ -1212,12 +1212,21 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     const clearVersion = attachmentClearVersionRef.current;
     pendingImageCountRef.current += imageFiles.length;
     try {
-      const newImages = await Promise.all(
-        imageFiles.map(async (file) => ({
-          ...await compressImageFile(file),
-          previewUrl: URL.createObjectURL(file),
-        }))
-      );
+      // Read/compress files independently: one broken image must not lose the
+      // others (Promise.all would fail the whole batch and leak the blob
+      // preview URLs already created for the files that did read).
+      const newImages = (await Promise.all(
+        imageFiles.map(async (file) => {
+          const previewUrl = URL.createObjectURL(file);
+          try {
+            return { ...await compressImageFile(file), previewUrl };
+          } catch {
+            URL.revokeObjectURL(previewUrl);
+            return null;
+          }
+        })
+      )).filter((image): image is AttachedImage => image !== null);
+      if (!newImages.length) return;
       if (clearVersion !== attachmentClearVersionRef.current) newImages.forEach(revokeImagePreview);
       else appendAttachedImages(newImages);
     } finally {

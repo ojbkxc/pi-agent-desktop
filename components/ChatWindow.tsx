@@ -888,12 +888,14 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
   const onDrop = useCallback((files: File[]) => {
     const { images, projectFiles } = partitionChatDroppedFiles(files);
 
-    // Images stay on the multimodal attachment path (blocked while the agent is busy).
-    if (images.length > 0 && !sessionBusy) {
+    // Images stay on the multimodal attachment path; like the composer's
+    // "+" picker they may be attached while a run is going (sent with the
+    // next prompt), so the two entry points behave the same.
+    if (images.length > 0) {
       chatInputRef?.current?.addImages(images);
     }
     importProjectFiles(projectFiles);
-  }, [chatInputRef, importProjectFiles, sessionBusy]);
+  }, [chatInputRef, importProjectFiles]);
 
   // The composer's "+" picker. The desktop WebView's file panel ignores the
   // input's `accept`, so any file can come back here: split it like a drop
