@@ -11015,3 +11015,184 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 @media (prefers-reduced-motion: reduce) {
   .agent-teams-formation-state--working .agent-teams-formation-state-dot { animation: none; }
 }
+
+/* ==========================================================================
+   Agent Teams · model multi-select (components/AgentTeams/ModelPicker.tsx).
+   Groups the catalog by provider, flat rows, checkbox-style multi-select.
+   Rows are real buttons with a focus ring; colours come from shared tokens.
+   ========================================================================== */
+.model-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--text);
+}
+
+.model-picker-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-picker-search {
+  flex: 1 1 200px;
+  min-width: 160px;
+  box-sizing: border-box;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-small);
+}
+
+.model-picker-search:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.model-picker-filter,
+.model-picker-clear {
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: var(--fs-micro);
+  cursor: pointer;
+}
+
+.model-picker-filter[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.model-picker-filter:focus-visible,
+.model-picker-clear:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.model-picker-count {
+  flex: none;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.model-picker-hint {
+  margin: 0;
+  padding: 8px 2px;
+  color: var(--text-dim);
+  font-size: var(--fs-small);
+}
+
+.model-picker-hint--error { color: var(--danger); }
+
+.model-picker-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.model-picker-group { display: flex; flex-direction: column; gap: 4px; }
+
+.model-picker-provider {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+}
+
+.model-picker-models {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.model-picker-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-small);
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-picker-model:hover { background: var(--bg-hover); }
+
+.model-picker-model:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.model-picker-model.is-selected {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.model-picker-model:disabled { cursor: default; opacity: 0.6; }
+
+.model-picker-check {
+  flex: none;
+  position: relative;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs, 4px);
+  background: var(--bg);
+}
+
+.model-picker-model.is-selected .model-picker-check {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.model-picker-model.is-selected .model-picker-check::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 3px;
+  height: 7px;
+  border: solid var(--bg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.model-picker-model-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.model-picker-model-id {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+}
+
+.model-picker-model-tag {
+  flex: none;
+  padding: 0 5px;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+}
