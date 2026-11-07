@@ -10690,6 +10690,18 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .agent-teams-board-task--available { border-left-color: var(--warning); }
 .agent-teams-board-task--blocked { border-left-color: var(--text-dim); opacity: 0.78; }
 .agent-teams-board-task--failed { border-left-color: var(--danger); }
+/* 依赖环内的票：虚线左边框做可辨识标记，不覆盖状态的色调。 */
+.agent-teams-board-task--cycle { border-left-style: dashed; }
+
+.agent-teams-board-cycle-warning {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  background: var(--bg-hover);
+  font-size: var(--fs-small);
+}
 
 .agent-teams-board-task-head {
   display: flex;

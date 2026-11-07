@@ -5,29 +5,25 @@ import { useI18n } from "@/hooks/useI18n";
 import {
   TASK_HEIGHT,
   TASK_WIDTH,
-  getTeamTaskState,
+  getTicketUrgency,
   layoutTeamWorkbenchTasks,
   type PositionedTeamTask,
-  type TeamTaskState,
+  type TicketUrgency,
 } from "@/lib/agent-teams-task-layout";
 import type { TeamWorkbenchSnapshot, WorkbenchTicket } from "@/lib/agent-teams-swimlane";
 
 /**
- * 任务卡片的视觉色调：引擎四态 + 派活失败的独立红色态。
+ * 任务卡片的视觉色调：引擎单一紧急度口径（failed 覆盖 completed）。
  * 「等你确认」在 pi 侧没有独立状态，available（可认领）用 warning 提示待认领。
  */
-export type TaskTone = TeamTaskState | "failed";
+export type TaskTone = TicketUrgency;
 
 /**
- * 任务 → CSS 类后缀。in_progress 沿用 cc-haha 的「运行中」措辞，失败派活
- * （ended 且存在 outcome=failed 的派活）覆盖完成态的绿色，避免把失败显示成成功。
+ * 任务 → CSS 类后缀。urgency 已经蕴含 failed/in_progress 归一，直接派生 class，
+ * 不再由画布二次判定，避免与统计头口径分叉。
  */
-export function taskToneClass(ticket: WorkbenchTicket, state: TeamTaskState): string {
-  const tone: TaskTone = state === "completed" && ticket.assignments.some((assignment) => assignment.outcome === "failed")
-    ? "failed"
-    : state;
-  const suffix = tone === "in_progress" ? "running" : tone;
-  return `agent-teams-board-task--${suffix}`;
+export function taskToneClass(urgency: TicketUrgency): string {
+  return `agent-teams-board-task--${urgency}`;
 }
 
 /**
@@ -40,16 +36,30 @@ export function laneTitleKey(depth: number, maxDepth: number): string {
   return "teams.boardLayer";
 }
 
-/** 四态计数（互斥），口径与 getTeamTaskState 完全一致；统计头直接复用。 */
-export function countTaskStates(tickets: WorkbenchTicket[]): Record<TeamTaskState, number> {
+/**
+ * 五态紧急度计数（互斥），口径与 getTicketUrgency 完全一致；统计头直接复用。
+ * `in_progress` 是保留给旧调用方的别名，恒等于 `running`（同一状态两种命名）。
+ */
+export interface TaskUrgencyCounts extends Record<TicketUrgency, number> {
+  /** @deprecated 旧命名；与 `running` 同值，新代码请读 `running`。 */
+  in_progress: number;
+}
+
+export function countTaskStates(tickets: WorkbenchTicket[]): TaskUrgencyCounts {
   const byId = new Map(tickets.map((ticket) => [ticket.id, ticket]));
-  const counts: Record<TeamTaskState, number> = {
+  const counts: TaskUrgencyCounts = {
+    failed: 0,
+    blocked: 0,
+    available: 0,
+    running: 0,
     completed: 0,
     in_progress: 0,
-    available: 0,
-    blocked: 0,
   };
-  for (const ticket of tickets) counts[getTeamTaskState(ticket, byId)] += 1;
+  for (const ticket of tickets) {
+    const urgency = getTicketUrgency(ticket, byId);
+    counts[urgency] += 1;
+    if (urgency === "running") counts.in_progress += 1;
+  }
   return counts;
 }
 
@@ -103,7 +113,11 @@ export function TaskBoardCanvas({ snapshot }: Props) {
   }));
 
   return (
-    <div className="agent-teams-board-scroll">
+    <>
+      {layout.hasCycle && (
+        <p className="agent-teams-board-cycle-warning" role="status">{t("teams.cycleWarning")}</p>
+      )}
+      <div className="agent-teams-board-scroll">
       <div className="agent-teams-board" style={{ width: layout.width, minWidth: layout.width, height: layout.height }}>
         <svg className="agent-teams-board-edges" width={layout.width} height={layout.height} aria-hidden="true">
           {edges.map((edge) => (
@@ -116,7 +130,7 @@ export function TaskBoardCanvas({ snapshot }: Props) {
         </svg>
 
         {layout.lanes.map((lane) => {
-          const completed = layout.tasks.filter((task) => task.depth === lane.depth && task.state === "completed").length;
+          const completed = layout.tasks.filter((task) => task.depth === lane.depth && task.urgency === "completed").length;
           const titleKey = laneTitleKey(lane.depth, maxDepth);
           return (
             <div
@@ -144,8 +158,9 @@ export function TaskBoardCanvas({ snapshot }: Props) {
           return (
             <article
               key={ticket.id}
-              className={`agent-teams-board-task ${taskToneClass(ticket, task.state)}`}
-              data-state={task.state}
+              className={`agent-teams-board-task ${taskToneClass(task.urgency)}${task.cycleId === null ? "" : " agent-teams-board-task--cycle"}`}
+              data-state={task.urgency}
+              data-cycle={task.cycleId === null ? undefined : task.cycleId}
               style={{ left: task.x, top: task.y, width: TASK_WIDTH, height: TASK_HEIGHT }}
             >
               <span className="agent-teams-board-task-head">
@@ -169,6 +184,7 @@ export function TaskBoardCanvas({ snapshot }: Props) {
           );
         })}
       </div>
-    </div>
+      </div>
+    </>
   );
 }

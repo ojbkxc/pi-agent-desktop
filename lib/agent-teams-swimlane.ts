@@ -226,6 +226,8 @@ export interface WorkbenchTicket {
   assignments: WorkbenchAssignment[];
   /** 来源：plan 任务派生、pi-team 运行时工单、或两者合并（同 id）。 */
   source: "plan" | "runtime" | "merged";
+  /** 创建时间（ISO 字符串，取底层记录的毫秒时间戳；不可用时为空串）。用于泳道内追加式排序。 */
+  createdAt: string;
 }
 
 export type SwimlaneEventType = "spawn" | "task" | "message" | "report";
@@ -436,6 +438,8 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
       dependencies: [...(task.dependencies ?? [])],
       assignments,
       source: "plan" as const,
+      // plan 任务不带逐条创建时间，取整份计划的创建时间；同值再由 id 自然序兜底。
+      createdAt: isoFromMillis(plan?.createdAt),
     };
   });
 
@@ -480,6 +484,7 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
       dependencies: [],
       assignments,
       source: "runtime",
+      createdAt: isoFromMillis(runtime.createdAt),
     };
     baseTickets.push(ticket);
     ticketById.set(ticket.id, ticket);

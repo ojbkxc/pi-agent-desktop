@@ -16,6 +16,7 @@ const {
 const {
   TASK_HEIGHT,
   TASK_WIDTH,
+  getTicketUrgency,
 } = await jiti.import("@/lib/agent-teams-task-layout.ts");
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
@@ -50,6 +51,7 @@ function ticket(id, overrides = {}) {
     dependencies: [],
     assignments: [],
     source: "plan",
+    createdAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
   };
 }
@@ -83,19 +85,29 @@ function snapshot(tickets, members = [{ id: "m-impl", name: "impl" }]) {
   };
 }
 
-test("taskToneClass maps engine states to the board's colour classes", () => {
-  const open = ticket("t1");
-  assert.equal(taskToneClass(open, "in_progress"), "agent-teams-board-task--running");
-  assert.equal(taskToneClass(open, "completed"), "agent-teams-board-task--completed");
-  assert.equal(taskToneClass(open, "blocked"), "agent-teams-board-task--blocked");
-  assert.equal(taskToneClass(open, "available"), "agent-teams-board-task--available");
+test("taskToneClass derives the colour class straight from the urgency", () => {
+  assert.equal(taskToneClass("running"), "agent-teams-board-task--running");
+  assert.equal(taskToneClass("completed"), "agent-teams-board-task--completed");
+  assert.equal(taskToneClass("blocked"), "agent-teams-board-task--blocked");
+  assert.equal(taskToneClass("available"), "agent-teams-board-task--available");
+  assert.equal(taskToneClass("failed"), "agent-teams-board-task--failed");
 });
 
-test("taskToneClass shows a failed assignment as the error tone, not completed", () => {
-  const failed = ticket("t1", { status: "ended", assignments: [assignment("ended", "failed")] });
-  assert.equal(taskToneClass(failed, "completed"), "agent-teams-board-task--failed");
-  const completed = ticket("t2", { status: "ended", assignments: [assignment("ended", "completed")] });
-  assert.equal(taskToneClass(completed, "completed"), "agent-teams-board-task--completed");
+test("urgency is the single source: ended+failed renders as failed, counts stay consistent", () => {
+  const failed = ticket("f", { status: "ended", assignments: [assignment("ended", "failed")] });
+  const completed = ticket("c", { status: "ended", assignments: [assignment("ended", "completed")] });
+  const byId = new Map([[failed.id, failed], [completed.id, completed]]);
+  assert.equal(getTicketUrgency(failed, byId), "failed");
+  assert.equal(getTicketUrgency(completed, byId), "completed");
+
+  const counts = countTaskStates([failed, completed]);
+  assert.equal(counts.failed, 1, "失败票计入 failed");
+  assert.equal(counts.completed, 1, "失败票不再混进 completed");
+  assert.equal(taskToneClass(getTicketUrgency(failed, byId)), "agent-teams-board-task--failed", "计数与着色同源");
+
+  const html = render(snapshot([failed, completed]));
+  assert.match(html, /agent-teams-board-task--failed/);
+  assert.match(html, /agent-teams-board-task--completed/);
 });
 
 test("laneTitleKey labels root, intermediate and wrap-up layers", () => {
@@ -106,19 +118,22 @@ test("laneTitleKey labels root, intermediate and wrap-up layers", () => {
   assert.equal(laneTitleKey(0, 0), "teams.boardRoot");
 });
 
-test("countTaskStates is mutually exclusive and treats missing dependencies as resolved", () => {
+test("countTaskStates is mutually exclusive, five-state and treats missing dependencies as resolved", () => {
   const tickets = [
     ticket("t1", { status: "ended", assignments: [assignment("ended", "completed")] }),
     ticket("t2", { assignments: [assignment("running")] }),
     ticket("t3", { dependencies: ["t1"] }),
     ticket("t4", { dependencies: ["t2"] }),
     ticket("t5", { dependencies: ["missing"] }),
+    ticket("t6", { status: "ended", assignments: [assignment("ended", "failed")] }),
   ];
   assert.deepEqual(countTaskStates(tickets), {
+    failed: 1,
+    blocked: 1,
+    available: 2,
+    running: 1,
     completed: 1,
     in_progress: 1,
-    available: 2,
-    blocked: 1,
   });
 });
 
@@ -160,4 +175,16 @@ test("renders the empty state when the team has no tasks", () => {
   const html = render(snapshot([]));
   assert.match(html, /No tasks yet/);
   assert.doesNotMatch(html, /agent-teams-board-lane/);
+});
+
+test("marks cycle tickets and shows a warning banner when the graph has a cycle", () => {
+  const html = render(snapshot([
+    ticket("a", { dependencies: ["b"] }),
+    ticket("b", { dependencies: ["a"] }),
+  ]));
+  assert.match(html, /agent-teams-board-task--cycle/);
+  assert.match(html, /agent-teams-board-cycle-warning/);
+  // 无环时不渲染告警
+  const clean = render(snapshot([ticket("a")]));
+  assert.doesNotMatch(clean, /agent-teams-board-cycle-warning/);
 });
