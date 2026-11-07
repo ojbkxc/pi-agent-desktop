@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { existsSync } from "fs";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
+import { isApiRequestAllowed, hasJsonContentType } from "@/lib/request-security";
 import {
   deleteSubagentProfile,
   listSubagentProfileSources,
@@ -41,7 +42,13 @@ export async function GET(req: Request) {
 }
 
 export async function PUT(req: Request) {
-  try {
+  try {  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
+
     const body = await req.json() as {
       cwd?: unknown;
       scope?: unknown;
@@ -60,7 +67,13 @@ export async function PUT(req: Request) {
 }
 
 export async function PATCH(req: Request) {
-  try {
+  try {  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
+
     const body = await req.json() as { cwd?: unknown; scope?: unknown; name?: unknown; enabled?: unknown };
     const cwd = await validateCwd(body.cwd);
     const scope = validateToggleScope(body.scope);
@@ -99,7 +112,13 @@ export async function PATCH(req: Request) {
 }
 
 export async function DELETE(req: Request) {
-  try {
+  try {  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
+
     const body = await req.json() as { cwd?: unknown; scope?: unknown; name?: unknown };
     const cwd = await validateCwd(body.cwd);
     const scope = validateScope(body.scope);

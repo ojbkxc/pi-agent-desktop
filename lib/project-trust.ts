@@ -1,5 +1,4 @@
 import { lstatSync, readdirSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
   hasTrustRequiringProjectResources,
@@ -10,6 +9,7 @@ import type { FreshFolderTrustBreadth, ProjectTrustStatus } from "./api-types";
 import { serializeByKey } from "./key-serializer";
 import { isPathWithinRoots } from "./path-security";
 import { samePath } from "./paths";
+import { userHome } from "./user-home";
 
 /** The folder as `trust.json` keys it: resolved, then its real path when it exists. */
 function trustKeyPath(cwd: string): string {
@@ -208,7 +208,7 @@ function somethingAt(path: string): boolean {
  * skips a link to nothing: such a link starts counting the moment its target
  * appears, after the folder was trusted as one with nothing in it.
  */
-export function hasTrustRelevantEntries(cwd: string, home: string = process.env.HOME || homedir()): boolean {
+export function hasTrustRelevantEntries(cwd: string, home: string = userHome()): boolean {
   const folder = realPathOr(cwd);
   if (hasOwnTrustEntries(folder)) return true;
   const userSkills = join(realPathOr(home), ".agents", "skills");
@@ -319,7 +319,7 @@ export function freshFolderTrustBreadth(
 ): FreshFolderTrustBreadth | undefined {
   const folder = realPathOr(cwd);
   if (dirname(folder) === folder) return { kind: "root", path: folder };
-  const home = realPathOr(options.home ?? (process.env.HOME || homedir()));
+  const home = realPathOr(options.home ?? userHome());
   if (samePath(folder, home)) return { kind: "home", path: folder };
   if (within(home, folder)) return { kind: "contains-home", path: home };
   const agentDir = realPathOr(options.agentDir);

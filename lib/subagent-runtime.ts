@@ -206,24 +206,11 @@ export function createSubagentController(
     if (!parent?.isAlive()) throw new Error("Parent session is no longer available");
     if (!parent.sessionFile) throw new Error("Parent session must be persisted before starting a subagent");
 
-    // 团队成员身份注入（设计文档 §8.4）：把成员名与团队名写进子会话创建期的环境变量
-    // 窗口，子会话加载的扩展（如 pi-team）在工厂期捕获身份，据此拦截成员会话的团队级
-    // 操作。窗口在会话创建后立即关闭，避免污染同进程其他会话——lead 会话的团队工具
-    // 仍按 team-lead 行事。
-    const previousAgentName = process.env.PI_AGENT_NAME;
-    const previousTeamName = process.env.PI_TEAM_NAME;
-    if (request.agentName) process.env.PI_AGENT_NAME = request.agentName;
-    if (request.teamName) process.env.PI_TEAM_NAME = request.teamName;
-    const restoreIdentityEnv = (): void => {
-      if (request.agentName) {
-        if (previousAgentName === undefined) delete process.env.PI_AGENT_NAME;
-        else process.env.PI_AGENT_NAME = previousAgentName;
-      }
-      if (request.teamName) {
-        if (previousTeamName === undefined) delete process.env.PI_TEAM_NAME;
-        else process.env.PI_TEAM_NAME = previousTeamName;
-      }
-    };
+    // 团队成员身份（设计文档 §8.4）：成员名与团队名作为参数流进扩展工厂，pi-team 在
+    // 其工厂**同步函数体内**设置/还原 env 并在构造期捕获（见
+    // lib/pi-extension-builtins.ts 的 teamBuiltin）。不再在 start() 顶部开跨 await 的
+    // 进程 env 窗口——那个窗口横跨 addWorktree（最长 5 分钟）与 runtime 构建，并发
+    // 派发时互相串号，还可能把成员身份永久写回进程 env。
 
     let isolatedWorktree: { path: string; branch: string } | undefined;
     try {
@@ -286,7 +273,14 @@ export function createSubagentController(
       if (!chatOnly) initTheme();
       // 团队成员拿到的内置扩展（codemode / tool-search / mcp / pi-lsp / pi-team）。
       // 与 rpc-manager 的恢复路径必须装配同一批，否则「跑一次→重开」行为不一致。
-      const memberBuiltins = await createSubagentBuiltinExtensions({ agentDir, lean: request.lean === true });
+      // 成员身份经 teamIdentity 参数进工厂闭包。
+      const memberBuiltins = await createSubagentBuiltinExtensions({
+        agentDir,
+        lean: request.lean === true,
+        ...((request.agentName || request.teamName)
+          ? { teamIdentity: { agentName: request.agentName, teamName: request.teamName } }
+          : {}),
+      });
       const services = await createAgentSessionServices({
         cwd: childCwd,
         agentDir,
@@ -531,10 +525,8 @@ export function createSubagentController(
         resolveCompletion({ ...initialRun, status: "failed", completedAt: new Date().toISOString(), error: error instanceof Error ? error.message : String(error) });
       });
 
-      restoreIdentityEnv();
       return { run: stored.run, completion: stored.completion };
     } catch (error) {
-      restoreIdentityEnv();
       if (isolatedWorktree) {
         try { await removeWorktree(parent.cwd, isolatedWorktree.path); } catch { /* preserve setup failure and avoid force deletion */ }
       }

@@ -81,6 +81,7 @@ export class Scheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private owner = false;
   private ticking = false;
+  private tickPromise: Promise<void> | null = null;
 
   constructor(private readonly options: SchedulerOptions) {
     this.agentDir = options.agentDir ?? getAgentDir();
@@ -103,12 +104,10 @@ export class Scheduler {
 
   /** Try to acquire the lease now; a live owner cannot be overridden. */
   async takeover(): Promise<boolean> {
-    if (this.ticking) {
-      const info = this.ownerInfo();
-      if (info && info.pid !== this.pid && info.fresh && info.alive) {
-        throw new SchedulerTakeoverError(info);
-      }
-    }
+    // Wait for an in-flight tick instead of racing it: tick() returns
+    // immediately while `ticking`, so a takeover issued mid-tick saw a stale
+    // `this.owner` and could 409 a lease that was actually free.
+    while (this.tickPromise) await this.tickPromise;
     await this.tick();
     if (this.owner) return true;
     throw new SchedulerTakeoverError(this.ownerInfo());
@@ -137,6 +136,12 @@ export class Scheduler {
   async tick(): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
+    let settle!: () => void;
+    // Registered before the body runs: an entirely synchronous pass would
+    // otherwise resolve and clear the field before this assignment lands,
+    // leaving a settled promise behind that blocks takeover() forever.
+    const pass = new Promise<void>((resolve) => { settle = resolve; });
+    this.tickPromise = pass;
     try {
       const wasOwner = this.owner;
       this.owner = acquireLease(scheduledTasksDir(this.agentDir), {
@@ -152,7 +157,10 @@ export class Scheduler {
       console.error("[pi-web] scheduled task tick failed:", error instanceof Error ? error.message : error);
     } finally {
       this.ticking = false;
+      this.tickPromise = null;
+      settle();
     }
+    return pass;
   }
 
   private dueTasks(): ScheduledTask[] {
@@ -286,52 +294,74 @@ export class Scheduler {
     const sessionKnown = new Promise<ScheduledRun>((resolve) => { announce = resolve; });
 
     const done = (async (): Promise<ScheduledRun> => {
+      // Everything below is wrapped: statSync/updateRun/store reads can throw
+      // (EPERM, ENOSPC, a corrupt scheduled-tasks.json). Without this, the
+      // rejection is unhandled on the manual-run path (Node's default kills the
+      // process) and `sessionKnown` never settles, hanging POST .../run forever.
       let outcome: RunOutcome;
-      if (!existsSync(task.cwd) || !statSync(task.cwd).isDirectory()) {
+      try {
+        if (!existsSync(task.cwd) || !statSync(task.cwd).isDirectory()) {
+          outcome = {
+            status: "failed",
+            error: `Directory does not exist: ${task.cwd}`,
+            errorCode: "cwd-missing",
+            errorParams: { path: task.cwd },
+            countsAsFailure: true,
+          };
+        } else {
+          outcome = await executeRun(task, { runId, trigger: info.trigger, scheduledFor: info.scheduledFor }, this.options.runnerDeps, (sessionId) => {
+            const withSession = updateRun(task.id, runId, (run) => ({ ...run, sessionId }), this.agentDir) ?? { ...record, sessionId };
+            emitScheduledTaskEvent({ type: "run_started", taskId: task.id, taskName: task.name, runId, sessionId, trigger: info.trigger });
+            announce(withSession);
+          }, () => {
+            // The session stays open, so the user can open it from the page and answer.
+            const sessionId = listRuns(task.id, this.agentDir).find((run) => run.runId === runId)?.sessionId;
+            emitScheduledTaskEvent({ type: "run_attention", taskId: task.id, taskName: task.name, runId, ...(sessionId ? { sessionId } : {}) });
+          });
+        }
+      } catch (error) {
+        // A crashed run says nothing about the task itself, so it must not feed
+        // the consecutive-failure counter that auto-pauses tasks.
         outcome = {
           status: "failed",
-          error: `Directory does not exist: ${task.cwd}`,
-          errorCode: "cwd-missing",
-          errorParams: { path: task.cwd },
-          countsAsFailure: true,
+          error: error instanceof Error ? error.message : String(error),
+          countsAsFailure: false,
         };
-      } else {
-        outcome = await executeRun(task, { runId, trigger: info.trigger, scheduledFor: info.scheduledFor }, this.options.runnerDeps, (sessionId) => {
-          const withSession = updateRun(task.id, runId, (run) => ({ ...run, sessionId }), this.agentDir) ?? { ...record, sessionId };
-          emitScheduledTaskEvent({ type: "run_started", taskId: task.id, taskName: task.name, runId, sessionId, trigger: info.trigger });
-          announce(withSession);
-        }, () => {
-          // The session stays open, so the user can open it from the page and answer.
-          const sessionId = listRuns(task.id, this.agentDir).find((run) => run.runId === runId)?.sessionId;
-          emitScheduledTaskEvent({ type: "run_attention", taskId: task.id, taskName: task.name, runId, ...(sessionId ? { sessionId } : {}) });
-        });
       }
-      const finished = updateRun(task.id, runId, (run) => ({
-        ...run,
-        status: outcome.status,
-        endedAt: this.clock().toISOString(),
-        ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
-        ...(outcome.error ? { error: outcome.error } : {}),
-        ...(outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
-        ...(outcome.errorParams ? { errorParams: outcome.errorParams } : {}),
-      }), this.agentDir) ?? { ...record, status: outcome.status };
-      const autoPaused = this.recordOutcome(task.id, outcome);
-      announce(finished);
-      emitScheduledTaskEvent({
-        type: "run_finished",
-        taskId: task.id,
-        taskName: task.name,
-        runId,
-        trigger: info.trigger,
-        status: outcome.status,
-        ...(autoPaused ? { autoPaused: true } : {}),
-        ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
-        ...(outcome.error ? { error: outcome.error } : {}),
-        ...(outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
-        ...(outcome.errorParams ? { errorParams: outcome.errorParams } : {}),
-      });
-      emitScheduledTaskEvent({ type: "task_changed", taskId: task.id });
-      return finished;
+      try {
+        const finished = updateRun(task.id, runId, (run) => ({
+          ...run,
+          status: outcome.status,
+          endedAt: this.clock().toISOString(),
+          ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
+          ...(outcome.error ? { error: outcome.error } : {}),
+          ...(outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
+          ...(outcome.errorParams ? { errorParams: outcome.errorParams } : {}),
+        }), this.agentDir) ?? { ...record, status: outcome.status };
+        const autoPaused = this.recordOutcome(task.id, outcome);
+        announce(finished);
+        emitScheduledTaskEvent({
+          type: "run_finished",
+          taskId: task.id,
+          taskName: task.name,
+          runId,
+          trigger: info.trigger,
+          status: outcome.status,
+          ...(autoPaused ? { autoPaused: true } : {}),
+          ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
+          ...(outcome.error ? { error: outcome.error } : {}),
+          ...(outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
+          ...(outcome.errorParams ? { errorParams: outcome.errorParams } : {}),
+        });
+        emitScheduledTaskEvent({ type: "task_changed", taskId: task.id });
+        return finished;
+      } catch (error) {
+        // announce() must still run: `sessionKnown` is awaited by runNow's caller
+        // and its rejection path is the hang described above.
+        announce({ ...record, status: outcome.status, endedAt: this.clock().toISOString(), ...(outcome.error ? { error: outcome.error } : {}) });
+        console.error("[pi-web] scheduled task run record failed:", error instanceof Error ? error.message : error);
+        return { ...record, status: outcome.status, endedAt: this.clock().toISOString(), ...(outcome.error ? { error: outcome.error } : {}) };
+      }
     })().finally(() => { this.active.delete(runId); });
 
     this.active.set(runId, done);

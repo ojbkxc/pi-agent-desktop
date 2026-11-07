@@ -19,7 +19,12 @@ export async function GET() {
 
 export async function PUT(req: Request) {
   try {
-    const body = await req.json() as Record<string, unknown>;
+    let body: Record<string, unknown>;
+    try {
+      body = await req.json() as Record<string, unknown>;
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
     const existing = readModelsConfig();
     const incomingProviders = (body.providers ?? {}) as Record<string, Record<string, unknown>>;
     const existingProviders = (existing.providers ?? {}) as Record<string, Record<string, unknown>>;

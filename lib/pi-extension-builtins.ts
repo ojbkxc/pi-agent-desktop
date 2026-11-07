@@ -60,8 +60,17 @@ function lspBuiltin(): InlineExtension {
 /**
  * 团队扩展：注册 team_* 工具；宿主桥在 session_start 时绑定「哪个会话在跑团队工具」，
  * 从而把 createSubagentController 的 start/resume/steer 复用成团队成员的 spawn/revive/steer。
+ *
+ * 成员身份（`identity`）不再走进程 env 跨 await 的注入窗口（并发派发会串号，见
+ * lib/subagent-runtime.ts 的旧窗口），而是作为参数流进本闭包，在工厂同步函数体内
+ * 设置/还原 env：pi-team 的 createTeamRuntime 在构造期同步捕获
+ * `process.env.PI_AGENT_NAME / PI_TEAM_NAME`，set → 捕获 → restore 之间没有任何
+ * await，对其他并发派发是原子的。
  */
-function teamBuiltin(controller: SubagentController | undefined): InlineExtension {
+function teamBuiltin(
+  controller: SubagentController | undefined,
+  identity?: { agentName?: string; teamName?: string },
+): InlineExtension {
   return builtin(TEAM_BUILTIN_NAME, (pi) => {
     let sessionContext: ExtensionContext | undefined;
     const host =
@@ -71,7 +80,27 @@ function teamBuiltin(controller: SubagentController | undefined): InlineExtensio
     pi.on("session_start", (_event, ctx) => {
       sessionContext = ctx;
     });
-    createPiTeamExtension(pi as unknown as Parameters<typeof createPiTeamExtension>[0], host);
+    const previousAgentName = process.env.PI_AGENT_NAME;
+    const previousTeamName = process.env.PI_TEAM_NAME;
+    const captureIdentity = Boolean(identity?.agentName || identity?.teamName);
+    if (captureIdentity) {
+      if (identity?.agentName) process.env.PI_AGENT_NAME = identity.agentName;
+      if (identity?.teamName) process.env.PI_TEAM_NAME = identity.teamName;
+    }
+    try {
+      createPiTeamExtension(pi as unknown as Parameters<typeof createPiTeamExtension>[0], host);
+    } finally {
+      if (captureIdentity) {
+        if (identity?.agentName) {
+          if (previousAgentName === undefined) delete process.env.PI_AGENT_NAME;
+          else process.env.PI_AGENT_NAME = previousAgentName;
+        }
+        if (identity?.teamName) {
+          if (previousTeamName === undefined) delete process.env.PI_TEAM_NAME;
+          else process.env.PI_TEAM_NAME = previousTeamName;
+        }
+      }
+    }
   });
 }
 
@@ -90,6 +119,8 @@ function purgeBuiltin(): InlineExtension {
 export interface PiExtensionBuiltinsOptions {
   /** 既有 subagent controller；缺省（子 agent 被关闭）时团队桥降级为不可派发。 */
   subagentController?: SubagentController;
+  /** 成员身份（团队成员子会话）：工厂同步体内注入 env 供 pi-team 构造期捕获。 */
+  teamIdentity?: { agentName?: string; teamName?: string };
   /** 测试用：只想要某个扩展时传名字集合。 */
   include?: readonly string[];
 }
@@ -100,7 +131,9 @@ export function createPiExtensionBuiltins(options: PiExtensionBuiltinsOptions = 
   const wants = (name: string) => !include || include.has(name);
   return [
     ...(wants(LSP_BUILTIN_NAME) ? [lspBuiltin()] : []),
-    ...(wants(TEAM_BUILTIN_NAME) ? [teamBuiltin(options.subagentController)] : []),
+    ...(wants(TEAM_BUILTIN_NAME)
+      ? [teamBuiltin(options.subagentController, options.teamIdentity)]
+      : []),
     ...(wants(PURGE_BUILTIN_NAME) ? [purgeBuiltin()] : []),
   ];
 }

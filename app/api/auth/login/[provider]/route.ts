@@ -22,7 +22,13 @@ export async function POST(
   { params }: { params: Promise<{ provider: string }> }
 ) {
   const { provider } = await params;
-  const { token, code } = (await req.json()) as { token?: string; code?: string };
+  let body: { token?: string; code?: string };
+  try {
+    body = (await req.json()) as { token?: string; code?: string };
+  } catch {
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+  const { token, code } = body;
 
   if (!token || !code) {
     return Response.json({ error: "token and code required" }, { status: 400 });
@@ -69,7 +75,16 @@ export async function GET(
 
   const stream = new ReadableStream({
     async start(controller) {
-      const modelRuntime = await createModelRuntimeWithExtensions();
+      // SDK/extension initialization can throw; like every other failure in this
+      // stream it must reach the client as an error event, not a dropped connection.
+      let modelRuntime: Awaited<ReturnType<typeof createModelRuntimeWithExtensions>>;
+      try {
+        modelRuntime = await createModelRuntimeWithExtensions();
+      } catch (err) {
+        send(controller, { type: "error", message: err instanceof Error ? err.message : String(err) });
+        close(controller);
+        return;
+      }
       if (!modelRuntime.getProvider(provider)?.auth.oauth) {
         send(controller, { type: "error", message: `Unknown provider: ${provider}` });
         close(controller);

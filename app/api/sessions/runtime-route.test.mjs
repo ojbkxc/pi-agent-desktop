@@ -398,3 +398,60 @@ test("session detail returns a gzip-compressed response when the client accepts 
   const payload = JSON.parse(gunzipSync(Buffer.from(await response.arrayBuffer())).toString("utf8"));
   assert.equal(payload.info.firstMessage, firstMessage);
 });
+
+test("deleting a session re-parents a sibling subagent and preserves its transcript body (backend-8)", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-web-delete-reparent-"));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  invalidateSessionListCache();
+  t.after(async () => {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    invalidateSessionListCache();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  // Grandparent (the delete target's parent): a real session file so the
+  // cascade can resolve its path.
+  const grandparent = SessionManager.create(dir);
+  grandparent.appendMessage({ role: "user", content: "grandparent", timestamp: Date.now() });
+  const grandparentPath = grandparent.getSessionFile();
+
+  // The parent being deleted.
+  const parent = SessionManager.create(dir, undefined, { parentSession: grandparentPath });
+  parent.appendMessage({ role: "user", content: "parent", timestamp: Date.now() });
+  const parentId = parent.getSessionId();
+  const parentPath = parent.getSessionFile();
+
+  // A fork child of the parent (re-parent applies to forks; a subagent child
+  // is cascade-deleted with its parent) with a transcript body the rewrite
+  // must keep.
+  const child = SessionManager.create(dir, undefined, { parentSession: parentPath });
+  child.appendMessage({ role: "user", content: "child task", timestamp: Date.now() });
+  child.appendMessage({ role: "assistant", content: [{ type: "text", text: "child done" }], timestamp: Date.now() });
+  const childId = child.getSessionId();
+  const childPath = child.getSessionFile();
+  const bodyBefore = (await readFile(childPath, "utf8")).split("\n");
+
+  invalidateSessionListCache();
+  const context = { params: Promise.resolve({ id: parentId }) };
+  const response = await deleteSession(new Request(`http://localhost/api/sessions/${parentId}`, { method: "DELETE" }), context);
+  assert.equal(response.status, 200);
+
+  const after = (await readFile(childPath, "utf8")).split("\n");
+  // Header re-pointed at the grandparent: the file stores the path relative to
+  // the sessions dir, so compare by resolved key rather than the raw string.
+  const header = JSON.parse(after[0]);
+  const { sessionPathKey } = await jiti.import("../../../lib/session-path.ts");
+  assert.equal(sessionPathKey(header.parentSession), sessionPathKey(grandparentPath));
+  // The transcript body (user/assistant lines) is untouched.
+  const bodyAfter = after.slice(1);
+  assert.deepEqual(
+    bodyAfter.filter((l) => l.includes("child done")),
+    bodyBefore.filter((l) => l.includes("child done")),
+    "assistant message lines preserved",
+  );
+  // The user message line survives too, in order.
+  assert.ok(after.some((l) => l.includes("child task")), "user message line preserved");
+  invalidateSessionPathCache(childId);
+});

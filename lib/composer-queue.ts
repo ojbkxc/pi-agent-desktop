@@ -20,6 +20,18 @@ export function getComposerQueueVersion(sessionId: string): number {
   return registry.__piComposerQueues?.get(sessionId)?.version ?? 0;
 }
 
+/**
+ * Drop a session's outbox state entirely — for a session whose file was deleted
+ * (DELETE /api/sessions/[id]) nothing will ever deliver or read it again, and
+ * undelivered entries, image payloads included, would otherwise stay on
+ * globalThis for the life of the process. Deliberately NOT called from
+ * ComposerQueue.dispose(): the outbox must survive idle wrapper eviction
+ * (docs/agents/fork-sessions.md), so only permanent destruction clears it.
+ */
+export function disposeComposerQueueState(sessionId: string): void {
+  registry.__piComposerQueues?.delete(sessionId);
+}
+
 /** Editable outbox. Items enter the SDK only when claimed for delivery.
  * Never clear/rebuild SDK queues: that loses attachments and races its agent loop.
  */

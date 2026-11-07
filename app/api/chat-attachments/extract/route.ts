@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { isApiRequestAllowed } from "@/lib/request-security";
 import {
+  RequestBodyTooLargeError,
+  readRequestBytesWithinLimit,
+} from "@/lib/bounded-form-data";
+import {
   CHAT_ATTACHMENT_EXTRACT_MAX_BYTES,
   CHAT_ATTACHMENT_MAX_FILE_BYTES,
 } from "@/lib/chat-attachments";
@@ -16,14 +20,13 @@ export async function POST(req: Request) {
   if (!isApiRequestAllowed(req)) {
     return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
   }
-  const declared = Number(req.headers.get("content-length") ?? "0");
-  if (declared > CHAT_ATTACHMENT_EXTRACT_MAX_BYTES) {
-    return NextResponse.json({ error: "too-large" }, { status: 413 });
-  }
   try {
-    const buffer = Buffer.from(await req.arrayBuffer());
-    if (buffer.length === 0 || buffer.length > CHAT_ATTACHMENT_EXTRACT_MAX_BYTES) {
-      return NextResponse.json({ error: buffer.length === 0 ? "not-text" : "too-large" }, { status: buffer.length === 0 ? 400 : 413 });
+    // Bounded read: a chunked request has no Content-Length, so the declared
+    // header alone would let an unbounded body be buffered in full.
+    const bytes = await readRequestBytesWithinLimit(req, CHAT_ATTACHMENT_EXTRACT_MAX_BYTES);
+    const buffer = Buffer.from(bytes);
+    if (buffer.length === 0) {
+      return NextResponse.json({ error: "not-text" }, { status: 400 });
     }
     const mammoth = await import("mammoth");
     const { value } = await mammoth.extractRawText({ buffer });
@@ -33,7 +36,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "too-large" }, { status: 413 });
     }
     return NextResponse.json({ text });
-  } catch {
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return NextResponse.json({ error: "too-large" }, { status: 413 });
+    }
     return NextResponse.json({ error: "not-text" }, { status: 422 });
   }
 }

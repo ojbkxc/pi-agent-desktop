@@ -1693,13 +1693,33 @@ export class AgentSessionWrapper {
 
     this.shutdownPromise = (async () => {
       try {
+        // Binding has no deadline of its own: a session_start handler that never
+        // resolves would hold destroy()/disposeMcpHost() forever and leak the SDK
+        // session and its MCP children. Race it against the same deadline the
+        // session_shutdown event gets.
+        let bindTimer: ReturnType<typeof setTimeout> | undefined;
+        const bindDeadline = new Promise<"timeout">((resolve) => {
+          bindTimer = setTimeout(() => resolve("timeout"), SESSION_SHUTDOWN_DEADLINE_MS);
+          // A quitting process must not wait for a hung binding.
+          bindTimer.unref?.();
+        });
         try {
-          await this.waitForExtensionsBound();
+          const outcome = await Promise.race([
+            this.waitForExtensionsBound().then(() => "bound" as const),
+            bindDeadline,
+          ]);
+          if (outcome === "timeout") {
+            console.warn(
+              `[pi-web] extension binding for session ${this.sessionId} did not finish within ${SESSION_SHUTDOWN_DEADLINE_MS} ms; disposing it anyway`,
+            );
+          }
         } catch (error) {
           console.error(
             "[pi-web] extension binding failed before session shutdown:",
             error instanceof Error ? error.message : error,
           );
+        } finally {
+          clearTimeout(bindTimer);
         }
         // After binding, so the host's session_start has run and finds nothing to record later.
         this.disposeMcpHost();

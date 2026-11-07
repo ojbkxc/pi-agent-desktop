@@ -43,7 +43,9 @@ function profile(overrides = {}) {
 function jsonRequest(method, body) {
   return new Request("http://localhost/api/subagents/profiles", {
     method,
-    headers: { "Content-Type": "application/json" },
+    // The guard reads Host; undici only sets it from the URL when the Request
+    // goes through fetch, so the handler-level call needs it explicitly.
+    headers: { "Content-Type": "application/json", Host: "localhost" },
     body: JSON.stringify(body),
   });
 }

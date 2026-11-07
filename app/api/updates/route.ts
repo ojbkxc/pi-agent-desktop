@@ -192,6 +192,20 @@ export async function GET(request: Request) {
       .finally(() => {
         globalThis.__piWebAppUpdateCheck = undefined;
       });
+  } else if (forceRefresh) {
+    // A manual refresh that arrives while a scheduled check is in flight must
+    // not silently degrade to joining it: that check only queries components
+    // whose interval is due, so the forced one would return stale release info.
+    // Wait for the in-flight check, then run the forced one.
+    try {
+      await globalThis.__piWebAppUpdateCheck;
+    } catch {
+      // The in-flight check's errors are reported through its own response.
+    }
+    globalThis.__piWebAppUpdateCheck = performUpdateCheck(true)
+      .finally(() => {
+        globalThis.__piWebAppUpdateCheck = undefined;
+      });
   }
 
   try {

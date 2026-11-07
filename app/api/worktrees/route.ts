@@ -15,6 +15,15 @@ import {
 import { allowFileRoot, isCwdAllowed } from "@/lib/file-access";
 import { projectIdentityKey } from "@/lib/project-identity";
 
+/** Bad JSON must be a 400, not the handler's generic 500. */
+async function readJsonBody<T>(req: Request): Promise<T | null> {
+  try {
+    return await req.json() as T;
+  } catch {
+    return null;
+  }
+}
+
 /** Same gate as /api/files: only session cwds / project roots / explicitly
  *  allowed dirs may be inspected or mutated through this endpoint. */
 async function checkCwdAllowed(cwd: string): Promise<NextResponse | null> {
@@ -80,7 +89,8 @@ export async function GET(req: Request) {
 // POST /api/worktrees  body: { cwd, branch }  →  { path, branch }
 export async function POST(req: Request) {
   try {
-    const body = await req.json() as { cwd?: string; branch?: string };
+    const body = await readJsonBody<{ cwd?: string; branch?: string }>(req);
+    if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
     if (!body.cwd || typeof body.cwd !== "string") {
       return NextResponse.json({ error: "cwd is required" }, { status: 400 });
     }
@@ -106,7 +116,8 @@ export async function POST(req: Request) {
 // tracking branch when the name only exists on one remote).
 export async function PUT(req: Request) {
   try {
-    const body = await req.json() as { cwd?: string; branch?: string };
+    const body = await readJsonBody<{ cwd?: string; branch?: string }>(req);
+    if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
     if (!body.cwd || typeof body.cwd !== "string") {
       return NextResponse.json({ error: "cwd is required" }, { status: 400 });
     }
@@ -130,7 +141,8 @@ export async function PUT(req: Request) {
 // DELETE /api/worktrees  body: { cwd, path, force? }
 export async function DELETE(req: Request) {
   try {
-    const body = await req.json() as { cwd?: string; path?: string; force?: boolean };
+    const body = await readJsonBody<{ cwd?: string; path?: string; force?: boolean }>(req);
+    if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
     if (!body.cwd || typeof body.cwd !== "string") {
       return NextResponse.json({ error: "cwd is required" }, { status: 400 });
     }

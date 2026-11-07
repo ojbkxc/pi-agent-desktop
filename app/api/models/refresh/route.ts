@@ -1,4 +1,6 @@
+import { NextResponse } from "next/server";
 import { shareModelCatalogRefresh } from "@/lib/model-catalog-refresh";
+import { isApiRequestAllowed } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +16,9 @@ export const dynamic = "force-dynamic";
  * there is no second shape of the model list to keep in agreement.
  */
 export async function POST(req: Request) {
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
   let provider: string | undefined;
   try {
     const body = await req.json() as { provider?: unknown };

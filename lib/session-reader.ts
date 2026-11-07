@@ -155,6 +155,17 @@ function readSessionRelationEntries(filePath: string): SessionEntry[] {
   ];
 }
 
+/**
+ * The bounded entries a consumer needs to detect a subagent session and read its
+ * lifecycle: the header lines' successors plus, when the prefix shows a
+ * SUBAGENT_META custom entry, the file's tail (result/status live there on a
+ * long session). Never reads a whole file, so scans over a session directory
+ * (DELETE cascade, re-parent) stay off multi-hundred-MB reads.
+ */
+export function readSessionSubagentScanEntries(filePath: string): SessionEntry[] {
+  return readSessionRelationEntries(filePath);
+}
+
 export async function attachSessionProjectInfo(sessions: SessionInfo[]): Promise<SessionInfo[]> {
   const uniqueCwds = [...new Set(sessions.map((s) => s.cwd).filter(Boolean))];
   const projectByCwd = new Map<string, ProjectInfo>();

@@ -1,5 +1,4 @@
 import { statSync } from "node:fs";
-import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { getAgentDir, type McpServerConfig } from "@earendil-works/pi-coding-agent";
 import type { McpErrorResponse, McpRefusalReason, McpScope } from "./api-types";
@@ -11,6 +10,7 @@ import { findWebPasswordField } from "./mcp-transport";
 import { loadPiSdkInternals, type PiSdkInternals } from "./pi-sdk-internals";
 import { getProjectTrustStatus } from "./project-trust";
 import { hasJsonContentType, isApiRequestAllowed } from "./request-security";
+import { userHome } from "./user-home";
 
 // The checks a route makes before it connects one `mcp.json` entry outside any
 // session: Settings › MCP's Test (`POST /api/mcp/test`) and its sign-in
@@ -209,7 +209,7 @@ export async function readConnectableMcpEntry(req: Request): Promise<McpConnecta
       sourcePath: read.sourcePath,
       configKey: mcpEntryConfigKey(read.value, config),
       config,
-      cwd: project?.cwd ?? homedir(),
+      cwd: project?.cwd ?? userHome(),
     };
   } catch (error) {
     return mcpEntryRefusal(500, "internal", errorMessage(error));

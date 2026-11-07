@@ -78,7 +78,6 @@ app/api/
   relay/route.ts                  GET/PUT encrypted relay status and config (PUT local-only)
   relay/pairing/**                POST pairing QR ticket, POST [id] approve/deny (local-only)
   relay/devices/[id]/route.ts     DELETE revoke a paired phone (local-only)
-  auth/all-providers/route.ts     GET API-key provider list
   auth/api-key/[provider]/route.ts GET/POST/DELETE provider API key status/storage
   auth/login/[provider]/route.ts  GET OAuth/device-code SSE | POST manual code
   auth/logout/[provider]/route.ts POST OAuth logout

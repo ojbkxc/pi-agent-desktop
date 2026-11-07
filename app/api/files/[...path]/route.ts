@@ -49,6 +49,9 @@ const IGNORED_SUFFIXES = [".pyc"];
 const FILE_REQUEST_TYPES = ["list", "read", "download", "meta", "preview", "serve", "watch", "watch-dir"] as const;
 type FileRequestType = typeof FILE_REQUEST_TYPES[number];
 const FILE_REQUEST_TYPE_SET = new Set<string>(FILE_REQUEST_TYPES);
+/** Comment frames on the watch SSEs keep proxies/tunnels from cutting idle connections. */
+const FILE_WATCH_HEARTBEAT_MS = 30_000;
+const watchHeartbeatEncoder = new TextEncoder();
 const MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_UPLOAD_TOTAL_BYTES = 100 * 1024 * 1024;
 // Multipart boundaries and headers are not file bytes, but must be bounded too.
@@ -650,7 +653,10 @@ export async function GET(
 
     let stat: fs.Stats | undefined;
     try {
-      stat = fs.statSync(filePath);
+      // Async stat: a path on a slow volume (a dead UNC host the session
+      // reference guard above now refuses, a spun-down disk) must not hold the
+      // event loop while the request waits.
+      stat = await fs.promises.stat(filePath);
     } catch {
       if (type !== "watch") {
         return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -775,6 +781,7 @@ export async function GET(
         return NextResponse.json({ error: "Not a file" }, { status: 400 });
       }
       let watcher: fs.FSWatcher | null = null;
+      let heartbeat: ReturnType<typeof setInterval> | null = null;
       let lastMtimeMs = stat?.mtimeMs ?? 0;
       let lastCtimeMs = stat?.ctimeMs ?? 0;
       let lastIno = stat?.ino ?? 0;
@@ -790,6 +797,13 @@ export async function GET(
               // client disconnected
             }
           };
+          // A quiet file produces no events; the comment frame keeps proxies
+          // and tunnels (Cloudflare) from closing the idle connection, like
+          // agent-event-stream's heartbeat.
+          heartbeat = setInterval(() => {
+            try { controller.enqueue(watchHeartbeatEncoder.encode(":\n\n")); } catch { /* client disconnected */ }
+          }, FILE_WATCH_HEARTBEAT_MS);
+          heartbeat.unref?.();
           try {
             const watchedDirectory = path.dirname(filePath);
             watcher = fs.watch(watchedDirectory, (_eventType, changedName) => {
@@ -834,6 +848,7 @@ export async function GET(
           }
         },
         cancel() {
+          if (heartbeat) clearInterval(heartbeat);
           try { watcher?.close(); } catch { /* ignore */ }
         },
       });
@@ -853,6 +868,7 @@ export async function GET(
       }
       let watcher: fs.FSWatcher | null = null;
       let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+      let heartbeat: ReturnType<typeof setInterval> | null = null;
       const isIgnoredEventPath = (eventPath: string | Buffer | null | undefined): boolean => {
         if (typeof eventPath !== "string" || eventPath.length === 0) return false;
         return eventPath
@@ -871,6 +887,11 @@ export async function GET(
             }
           };
           send("connected", { path: filePath });
+          // Same idle-connection keepalive as the per-file watch above.
+          heartbeat = setInterval(() => {
+            try { controller.enqueue(watchHeartbeatEncoder.encode(":\n\n")); } catch { /* client disconnected */ }
+          }, FILE_WATCH_HEARTBEAT_MS);
+          heartbeat.unref?.();
           // Coalesce bursts (builds, git operations) into a single change event.
           const scheduleChange = () => {
             if (debounceTimer) return;
@@ -892,15 +913,9 @@ export async function GET(
             // top-level entry events are enough; navigation re-lists as needed.
             watcher = fs.watch(filePath, handleEvent);
           } catch {
-            // Recursive watching may be unavailable on some platforms; fall
-            // back to watching only the top-level directory.
-            try {
-              watcher = fs.watch(filePath, handleEvent);
-            } catch {
-              send("error", { message: "Failed to watch directory" });
-              controller.close();
-              return;
-            }
+            send("error", { message: "Failed to watch directory" });
+            controller.close();
+            return;
           }
           watcher.on("error", () => {
             try { controller.close(); } catch { /* ignore */ }
@@ -908,6 +923,7 @@ export async function GET(
         },
         cancel() {
           if (debounceTimer) clearTimeout(debounceTimer);
+          if (heartbeat) clearInterval(heartbeat);
           try { watcher?.close(); } catch { /* ignore */ }
         },
       });

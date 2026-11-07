@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { existsSync, readdirSync, readFileSync, statSync, unlinkSync } from "fs";
+import { createReadStream, createWriteStream, existsSync, readdirSync, statSync, unlinkSync } from "fs";
+import { createInterface } from "readline";
 import { dirname, join } from "path";
 import {
   attachSessionProjectInfo,
@@ -13,6 +14,7 @@ import {
   invalidateSessionManagerCache,
   buildSessionContext,
   readSessionHeader,
+  readSessionSubagentScanEntries,
 } from "@/lib/session-reader";
 import { sessionPathKey } from "@/lib/session-path";
 import { abortSubagent, getRpcSession, getRpcSessionInfos } from "@/lib/rpc-manager";
@@ -28,7 +30,8 @@ import { jsonResponse } from "@/lib/json-response";
 import { isChatFolderPath } from "@/lib/chat-workspace";
 import { samePath } from "@/lib/paths";
 import { moveFolderToTrash } from "@/lib/trash";
-import { replaceFileAtomicSync } from "@/lib/atomic-file";
+import { disposeComposerQueueState } from "@/lib/composer-queue";
+import { replaceFileAtomicStream } from "@/lib/atomic-file";
 
 export async function GET(
   req: Request,
@@ -222,6 +225,73 @@ export async function PATCH(
 // DELETE /api/sessions/[id]
 // ?chatFolder=trash also moves a chat's own folder to the Trash, unless another session
 // (a fork shares its parent's folder) still lives there.
+
+/**
+ * Re-point a session file at a new parent: rewrite the header's
+ * `parentSession` and, when re-parenting into a live session id, the first
+ * SUBAGENT_META entry's `parentSessionId`/`parentSessionPath`. Every other
+ * line passes through untouched. Streams line by line so an 82 MB transcript
+ * is never held in memory (the old whole-file readFileSync stopped the event
+ * loop once per deleted child); the swap itself is replaceFileAtomicStream's,
+ * so the symlink target, permission bits, an fsync before the rename and temp
+ * cleanup on failure all match the string form.
+ */
+async function reattachSessionFile(
+  childPath: string,
+  rewrite: { header: { parentSession?: string }; parentSessionPath: string; parentSessionId?: string },
+): Promise<void> {
+  await replaceFileAtomicStream(childPath, async (tempPath) => {
+    // The temp file already exists ("wx"/0600, created by the helper), so the
+    // write stream appends instead of truncating.
+    const output = createWriteStream(tempPath, { flags: "r+", mode: 0o600 });
+    const input = createReadStream(childPath, "utf8");
+    const lines = createInterface({ input, crlfDelay: Infinity });
+    let lineIndex = 0;
+    let metaReplaced = false;
+    try {
+      for await (const line of lines) {
+        if (lineIndex === 0) {
+          output.write(`${JSON.stringify({ ...rewrite.header, parentSession: rewrite.parentSessionPath })}\n`);
+        } else if (
+          rewrite.parentSessionId
+          && !metaReplaced
+          && line.includes(SUBAGENT_META_TYPE)
+        ) {
+          let replaced = false;
+          try {
+            const entry = JSON.parse(line) as { type?: string; customType?: string; data?: unknown };
+            if (
+              entry.type === "custom"
+              && entry.customType === SUBAGENT_META_TYPE
+              && typeof entry.data === "object"
+              && entry.data !== null
+              && !Array.isArray(entry.data)
+            ) {
+              entry.data = { ...entry.data, parentSessionId: rewrite.parentSessionId, parentSessionPath: rewrite.parentSessionPath };
+              output.write(`${JSON.stringify(entry)}\n`);
+              replaced = true;
+            }
+          } catch { /* a torn line is copied as-is below */ }
+          if (!replaced) output.write(`${line}\n`);
+          else metaReplaced = true;
+        } else {
+          output.write(`${line}\n`);
+        }
+        lineIndex += 1;
+      }
+      await new Promise<void>((resolve, reject) => {
+        output.end(() => resolve());
+        output.on("error", reject);
+      });
+    } finally {
+      lines.close();
+      input.destroy();
+      // A failure must not hold the temp file open: the helper's cleanup unlinks
+      // it, which Windows refuses while a writer still has it open.
+      if (!output.writableEnded) output.destroy();
+    }
+  });
+}
 export async function DELETE(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -276,18 +346,17 @@ export async function DELETE(
         const childPath = join(dir, file);
         if (sessionPathKey(childPath) === targetPathKey) continue;
         try {
-          const lines = readFileSync(childPath, "utf8").split("\n");
-          const header = JSON.parse(lines[0]) as { type?: string; id?: string };
-          if (header.type !== "session" || typeof header.id !== "string") continue;
-          const entries = lines.slice(1).flatMap((line) => {
-            try { return [JSON.parse(line) as SessionEntry]; } catch { return []; }
-          });
-          const subagent = readSubagentRun(entries, header.id, childPath);
+          // Bounded read (header lines + subagent tail): a sibling transcript
+          // can be hundreds of MB, and this loop runs for every file in the
+          // directory twice during a delete.
+          const header = readSessionHeader(childPath);
+          if (!header?.id) continue;
+          const subagent = readSubagentRun(readSessionSubagentScanEntries(childPath), header.id, childPath);
           if (!subagent) continue;
           const children = childrenByParent.get(subagent.parentSessionId) ?? [];
-          children.push(header.id);
+          children.push(subagent.sessionId);
           childrenByParent.set(subagent.parentSessionId, children);
-          sessionPaths.set(header.id, childPath);
+          sessionPaths.set(subagent.sessionId, childPath);
         } catch { /* skip malformed or concurrently removed sessions */ }
       }
     } catch { /* skip if dir unreadable */ }
@@ -327,43 +396,19 @@ export async function DELETE(
         const childPath = join(dir, file);
         if (deletedPathKeys.has(sessionPathKey(childPath))) continue;
         try {
-          const content = readFileSync(childPath, "utf8");
-          const lines = content.split("\n");
-          const header = JSON.parse(lines[0]) as { type?: string; parentSession?: string };
+          // Bounded header read decides the rewrite; the file body itself is
+          // streamed through a line-level rewrite instead of a whole-file
+          // readFileSync (a sibling transcript can be hundreds of MB).
+          const header = readSessionHeader(childPath);
           if (
-            header.type === "session" &&
-            header.parentSession &&
-            sessionPathKey(header.parentSession) === targetPathKey
-          ) {
-            // Rewrite header with new parentSession
-            header.parentSession = parentSessionPath;
-            lines[0] = JSON.stringify(header);
-            if (parentSessionPath && parentSessionId) {
-              for (let index = 1; index < lines.length; index += 1) {
-                let entry: { type?: string; customType?: string; data?: unknown };
-                try {
-                  entry = JSON.parse(lines[index]);
-                } catch {
-                  continue;
-                }
-                if (
-                  entry.type !== "custom"
-                  || entry.customType !== SUBAGENT_META_TYPE
-                  || typeof entry.data !== "object"
-                  || entry.data === null
-                  || Array.isArray(entry.data)
-                ) continue;
-                entry.data = {
-                  ...entry.data,
-                  parentSessionId,
-                  parentSessionPath,
-                };
-                lines[index] = JSON.stringify(entry);
-                break;
-              }
-            }
-            replaceFileAtomicSync(childPath, lines.join("\n"));
-          }
+            !header?.parentSession ||
+            sessionPathKey(header.parentSession) !== targetPathKey
+          ) continue;
+          await reattachSessionFile(childPath, {
+            header,
+            parentSessionPath: parentSessionPath ?? "",
+            ...(parentSessionPath && parentSessionId ? { parentSessionId } : {}),
+          });
         } catch { /* skip malformed */ }
       }
     } catch { /* skip if dir unreadable */ }
@@ -383,6 +428,8 @@ export async function DELETE(
       }
       invalidateSessionPathCache(deletedId);
       invalidateSessionManagerCache(deletedPath);
+      // The session file is gone: no reopen will ever deliver or read its outbox.
+      disposeComposerQueueState(deletedId);
     }
     invalidateSessionListCache();
     let folderTrashed = false;

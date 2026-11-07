@@ -424,6 +424,11 @@ export interface SubagentBuiltinExtensionsOptions {
   agentDir: string;
   /** lean 档：成员一个扩展都不加载（对齐 cc-haha 的 `agentProfile === "lean"`）。 */
   lean?: boolean;
+  /**
+   * 成员身份（pi-team 构造期捕获用）。经工厂闭包同步注入，不再依赖进程 env 的
+   * 跨 await 窗口——并发派发时窗口会互相串号（见 lib/pi-extension-builtins.ts）。
+   */
+  teamIdentity?: { agentName?: string; teamName?: string };
   /** Timing overrides for tests. */
   mcpHost?: Pick<McpHostOptions, "idleMs" | "promptWaitMs">;
 }
@@ -461,9 +466,9 @@ export interface SubagentBuiltinExtensions extends PiWebBuiltinExtensions {
  *   的延迟工具声明。
  * - 加 `pi-lsp`（成员要读代码）与 `pi-team`。pi-team 这里**固定挂不可用宿主**：
  *   成员因此只有邮箱（见 `MEMBER_TEAM_TOOL_NAMES`），派发在 host 层直接抛错。
- *   这比单靠扩展侧的 `requireTeamLead()` 硬——那道检查依赖进程级 `process.env`
- *   身份注入（lib/subagent-runtime.ts 的设置/还原窗口），并发派成员时理论上可能
- *   串号，一旦捕获失败就会放行递归派发。
+ *   这比单靠扩展侧的 `requireTeamLead()` 硬——那道检查依赖构造期 env 捕获的身份
+ *   （现由 `teamIdentity` 参数经工厂同步体注入，见 lib/pi-extension-builtins.ts），
+ *   一旦捕获失败就会放行递归派发。
  * - **不给** pi-purge（`/purge` 是 composer 命令，子会话没有 composer）、
  *   artifactGuide（`:::artifact` 提示）、projectCommandBash（composer 的 `!command`）、
  *   subagent（派发能力本身，其三个工具本就进了 `excludeTools`）。
@@ -477,8 +482,10 @@ export async function createSubagentBuiltinExtensions(
     ...(options.mcpHost ? { mcpHost: options.mcpHost } : {}),
   });
   // `subagentController` 缺省 → teamBuiltin 落到 createUnavailableTeamHost()。
+  // 成员身份从参数流入工厂闭包（同步注入/还原 env），不再用进程 env 窗口。
   const crossEnd = createPiExtensionBuiltins({
     include: [LSP_BUILTIN_NAME, TEAM_BUILTIN_NAME],
+    ...(options.teamIdentity ? { teamIdentity: options.teamIdentity } : {}),
   });
   return {
     extensions: [...web.extensions, ...crossEnd, createReadOnlyMcpPolicyExtension()],

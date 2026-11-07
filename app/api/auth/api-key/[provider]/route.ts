@@ -11,7 +11,13 @@ type Params = { params: Promise<{ provider: string }> };
 export async function POST(req: Request, { params }: Params) {
   const { provider } = await params;
   try {
-    const { apiKey } = await req.json() as { apiKey?: string };
+    let parsed: { apiKey?: string };
+    try {
+      parsed = await req.json() as { apiKey?: string };
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
+    const { apiKey } = parsed;
     if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
       return NextResponse.json({ error: "apiKey is required" }, { status: 400 });
     }
