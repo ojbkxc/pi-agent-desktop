@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { useTeamTimeline } from "@/hooks/useTeamTimeline";
 import {
   layoutSwimlanes,
   EVENT_HEIGHT,
@@ -9,7 +10,6 @@ import {
   LANE_LABEL_WIDTH,
   type MemberStatus,
   type SwimlaneEventType,
-  type TeamWorkbenchSnapshot,
 } from "@/lib/agent-teams-swimlane";
 import { AppSelect } from "@/components/AppSelect";
 
@@ -19,8 +19,6 @@ interface Props {
   /** 打开某成员会话（可选）。 */
   onOpenSession?: (sessionId: string) => void;
 }
-
-const LIVE_REFRESH_MS = 3000;
 
 interface TeamSummary {
   name: string;
@@ -45,10 +43,17 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
   const { t } = useI18n();
   const [teams, setTeams] = useState<TeamSummary[]>([]);
   const [selected, setSelected] = useState<string | null>(teamName ?? null);
-  const [snapshot, setSnapshot] = useState<TeamWorkbenchSnapshot | null>(null);
-  const [failed, setFailed] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [listFailed, setListFailed] = useState(false);
+  const [listLoading, setListLoading] = useState(!teamName);
+  const timeline = useTeamTimeline(selected);
   const rootRef = useRef<HTMLElement>(null);
+
+  // 当前展示的快照：实时跟随时是末条，回放时是 historyIndex 指向的那一格。
+  const snapshot = timeline.currentSnapshot;
+  const loading = listLoading
+    || timeline.loading
+    || (selected !== null && timeline.latestIndex < 0 && !timeline.failed);
+  const failed = listFailed || timeline.failed;
 
   useEffect(() => { rootRef.current?.focus({ preventScroll: true }); }, []);
 
@@ -65,36 +70,13 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
         setTeams(data.teams);
         setSelected((current) => current ?? [...data.teams].sort((a, b) => (b.createdAt < a.createdAt ? -1 : 1))[0]?.name ?? null);
       } catch {
-        if (!cancelled) { setFailed(true); setLoading(false); }
+        if (!cancelled) { setListFailed(true); setListLoading(false); }
+      } finally {
+        if (!cancelled) setListLoading(false);
       }
     })();
     return () => { cancelled = true; };
   }, [teamName]);
-
-  // 轮询快照：团队运行中时每 3 秒刷新，页面不可见时不拉取。
-  useEffect(() => {
-    if (!selected) { setSnapshot(null); setLoading(false); return; }
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const load = async () => {
-      try {
-        const response = await fetch(`/api/teams/${encodeURIComponent(selected)}/workbench`, { cache: "no-store" });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json() as TeamWorkbenchSnapshot;
-        if (cancelled) return;
-        setSnapshot(data);
-        setFailed(false);
-        const live = data.team.status === "running" || data.team.status === "finishing" || data.team.status === "forming";
-        if (live) timer = setTimeout(() => { if (document.visibilityState === "visible") void load(); }, LIVE_REFRESH_MS);
-      } catch {
-        if (!cancelled) { setFailed(true); setLoading(false); }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-    void load();
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [selected]);
 
   const layout = useMemo(() => (snapshot ? layoutSwimlanes(snapshot) : null), [snapshot]);
   const progress = useMemo(() => {
@@ -123,6 +105,62 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
             </span>
           )}
         </header>
+
+        {snapshot && (
+          <div className="agent-teams-timeline" role="group" aria-label={t("teams.timeline")}>
+            <span className={`agent-teams-timeline-state${timeline.isLive ? " agent-teams-timeline-state--live" : ""}`}>
+              <span
+                className={`agent-teams-timeline-dot${timeline.isLive ? " agent-teams-timeline-dot--live" : ""}`}
+                aria-hidden="true"
+              />
+              {timeline.isReplaying ? t("teams.replay") : t("teams.live")}
+            </span>
+            <span className="agent-teams-timeline-position">
+              {t("teams.snapshotPosition", { index: timeline.selectedIndex + 1, total: timeline.snapshots.length })}
+            </span>
+            {timeline.isReplaying ? (
+              <>
+                <button
+                  type="button"
+                  className="agent-teams-timeline-button"
+                  onClick={timeline.stepBack}
+                  disabled={timeline.selectedIndex <= 0}
+                >
+                  {t("teams.stepBack")}
+                </button>
+                <button
+                  type="button"
+                  className="agent-teams-timeline-button agent-teams-timeline-button--primary"
+                  onClick={timeline.togglePlayback}
+                  disabled={timeline.latestIndex <= 0}
+                  aria-pressed={timeline.playing}
+                >
+                  {timeline.playing ? t("teams.pause") : t("teams.play")}
+                </button>
+                <button
+                  type="button"
+                  className="agent-teams-timeline-button"
+                  onClick={timeline.stepForward}
+                  disabled={timeline.selectedIndex >= timeline.latestIndex}
+                >
+                  {t("teams.stepForward")}
+                </button>
+                <button type="button" className="agent-teams-timeline-button" onClick={timeline.exitReplay}>
+                  {t("teams.backToLive")}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="agent-teams-timeline-button"
+                onClick={timeline.enterReplay}
+                disabled={timeline.latestIndex <= 0}
+              >
+                {t("teams.replay")}
+              </button>
+            )}
+          </div>
+        )}
 
         {teams.length > 1 && (
           <div className="agent-teams-picker">
