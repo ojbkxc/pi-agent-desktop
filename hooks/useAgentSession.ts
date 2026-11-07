@@ -626,6 +626,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setRoutedModel(null);
     setCacheWarming(null);
     setLiveThinkingLevel(null);
+    // A model / reasoning pick is session-scoped: its optimistic override is
+    // otherwise cleared only by the owning session's own read (loadSession), which
+    // a switch never runs. Without this the new session is labelled with the model
+    // just picked in the previous one, and an in-flight set_model keeps writing it.
+    setCurrentModelOverride(null);
+    setCurrentThinkingOverride(null);
+    modelSwitchPendingRef.current = false;
+    setModelSwitching(false);
   }
 
   const currentModel = currentModelOverride ?? liveModel ?? data?.context.model ?? pendingModel ?? null;
@@ -1422,13 +1430,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [cancelEventStreamGrace, closeEvents, syncLiveModel]);
 
   const finishPromptWithoutStream = useCallback(async (sid: string | null = sessionIdRef.current, runId = promptRunIdRef.current) => {
-    // Bail out before loadSession too: a stale finish for a previous run
-    // must not overwrite the messages of the run currently streaming.
-    if (promptRunIdRef.current !== runId) return;
+    // Bail out before loadSession too: a stale finish for a previous run or for
+    // a session the user already left must not overwrite the messages (or settle
+    // the streaming UI) of the conversation now on screen.
+    if (promptRunIdRef.current !== runId || (sid !== null && sessionIdRef.current !== sid)) return;
     try {
       if (sid) await loadSession(sid);
     } finally {
-      if (promptRunIdRef.current !== runId) return;
+      if (promptRunIdRef.current !== runId || (sid !== null && sessionIdRef.current !== sid)) return;
       const promptWasPending = rpcPromptPendingRef.current;
       const agentWasActive = sdkAgentActiveRef.current;
       rpcPromptPendingRef.current = false;
@@ -1448,7 +1457,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     await delay(PROMPT_SETTLE_INITIAL_DELAY_MS);
     const startedAt = Date.now();
 
-    while (agentRunningRef.current && Date.now() - startedAt < PROMPT_SETTLE_MAX_MS) {
+    // The session check mirrors waitForBashSettlement: a settlement loop that
+    // outlives the switch away from its session must not settle the next one.
+    while (
+      agentRunningRef.current
+      && sessionIdRef.current === sid
+      && Date.now() - startedAt < PROMPT_SETTLE_MAX_MS
+    ) {
       if (runId !== undefined && promptRunIdRef.current !== runId) return;
       try {
         const res = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
@@ -2181,6 +2196,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setModelSwitching(true);
     try {
       const selected = await sendAgentCommand<{ provider: string; id: string }>(sid, { type: "set_model", provider, modelId });
+      // The user may have switched sessions while set_model was in flight: the
+      // answer describes the session we wrote to, not the one now on screen.
+      if (sessionIdRef.current !== sid) return;
       setLiveModel({ provider: selected.provider, modelId: selected.id });
       // Pi persists model_change synchronously. Reload the canonical session so
       // the model, thinking level, and active leaf all advance together.
@@ -2188,6 +2206,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       await loadSession(sid);
     } catch (e) {
       console.error("Failed to set model:", e);
+      if (sessionIdRef.current !== sid) return;
       modelSwitchPendingRef.current = false;
       setCurrentModelOverride(previousOverride);
       addNotice({
