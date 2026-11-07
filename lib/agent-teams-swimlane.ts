@@ -175,7 +175,12 @@ export interface SwimlaneInput {
 // 输出：TeamWorkbenchSnapshot（设计文档 §7.1）+ lane-diagram 兼容的 tasks[]
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type MemberStatus = "running" | "idle" | "completed" | "failed" | "aborted" | "queued";
+/**
+ * 成员在泳道/名册里的状态（由 lifecycle.json 投影；lead 恒 running）。
+ * `parked` 是独立态：成员被挂起/停止后进 parked，**不并入 idle**——
+ * 否则「停止成员」在界面上看不出生效（用户会以为操作失败）。
+ */
+export type MemberStatus = "running" | "idle" | "parked" | "completed" | "failed" | "aborted" | "queued";
 
 export interface WorkbenchTeam {
   id: string;
@@ -327,13 +332,13 @@ export interface TeamWorkbenchSnapshot {
 const PALETTE = ["blue", "green", "purple", "orange", "teal", "pink", "red"];
 
 /** 成员组内配色：显式 color 优先，其次按名册顺序取调色板，lead 固定 gray。 */
-function colorForMember(member: TeamFileMemberLike, index: number, isLead: boolean): string {
+function colorForMember(member: { color?: string }, index: number, isLead: boolean): string {
   if (member.color) return member.color;
   if (isLead) return "gray";
   return PALETTE[(index - 1 + PALETTE.length) % PALETTE.length];
 }
 
-/** pi-team 生命周期态 → 泳道成员态（parked 视作 idle；lead 恒 running）。 */
+/** pi-team 生命周期态 → 泳道成员态（lead 恒 running；parked 保持独立态，不并入 idle）。 */
 function toMemberStatus(status: LifecycleStatus | undefined, isLead: boolean): MemberStatus {
   if (isLead) return "running";
   switch (status) {
@@ -342,6 +347,7 @@ function toMemberStatus(status: LifecycleStatus | undefined, isLead: boolean): M
     case "aborted":
       return "aborted";
     case "parked":
+      return "parked";
     case "idle":
     case undefined:
       return "idle";
@@ -367,15 +373,103 @@ function acceptedMembers(accepted: readonly AcceptedRecordLike[]): Set<string> {
   return new Set(accepted.map((record) => record.member));
 }
 
-/** 把 plan 成员 id 映射到 config 成员（按 name 对齐），得到稳定的 memberId（agentId）。 */
-function buildPlanMemberIdMap(team: TeamFileLike, plan: PlanLike | null | undefined): Map<string, string> {
-  const byName = new Map(team.members.map((member) => [member.name, member.agentId]));
+/**
+ * 把 plan 成员 id 映射到名册成员 id（按 name 对齐）。名册已合并 config + plan，
+ * 因此 plan 独有成员也能解析到自己的 memberId（见 buildRoster 的合并裁决）。
+ */
+function buildPlanMemberIdMap(
+  members: readonly WorkbenchMember[],
+  plan: PlanLike | null | undefined,
+): Map<string, string> {
+  const byName = new Map(members.map((member) => [member.name, member.id]));
   const map = new Map<string, string>();
   for (const planMember of plan?.members ?? []) {
-    const agentId = byName.get(planMember.name);
-    if (agentId) map.set(planMember.id, agentId);
+    const memberId = byName.get(planMember.name);
+    if (memberId) map.set(planMember.id, memberId);
   }
   return map;
+}
+
+/**
+ * 合成名册：以 config.json 的成员为基准，把 plan.members 里「config 里没有的同名成员」追加在后。
+ *
+ * 为什么要合并：config.json 只在 `team_create` 时写一次；而 `team_plan launch` 派发成员只做
+ * lifecycle.adopt、**从不写 config.json**，于是这些成员按 config 遍历时在泳道/编队带/名册/
+ * 团队状态里完全不可见。tickets 早已做过 plan+runtime 合并，成员侧漏了这一层，属投影层自身
+ * 的不一致。⚠️ 这是投影层对症——根因在 pi-team 的 launch 不写名册（外部包，我们改不了）。
+ *
+ * 合并裁决（成员身份按 name 对齐，与 tickets 的「同 id 运行时覆盖派生」不同）：
+ * - 同名成员以 **config 为准**（身份 agentId、顺序、显式 color），plan 仅补 model/provider 缺口；
+ * - plan 独有成员追加在后，memberId 取 plan 成员 id（plan 与 config 是两套 id 命名空间），
+ *   若该 id 已被占用则追加 `#n` 后缀保证唯一（确定性）；
+ * - 没有 plan.members 时结果与改动前逐字段等价。
+ */
+function buildRoster(
+  team: TeamFileLike,
+  plan: PlanLike | null | undefined,
+  lifecycle: Record<string, LifecycleEntryLike>,
+): WorkbenchMember[] {
+  const members: WorkbenchMember[] = [];
+  const seenNames = new Set<string>();
+  const usedIds = new Set<string>();
+
+  team.members.forEach((member, index) => {
+    const isLead = member.name === team.leadAgentId || index === 0;
+    const entry = lifecycle[member.name];
+    const planMember = (plan?.members ?? []).find((item) => item.name === member.name);
+    const status = toMemberStatus(entry?.status, isLead);
+    members.push({
+      id: member.agentId,
+      name: member.name,
+      role: member.agentType ?? (isLead ? "orchestrator" : "member"),
+      model: member.model ?? planMember?.runtime?.modelId ?? null,
+      // plan 侧没有 providerName，退用其 providerId（近似口径，仅供展示）。
+      providerName: member.providerName ?? planMember?.runtime?.providerId ?? null,
+      color: colorForMember(member, index, isLead),
+      status,
+      activity: activityOf(status),
+      sessionId: member.sessionId ?? entry?.sessionId ?? null,
+      cwd: member.cwd,
+      worktreePath: member.worktreePath ?? null,
+      lastError: member.lastError ?? entry?.lastError ?? null,
+      joinedAt: isoFromMillis(member.joinedAt),
+    });
+    seenNames.add(member.name);
+    usedIds.add(member.agentId);
+  });
+
+  (plan?.members ?? []).forEach((planMember, offset) => {
+    if (!planMember.name || seenNames.has(planMember.name)) return;
+    const index = team.members.length + offset;
+    const isLead = planMember.name === team.leadAgentId;
+    const entry = lifecycle[planMember.name];
+    const status = toMemberStatus(entry?.status, isLead);
+    let id = planMember.id || planMember.name;
+    if (usedIds.has(id)) {
+      let suffix = 2;
+      while (usedIds.has(`${id}#${suffix}`)) suffix += 1;
+      id = `${id}#${suffix}`;
+    }
+    members.push({
+      id,
+      name: planMember.name,
+      role: planMember.agentType ?? (isLead ? "orchestrator" : "member"),
+      model: planMember.runtime?.modelId ?? null,
+      providerName: planMember.runtime?.providerId ?? null,
+      color: colorForMember({}, index, isLead),
+      status,
+      activity: activityOf(status),
+      sessionId: entry?.sessionId ?? null,
+      cwd: "",
+      worktreePath: null,
+      lastError: entry?.lastError ?? null,
+      joinedAt: isoFromMillis(plan?.createdAt),
+    });
+    seenNames.add(planMember.name);
+    usedIds.add(id);
+  });
+
+  return members;
 }
 
 /**
@@ -395,31 +489,11 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
     generatedAt = "",
   } = input;
 
-  const members: WorkbenchMember[] = team.members.map((member, index) => {
-    const isLead = member.name === team.leadAgentId || index === 0;
-    const entry = lifecycle[member.name];
-    const status = toMemberStatus(entry?.status, isLead);
-    const planMember = (plan?.members ?? []).find((item) => item.name === member.name);
-    return {
-      id: member.agentId,
-      name: member.name,
-      role: member.agentType ?? (isLead ? "orchestrator" : "member"),
-      model: member.model ?? planMember?.runtime?.modelId ?? null,
-      providerName: member.providerName ?? null,
-      color: colorForMember(member, index, isLead),
-      status,
-      activity: activityOf(status),
-      sessionId: member.sessionId ?? entry?.sessionId ?? null,
-      cwd: member.cwd,
-      worktreePath: member.worktreePath ?? null,
-      lastError: member.lastError ?? entry?.lastError ?? null,
-      joinedAt: isoFromMillis(member.joinedAt),
-    };
-  });
+  const members = buildRoster(team, plan, lifecycle);
 
   const memberById = new Map(members.map((member) => [member.id, member]));
   const memberByName = new Map(members.map((member) => [member.name, member]));
-  const planMemberIds = buildPlanMemberIdMap(team, plan);
+  const planMemberIds = buildPlanMemberIdMap(members, plan);
   const acceptedNames = acceptedMembers(accepted);
 
   // ── tickets[]：plan.tasks 派生 + pi-team 运行时工单（tickets/<id>.json）合并 ──
