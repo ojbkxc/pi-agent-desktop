@@ -11,7 +11,7 @@ const jiti = createJiti(import.meta.url, {
   moduleCache: false,
 });
 const route = await jiti.import("./route.ts");
-const { sanitizeTeamName } = await jiti.import("@/lib/agent-teams-swimlane-store.ts");
+const { sanitizeTeamName, readTeamWorkbench } = await jiti.import("@/lib/agent-teams-swimlane-store.ts");
 
 // ── fixture ────────────────────────────────────────────────────────────────────
 
@@ -41,7 +41,7 @@ const BASE_LIFECYCLE = {
 };
 
 /** 建一个临时团队目录并切到它；返回 { dir, configPath }。调用方负责 after 清理。 */
-async function setup(t, { config = BASE_CONFIG, lifecycle = BASE_LIFECYCLE } = {}) {
+async function setup(t, { config = BASE_CONFIG, lifecycle = BASE_LIFECYCLE, plan = null } = {}) {
   const root = await mkdtemp(join(tmpdir(), "pi-teams-members-"));
   const previousDir = process.env.PI_TEAM_DIR;
   const previousSessions = globalThis.__piSessions;
@@ -58,6 +58,7 @@ async function setup(t, { config = BASE_CONFIG, lifecycle = BASE_LIFECYCLE } = {
   await mkdir(join(dir, "inboxes"), { recursive: true });
   await writeFile(join(dir, "config.json"), JSON.stringify(config));
   if (lifecycle) await writeFile(join(dir, "lifecycle.json"), JSON.stringify(lifecycle));
+  if (plan) await writeFile(join(dir, "plan.json"), JSON.stringify(plan));
   return { dir, configPath: join(dir, "config.json") };
 }
 
@@ -199,4 +200,74 @@ test("重复 memberId 去重，同一会话只投递一次", async (t) => {
   assert.equal(body.results.length, 1, "去重后只处理一次");
   assert.deepEqual(sent.map((item) => item.sessionId), ["s-impl"]);
   assert.equal(memberOf(await readConfig(configPath), "m-impl").model, "m5");
+});
+
+// ── 名册口径统一：plan 独有成员（#19 B）────────────────────────────────────────
+
+const PLAN_ONLY = {
+  createdAt: 111,
+  members: [{ id: "p-carol", name: "carol", runtime: { modelId: "plan-old" } }],
+  tasks: [],
+};
+const LIFECYCLE_WITH_CAROL = {
+  version: 1,
+  members: {
+    impl: { name: "impl", status: "running", sessionId: "s-impl", updatedAt: 1 },
+    qa: { name: "qa", status: "parked", sessionId: "s-qa", updatedAt: 1 },
+    carol: { name: "carol", status: "running", sessionId: "s-carol", updatedAt: 1 },
+  },
+};
+
+test("plan 独有成员：追加 config 名册、投影能读到新模型、幂等", async (t) => {
+  const { configPath } = await setup(t, { plan: PLAN_ONLY });
+  fakeRegistry({}); // 无存活会话 → saved
+
+  const res = await patch({ memberId: "p-carol", provider: "ty", modelId: "claude-opus-4-1" });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.results[0].status, "saved");
+  assert.equal(body.results[0].name, "carol");
+
+  const config = await readConfig(configPath);
+  const carol = memberOf(config, "p-carol");
+  assert.ok(carol, "plan 独有成员被追加进 config 名册");
+  assert.equal(carol.name, "carol");
+  assert.equal(carol.model, "claude-opus-4-1");
+  assert.equal(carol.providerId, "ty");
+  assert.equal(carol.sessionId, undefined, "刻意不写 sessionId（避免遮蔽 lifecycle 里后续换新的会话）");
+  assert.equal(memberOf(config, "m-impl").note, "keep-me", "原有成员不受影响");
+
+  // 投影能读到新模型 —— 即「改完确实在界面上可见」，不制造 H3 式假象
+  const snapshot = await readTeamWorkbench("demo");
+  const carolView = snapshot.members.find((member) => member.name === "carol");
+  assert.ok(carolView, "投影名册出现 carol");
+  assert.equal(carolView.model, "claude-opus-4-1", "config.member.model 优先于 plan.runtime.modelId");
+
+  // 幂等：改第二次不再追加，只更新
+  await patch({ memberId: "p-carol", provider: "ty", modelId: "m2" });
+  const again = await readConfig(configPath);
+  assert.equal(again.members.filter((member) => member.agentId === "p-carol").length, 1, "不重复追加");
+  assert.equal(memberOf(again, "p-carol").model, "m2");
+});
+
+test("plan 独有成员但会话存活：投递 set_model、标 applied", async (t) => {
+  const { configPath } = await setup(t, { plan: PLAN_ONLY, lifecycle: LIFECYCLE_WITH_CAROL });
+  const sent = fakeRegistry({ "s-carol": {} });
+
+  const res = await patch({ memberId: "p-carol", provider: "ty", modelId: "m-applied" });
+  const body = await res.json();
+  assert.equal(body.results[0].status, "applied");
+  assert.deepEqual(sent, [{ sessionId: "s-carol", command: { type: "set_model", provider: "ty", modelId: "m-applied" } }]);
+  assert.equal(memberOf(await readConfig(configPath), "p-carol").model, "m-applied");
+});
+
+test("plan 独有成员投递失败：failed 且不追加名册", async (t) => {
+  const { configPath } = await setup(t, { plan: PLAN_ONLY, lifecycle: LIFECYCLE_WITH_CAROL });
+  fakeRegistry({ "s-carol": { throw: "Model not found: ty/nope" } });
+
+  const res = await patch({ memberId: "p-carol", provider: "ty", modelId: "nope" });
+  const body = await res.json();
+  assert.equal(body.results[0].status, "failed");
+  assert.equal(body.results[0].reason, "Model not found: ty/nope");
+  assert.equal(memberOf(await readConfig(configPath), "p-carol"), undefined, "失败不落名册");
 });

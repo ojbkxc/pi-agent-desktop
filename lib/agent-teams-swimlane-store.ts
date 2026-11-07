@@ -236,9 +236,18 @@ export async function findTeamBySession(sessionId: string): Promise<string | nul
   return null;
 }
 
-/** 本机团队名册（供 Agents 面板选择）。 */
+/**
+ * 本机团队名册（供 Agents 面板选择）。
+ *
+ * `name` 是**目录名**（已 sanitize，稳定，可用于 URL/查表）；`displayName` 是**给人看的名字**，
+ * 优先取 config.json 的 team.name（缺失才回退目录名）。两者必须分开：中文团队名「前端重构队」
+ * 的目录名是 `------`（sanitizeTeamName 把非 ASCII 全替换成 -），拿目录名当显示名会显示一串横线。
+ */
 export async function listTeams(): Promise<Array<{
+  /** 目录名（sanitize 后，稳定 id）。 */
   name: string;
+  /** 显示名：config.json 的 team.name，缺失回退目录名。 */
+  displayName: string;
   description: string;
   memberCount: number;
   createdAt: string;
@@ -265,8 +274,10 @@ export async function listTeams(): Promise<Array<{
     for (const entry of Object.values(lifecycle)) {
       if (typeof entry.sessionId === "string" && entry.sessionId) sessionIds.add(entry.sessionId);
     }
+    const configName = typeof team.name === "string" && team.name ? team.name : "";
     return {
       name,
+      displayName: configName || name,
       description: team.description ?? "",
       memberCount: team.members?.length ?? 0,
       createdAt: typeof team.createdAt === "number" ? new Date(team.createdAt).toISOString() : "",
@@ -322,14 +333,33 @@ async function writeTeamConfig(teamDir: string, config: unknown): Promise<void> 
   await rename(temp, target);
 }
 
+/** 在 config.members 原始数组里按 agentId 找成员条目。 */
+function findConfigMember(
+  members: readonly unknown[],
+  memberId: string,
+): Record<string, unknown> | undefined {
+  return members.find(
+    (item): item is Record<string, unknown> =>
+      !!item && typeof item === "object" && (item as { agentId?: unknown }).agentId === memberId,
+  );
+}
+
 /**
  * 改团队成员的模型：读-改-写整份 config.json 的 members[].model / providerId
  * （其余字段原样保留），并对存活会话投递 { type: "set_model" }。
  *
+ * 名册口径与投影层 `buildRoster`（#13）一致，统一到 **config.json 为权威名册**：
+ * - 成员在 config 里 → 直接更新；
+ * - 成员是 plan 独有（team_plan launch 只做 lifecycle.adopt、不写 config）→ **追加**一条
+ *   config 名册条目（agentId/name 取自 plan），因为投影里 config.member.model 优先于
+ *   plan.runtime.modelId——只写 plan.json 会让新值在界面上不可见。**幂等**：追加后再次调用按
+ *   agentId 命中既有条目，不会重复追加。追加条目**不写 sessionId**（投影优先读 config.sessionId，
+ *   写死会遮蔽 lifecycle 里后续换新的会话）。
+ *
  * 逐条判定（**如实区分，不谎报已生效**）：
- * - 成员不在 config 名册 → failed("成员不存在")；
+ * - config 与 plan 里都找不到该 memberId → failed("成员不存在")；
  * - 有存活会话且未 parked：投递成功 → applied 并写盘；投递抛错（如 Model not found）
- *   → failed 且**不写盘**（保持 config 与运行态一致），错误原样透传；
+ *   → failed 且**不写盘**（保持 config 与运行态一致，也不追加名册），错误原样透传；
  * - 无存活会话 / parked / 未派发：只写盘 → saved（调用方据此显示「已保存待复活」）。
  *
  * 团队不存在（无 config.json）时返回 teamExists=false、results=[]。
@@ -338,30 +368,34 @@ export async function applyTeamMemberModelChanges(
   options: ApplyTeamMemberModelsOptions,
 ): Promise<{ teamExists: boolean; results: TeamMemberModelResult[] }> {
   const teamDir = teamDirFor(options.teamName);
-  const config = await readJson<Record<string, unknown>>(join(teamDir, "config.json"));
+  const [config, lifecycle, plan] = await Promise.all([
+    readJson<Record<string, unknown>>(join(teamDir, "config.json")),
+    readLifecycle(teamDir),
+    readJson<PlanLike>(join(teamDir, "plan.json")),
+  ]);
   const rawMembers = config?.members;
   if (!config || !Array.isArray(rawMembers)) return { teamExists: false, results: [] };
 
-  const lifecycle = await readLifecycle(teamDir);
   const results: TeamMemberModelResult[] = [];
   let mutated = false;
 
   for (const update of options.updates) {
-    const member = rawMembers.find(
-      (item): item is Record<string, unknown> =>
-        !!item && typeof item === "object" && (item as { agentId?: unknown }).agentId === update.memberId,
-    );
-    if (!member) {
+    const existing = findConfigMember(rawMembers, update.memberId);
+    const planMember = existing
+      ? undefined
+      : (plan?.members ?? []).find((item) => item?.id === update.memberId && !!item?.name);
+
+    if (!existing && !planMember) {
       results.push({ memberId: update.memberId, name: null, status: "failed", reason: "成员不存在" });
       continue;
     }
 
-    const name = typeof member.name === "string" ? member.name : null;
+    const name = existing
+      ? (typeof existing.name === "string" ? existing.name : null)
+      : (planMember?.name ?? null);
     const entry = name ? lifecycle[name] : undefined;
-    const sessionId =
-      (typeof entry?.sessionId === "string" && entry.sessionId)
-      || (typeof member.sessionId === "string" && member.sessionId)
-      || "";
+    const sessionIdFromConfig = existing && typeof existing.sessionId === "string" ? existing.sessionId : "";
+    const sessionId = (typeof entry?.sessionId === "string" ? entry.sessionId : "") || sessionIdFromConfig;
 
     let status: TeamMemberModelResult["status"] = "saved";
     if (sessionId && entry?.status !== "parked") {
@@ -369,7 +403,7 @@ export async function applyTeamMemberModelChanges(
         const delivery = await options.deliver(sessionId, { provider: update.provider, modelId: update.modelId });
         status = delivery.kind === "applied" ? "applied" : "saved";
       } catch (error) {
-        // 命令失败（例：Model not found）：不写盘，保持 config 与运行态一致。
+        // 命令失败（例：Model not found）：不写盘、不追加名册，保持 config 与运行态一致。
         results.push({
           memberId: update.memberId,
           name,
@@ -380,6 +414,14 @@ export async function applyTeamMemberModelChanges(
       }
     }
 
+    // 成功路径才落库：plan 独有成员在此追加名册条目（幂等，见函数注释）。
+    const member = existing ?? {
+      agentId: update.memberId,
+      name,
+      joinedAt: typeof plan?.createdAt === "number" ? plan.createdAt : 0,
+      cwd: "",
+    };
+    if (!existing) rawMembers.push(member);
     member.model = update.modelId;
     member.providerId = update.provider;
     mutated = true;

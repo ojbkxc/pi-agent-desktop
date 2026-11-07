@@ -24,7 +24,10 @@ interface Props {
 }
 
 interface TeamSummary {
+  /** 目录名（sanitize 后，稳定 id；用于选中与拉取 workbench）。 */
   name: string;
+  /** 显示名：config.json 的 team.name，缺失回退目录名。 */
+  displayName: string;
   description: string;
   memberCount: number;
   createdAt: string;
@@ -213,7 +216,7 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
               aria-label={t("teams.pickTeam")}
               value={selected ?? ""}
               onValueChange={setSelected}
-              options={teams.map((team) => ({ value: team.name, label: team.name }))}
+              options={teams.map((team) => ({ value: team.name, label: team.displayName }))}
             />
           </div>
         )}
