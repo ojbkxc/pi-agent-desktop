@@ -91,6 +91,20 @@ export interface TeamActionDeps {
    * 可选：不注入时跳过清理（stop 路径本就不清）。实现抛错也会被本模块兜住，绝不外泄。
    */
   dropInstances?: (rawTeamName: string) => Promise<TeamInstanceCleanup>;
+  /**
+   * 探测某成员会话是否仍在运行。实现由 route 提供（惰性 import lib/rpc-manager 的
+   * `getRpcSession(sessionId)?.isRunning()`，避免把 pi SDK 拖进纯模块）。
+   *
+   * **为什么必须真探**：`release` 吞掉 `host.stop` 的异常（pi-team teamLifecycle.js:182-199），
+   * 所以「回执 = parked + generation 前进」只证明 pi-team **记了账**，**不证明会话真停了**。
+   * 对 stop 已够用；但 reclaim 之后要删目录 + 清实例——若会话仍在跑，就会造出一个
+   * 没有任何生命周期记录的**孤儿会话**（从配额里隐身）。故 reclaim 的前置条件「全员已停」
+   * 必须由「回执」升级为「回执 + 真探」。
+   *
+   * 约定：会话不存在 / 从未派发（getRpcSession 返回 undefined）→ 返回 false（视为已停）；
+   * 探测本身抛错 → 本模块**不当作已停**（见下），由调用方如实记 failed。
+   */
+  probeRunning: (sessionId: string) => Promise<boolean>;
 }
 
 /** 已停态：parked 与 aborted 都无需再停（aborted 是 tombstone）。 */
@@ -178,6 +192,36 @@ export async function runTeamLifecycleAction(
         });
         continue;
       }
+
+      // 回执只证明「pi-team 记了账（已 parked）」，**不证明会话真停了**：release 吞掉 host.stop
+      // 异常。reclaim 之后要删目录 + 清实例，若会话仍在跑就会造出无生命周期记录的孤儿会话。
+      // 故回执通过后再真探一次运行态。会话口径与上面一致：lifecycle 条目优先，回退 config 名册。
+      const sessionId = after.sessionId ?? before?.sessionId ?? member.sessionId;
+      if (sessionId) {
+        let running: boolean;
+        try {
+          running = await deps.probeRunning(sessionId);
+        } catch (error) {
+          // 探测抛错**不当作已停**——不能因为「探不到」就宣称停成功。
+          results.push({
+            memberId: member.agentId,
+            name: member.name,
+            status: "failed",
+            reason: `无法确认会话是否已停（探测会话运行态出错）：${error instanceof Error ? error.message : String(error)}`,
+          });
+          continue;
+        }
+        if (running) {
+          results.push({
+            memberId: member.agentId,
+            name: member.name,
+            status: "failed",
+            reason: `release 回执已置 parked，但会话仍在运行（sessionId=${sessionId}）`,
+          });
+          continue;
+        }
+      }
+
       results.push({ memberId: member.agentId, name: member.name, status: "stopped" });
     } catch (error) {
       results.push({

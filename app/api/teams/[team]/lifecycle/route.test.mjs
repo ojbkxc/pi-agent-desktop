@@ -285,3 +285,67 @@ test("stop 不动进程内实例（团队仍在，实例保留）", async (t) =>
   assert.equal((await res.json()).cleanup, undefined, "stop 不返回 cleanup");
   assert.equal(globalThis.__piTeamLifecycles.get(RAW_NAME), lifecycle, "实例原地保留");
 });
+
+// ── 运行态真验证（回执不证明会话已停）──────────────────────────────────────────
+
+function withSession(t, sessionId, isRunning) {
+  const previous = globalThis.__piSessions;
+  globalThis.__piSessions = new Map([[sessionId, { isRunning: () => isRunning }]]);
+  t.after(() => {
+    if (previous === undefined) delete globalThis.__piSessions;
+    else globalThis.__piSessions = previous;
+  });
+}
+
+test("reclaim：成员会话仍在运行 → 409、不删目录（真探运行态）", async (t) => {
+  // config 给成员一个 sessionId；lifecycle 条目也带同一 sessionId（会话口径）。
+  const { dir } = await setup(t, {
+    members: [{ agentId: "m-impl", name: "impl", sessionId: "s-impl", joinedAt: 1, cwd: "" }],
+    lifecycleEntries: { impl: { name: "impl", status: "idle", generation: 1, sessionId: "s-impl" } },
+  });
+  withSession(t, "s-impl", true);
+
+  const res = await post({ action: "reclaim" });
+  assert.equal(res.status, 409);
+  const body = await res.json();
+  assert.equal(body.ok, false);
+  assert.equal(body.removed, false);
+  assert.equal(body.results[0].status, "failed");
+  assert.match(body.results[0].reason, /仍在运行/);
+  assert.ok((await readdir(dir)).includes("config.json"), "会话还在跑 → 目录必须保留");
+});
+
+test("reclaim：会话已停（isRunning=false）→ 200、正常删目录", async (t) => {
+  const { root } = await setup(t, {
+    members: [{ agentId: "m-impl", name: "impl", sessionId: "s-impl", joinedAt: 1, cwd: "" }],
+    lifecycleEntries: { impl: { name: "impl", status: "idle", generation: 1, sessionId: "s-impl" } },
+  });
+  withSession(t, "s-impl", false);
+
+  const res = await post({ action: "reclaim" });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.removed, true);
+  assert.deepEqual(await readdir(root), [], "确认已停后才删目录");
+});
+
+test("reclaim：会话不存在（getRpcSession 未命中）→ 视为已停、stopped", async (t) => {
+  const { root } = await setup(t, {
+    members: [{ agentId: "m-impl", name: "impl", sessionId: "s-ghost", joinedAt: 1, cwd: "" }],
+    lifecycleEntries: { impl: { name: "impl", status: "idle", generation: 1, sessionId: "s-ghost" } },
+  });
+  // __piSessions 里没有 s-ghost → getRpcSession 返回 undefined → 视为已停。
+  const previous = globalThis.__piSessions;
+  globalThis.__piSessions = new Map();
+  t.after(() => {
+    if (previous === undefined) delete globalThis.__piSessions;
+    else globalThis.__piSessions = previous;
+  });
+
+  const res = await post({ action: "reclaim" });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.results[0].status, "stopped");
+  assert.deepEqual(await readdir(root), [], "无会话即视为已停，可删");
+});

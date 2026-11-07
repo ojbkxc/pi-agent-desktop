@@ -90,6 +90,12 @@ const deps: TeamActionDeps = {
   },
   removeTeamDir: (teamDirName) => removeTeamDirectory(teamDirName, teamDirFor),
   dropInstances: (rawTeamName) => Promise.resolve(dropTeamInstances(rawTeamName)),
+  async probeRunning(sessionId: string): Promise<boolean> {
+    // 惰性 import：lib/rpc-manager 会拖进 pi SDK，不能在纯模块里静态引入。
+    // 会话不存在 / 从未派发 → getRpcSession 返回 undefined → 视为已停（false）。
+    const { getRpcSession } = await import("@/lib/rpc-manager");
+    return getRpcSession(sessionId)?.isRunning() ?? false;
+  },
 };
 
 function parseAction(value: unknown): TeamLifecycleAction | null {
