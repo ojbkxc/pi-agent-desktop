@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { useTeamTimeline } from "@/hooks/useTeamTimeline";
 import {
@@ -35,6 +35,10 @@ function statusLabelKey(status: MemberStatus): string {
 function eventLabelKey(type: SwimlaneEventType): string {
   return `teams.event.${type}`;
 }
+/** 成员角色（agentType）→ 本地化词条键（动态键，usage 门禁自动跳过静态校验）。 */
+function roleLabelKey(role: string): string {
+  return `teams.role.${role}`;
+}
 
 /**
  * 泳道图页面（pi-web 专属）：每成员一条泳道（y=成员，x=时间），成员事件节点 +
@@ -48,6 +52,13 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
   const [listLoading, setListLoading] = useState(!teamName);
   const timeline = useTeamTimeline(selected);
   const rootRef = useRef<HTMLElement>(null);
+
+  // 角色名走 i18n；没有对应词条时回退到 role 原文，绝不把 key 名渲染到界面。
+  const roleLabel = useCallback((role: string): string => {
+    const key = roleLabelKey(role);
+    const label = t(key);
+    return label === key ? role : label;
+  }, [t]);
 
   // 当前展示的快照：实时跟随时是末条，回放时是 historyIndex 指向的那一格。
   const snapshot = timeline.currentSnapshot;
@@ -216,7 +227,7 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
                     >
                       <span className={`agent-teams-dot agent-teams-dot--${member.status}`} aria-hidden="true" />
                       <span className="agent-teams-member-name">{member.name}</span>
-                      <span className="agent-teams-member-role">{member.role}</span>
+                      <span className="agent-teams-member-role">{roleLabel(member.role)}</span>
                       <span className="agent-teams-member-status">{t(statusLabelKey(member.status))}</span>
                     </button>
                   </li>
@@ -249,7 +260,7 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
                         >
                           <span className={`agent-teams-dot agent-teams-dot--${lane.status}`} aria-hidden="true" />
                           <span className="agent-teams-lane-name">{lane.name}</span>
-                          <span className="agent-teams-lane-role">{lane.role}</span>
+                          <span className="agent-teams-lane-role">{roleLabel(lane.role)}</span>
                         </span>
                         {lane.events.map((event) => (
                           <span
