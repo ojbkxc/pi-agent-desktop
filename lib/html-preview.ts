@@ -133,6 +133,10 @@ export function clampHtmlPreviewHeight(height: number): number {
 // Runs first inside the frame:
 // - Opaque-origin documents throw on any localStorage/sessionStorage access,
 //   which breaks most generated apps, so an in-memory stand-in replaces them.
+//   An opaque origin (`location.origin === "null"`, i.e. every `sandbox="allow-scripts"`
+//   frame) is decided up front — probing storage there would throw a SecurityError
+//   that Chromium still reports as a console error even though we catch it.
+//   The probe+fallback stays for the same-origin-but-storage-denied case.
 // - The size report lets an inline frame fit its content. It measures the
 //   root element's box, not scrollHeight, which never drops below the frame's
 //   own height and would only ever let the frame grow.
@@ -145,7 +149,9 @@ var P=function(m){try{parent.postMessage(m,"*")}catch(_){}};
 var M=${scriptJson(messages)};window.__piPreviewMessages=M;
 var F=window.__piPreviewFormat=function(s,v){return String(s).replace(/\\{(\\w+)\\}/g,function(w,k){return k in v?String(v[k]):w})};
 function mem(){var s=Object.create(null);return{getItem:function(k){k=String(k);return k in s?s[k]:null},setItem:function(k,v){s[String(k)]=String(v)},removeItem:function(k){delete s[String(k)]},clear:function(){s=Object.create(null)},key:function(i){var ks=Object.keys(s);return i<ks.length?ks[i]:null},get length(){return Object.keys(s).length}}}
-["localStorage","sessionStorage"].forEach(function(n){try{window[n].getItem("")}catch(e){try{Object.defineProperty(window,n,{value:mem(),configurable:true})}catch(_){}}});
+function shim(n){try{Object.defineProperty(window,n,{value:mem(),configurable:true})}catch(_){}}
+var opaque=false;try{opaque=location.origin==="null"}catch(_){}
+["localStorage","sessionStorage"].forEach(function(n){if(opaque){shim(n);return}try{window[n].getItem("")}catch(e){shim(n)}});
 var last=-1;function size(){var d=document.documentElement;if(!d)return;var h=Math.ceil(d.getBoundingClientRect().height);if(h!==last){last=h;P({type:${JSON.stringify(HTML_PREVIEW_SIZE_MESSAGE)},height:h})}}
 document.addEventListener("DOMContentLoaded",function(){size();if(window.ResizeObserver){new ResizeObserver(size).observe(document.documentElement);if(document.body)new ResizeObserver(size).observe(document.body)}});
 addEventListener("load",size);

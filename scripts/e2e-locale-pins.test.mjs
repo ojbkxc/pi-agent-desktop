@@ -17,7 +17,9 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import vm from "node:vm";
 import test from "node:test";
+import { localeSeedScript } from "../e2e/helpers/locale.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const e2eDir = join(root, "e2e");
@@ -90,4 +92,43 @@ test("no e2e file writes the pi-locale preference by hand", () => {
     .filter((file) => file !== localeHelper)
     .filter((file) => /["'`]pi-locale["'`]/.test(read(file)));
   assert.deepEqual(offenders, [], `pin the language through e2e/helpers/locale.mjs instead of writing pi-locale directly: ${offenders.join(", ")}`);
+});
+
+// The injected script runs in every document of the target, including the app's
+// sandboxed preview iframes (opaque origin) and the initial `about:blank`. Writing
+// storage in either throws a SecurityError that Playwright reports as an uncaught
+// page error, which fails the e2e "zero browser errors" sentinel. These cases pin
+// the two guards that make the pin harmless there.
+
+/** Run the injected script's *source* in a sandbox so `window`/`localStorage` resolve there. */
+function runSeed({ isTop, storageThrows }) {
+  const inner = { called: [] };
+  const top = isTop ? undefined : {};
+  const win = {};
+  win.top = top === undefined ? win : top;
+  const sandbox = {
+    window: win,
+    localStorage: {
+      setItem(key, value) {
+        if (storageThrows) throw new Error("The document is sandboxed and lacks the 'allow-same-origin' flag.");
+        inner.called.push([key, value]);
+      },
+    },
+  };
+  vm.runInNewContext(`(${localeSeedScript.toString()})(${JSON.stringify({ key: "pi-locale", value: "en" })})`, sandbox);
+  return inner.called;
+}
+
+test("the locale pin is a no-op inside sandboxed child frames", () => {
+  const called = runSeed({ isTop: false, storageThrows: true });
+  assert.deepEqual(called, [], "a child frame must never touch storage");
+});
+
+test("the locale pin swallows the opaque-origin write on the top document", () => {
+  // The first document of a fresh page is about:blank (opaque origin) — must not throw.
+  assert.deepEqual(runSeed({ isTop: true, storageThrows: true }), []);
+});
+
+test("the locale pin still seeds the preference on a same-origin top document", () => {
+  assert.deepEqual(runSeed({ isTop: true, storageThrows: false }), [["pi-locale", "en"]]);
 });

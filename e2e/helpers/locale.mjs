@@ -18,14 +18,36 @@ export const LOCALE_PREF_KEY = "pi-locale";
 export const SUPPORTED_LOCALES = ["en", "zh-CN", "zh-TW"];
 
 /**
+ * The script Playwright injects into every document of `target`.
+ *
+ * Two guards, both load-bearing:
+ *  - **Top document only.** `addInitScript` (page *and* context) runs in every
+ *    child frame too. The app renders sandboxed preview iframes whose origin is
+ *    opaque (`sandbox="allow-scripts"`); writing storage there throws a
+ *    SecurityError that Playwright reports as an uncaught page error, and the
+ *    e2e "zero browser errors" sentinel fails on it.
+ *  - **Guarded write.** The first document of a fresh page is `about:blank`,
+ *    whose origin is opaque as well, so `localStorage` throws there even in the
+ *    top frame (before any navigation to the app origin).
+ *
+ * The pin only ever needs to land on the app document, which is same-origin, so
+ * both guards are free: they just skip documents that have nothing to pin.
+ */
+export function localeSeedScript({ key, value }) {
+  try {
+    if (window.top !== window) return;
+    localStorage.setItem(key, value);
+  } catch {
+    // Sandboxed/opaque document (about:blank, sandboxed preview frame): nothing to pin.
+  }
+}
+
+/**
  * Seed the stored UI language for every navigation in `target`.
  *
  * @param {import("playwright").Page | import("playwright").BrowserContext} target
  * @param {string} [locale] UI language to pin; defaults to English, the language most specs assert in
  */
 export async function pinLocale(target, locale = "en") {
-  await target.addInitScript(
-    ({ key, value }) => localStorage.setItem(key, value),
-    { key: LOCALE_PREF_KEY, value: locale },
-  );
+  await target.addInitScript(localeSeedScript, { key: LOCALE_PREF_KEY, value: locale });
 }
