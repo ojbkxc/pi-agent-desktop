@@ -42,6 +42,21 @@ export interface TeamActionResponse {
   results: TeamActionMemberResult[];
   /** ok=false 时的整体原因（如「团队不存在」「生命周期实例不存在」）。 */
   error?: string;
+  /**
+   * 仅 reclaim 成功后出现：进程内残留实例（lifecycle / bus）的清理结果。
+   * best-effort —— 清理失败**不影响** ok / removed（目录已删是既成事实），但要如实带出。
+   */
+  cleanup?: TeamInstanceCleanup;
+}
+
+/** 进程内残留实例的清理结果。 */
+export interface TeamInstanceCleanup {
+  /** 该团队在 __piTeamLifecycles 里是否命中并被移除。 */
+  lifecycle: boolean;
+  /** 该团队在 __piTeamBuses 里是否命中并被移除。 */
+  bus: boolean;
+  /** 清理过程中出现的异常（有值时上面的布尔可能不全）。 */
+  error?: string;
 }
 
 /** 生命周期条目里本模块需要的字段（不 import pi-team 的类型）。 */
@@ -69,6 +84,13 @@ export interface TeamActionDeps {
   release: (rawTeamName: string, memberName: string) => Promise<LifecycleSnapshotEntry>;
   /** 删除团队目录（不可逆）。 */
   removeTeamDir: (teamDirName: string) => Promise<void>;
+  /**
+   * reclaim 成功后 best-effort 清理该团队在本进程的残留实例（lifecycle + bus）。
+   *
+   * 实现由 route 提供（宿主侧复刻 pi-team 未从根导出的 dropLifecycle / dropBus）。
+   * 可选：不注入时跳过清理（stop 路径本就不清）。实现抛错也会被本模块兜住，绝不外泄。
+   */
+  dropInstances?: (rawTeamName: string) => Promise<TeamInstanceCleanup>;
 }
 
 /** 已停态：parked 与 aborted 都无需再停（aborted 是 tombstone）。 */
@@ -84,6 +106,17 @@ function isStoppedStatus(status: string | undefined): boolean {
  * - 任一成员 failed → 整体 ok=false；**reclaim 绝不删目录**（removed:false）。
  *
  * 已停成员（parked/aborted）计入 already-stopped，不重复 release。
+ *
+ * ── 关于「idle 成员能否 reclaim」的结论（已核对 pi-team 源码）─────────────────────
+ * 曾担心：idle 成员的 host.stop 会抛 `Subagent is not running`（lib/subagent-runtime.ts `abort`），
+ * 使 reclaim 被误判 failed。**核对后此担忧不成立**，依据两段 pi-team 代码：
+ *   1. teamLifecycle.js `#apply`：成员不在表里 / 已 parked / 从未派发，都会照样建/更新条目并把
+ *      `generation` 无条件 +1（`next.generation = current.generation + 1`，expected 为 undefined 时不过滤）；
+ *   2. teamLifecycle.js `release`：先 `#apply` 写 `status: 'parked'`，**之后**才
+ *      `try { await host.stop(...) } catch (e) { if (PI_TEAM_DEBUG) console.error(...) }`
+ *      —— 异常被吞、不外抛。
+ * 所以 `release(name,{tombstone:false})` 对 idle / 已死 / 从未派发的成员都正常 resolve，
+ * 回执为 parked 且代数前进，本模块判其 `stopped`。abort 抛错只发生在 host 内部，永不到达这里。
  */
 export async function runTeamLifecycleAction(
   deps: TeamActionDeps,
@@ -162,7 +195,6 @@ export async function runTeamLifecycleAction(
   if (action === "reclaim" && ok) {
     try {
       await deps.removeTeamDir(teamDirName);
-      return { ...base, ok: true, removed: true, results };
     } catch (error) {
       return {
         ...base,
@@ -172,9 +204,34 @@ export async function runTeamLifecycleAction(
         error: `停止已完成，但删除团队目录失败：${error instanceof Error ? error.message : String(error)}`,
       };
     }
+
+    // 目录已删（removed 是既成事实，不受清理影响）。best-effort 清掉进程内残留实例——
+    // 不清的话同名团队再建会复用已 dispose、状态陈旧的旧实例。
+    const cleanup = await cleanupInstances(deps, rawTeamName);
+    return { ...base, ok: true, removed: true, results, ...(cleanup ? { cleanup } : {}) };
   }
 
   return { ...base, ok, removed: false, results, ...(ok ? {} : { error: "有成员停止失败，未删除团队目录" }) };
+}
+
+/**
+ * best-effort 清理进程内实例：清理失败**不能**影响「目录已删」这个结论，
+ * 但要在响应里如实带出（绝不静默吞掉）。
+ */
+async function cleanupInstances(
+  deps: TeamActionDeps,
+  rawTeamName: string,
+): Promise<TeamInstanceCleanup | undefined> {
+  if (!deps.dropInstances) return undefined;
+  try {
+    return await deps.dropInstances(rawTeamName);
+  } catch (error) {
+    return {
+      lifecycle: false,
+      bus: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

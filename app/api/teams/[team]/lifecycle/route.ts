@@ -8,6 +8,7 @@ import {
   runTeamLifecycleAction,
   type LifecycleSnapshotEntry,
   type TeamActionDeps,
+  type TeamInstanceCleanup,
   type TeamLifecycleAction,
 } from "@/lib/agent-teams-team-actions";
 
@@ -25,6 +26,7 @@ export const dynamic = "force-dynamic";
  */
 
 const LIFECYCLE_GLOBAL_KEY = "__piTeamLifecycles";
+const BUS_GLOBAL_KEY = "__piTeamBuses";
 
 /**
  * 本进程是否已有该团队的生命周期实例。
@@ -35,6 +37,45 @@ const LIFECYCLE_GLOBAL_KEY = "__piTeamLifecycles";
 function hasLifecycleInstance(rawTeamName: string): boolean {
   const registry = (globalThis as Record<string, unknown>)[LIFECYCLE_GLOBAL_KEY];
   return registry instanceof Map && registry.has(rawTeamName);
+}
+
+/**
+ * 宿主侧复刻 pi-team **未从根导出**的 `dropLifecycle` / `dropBus`。
+ *
+ * 两者实现都只有两行：`registry.get(name)?.dispose(); registry.delete(name)`。
+ * 注册表本体是 globalThis 上的两个 Map——`__piTeamLifecycles` 与 `__piTeamBuses`
+ * （见 pi-team 的 teamLifecycle.js / teamBus.js，常量 LIFECYCLE_GLOBAL_KEY / BUS_GLOBAL_KEY），
+ * 键都是**原始团队名**。
+ *
+ * ⚠️ 这是复刻：一旦 pi-team 从根导出 dropLifecycle / dropBus，应改为直接调用官方实现。
+ *
+ * 回收（目录已删）后必须清，否则同名团队再建会**复用旧实例**（可能已 dispose、状态陈旧）。
+ * best-effort：dispose 抛错也照样删键；一个注册表失败不影响另一个，也绝不影响「目录已删」。
+ */
+function dropTeamInstances(rawTeamName: string): TeamInstanceCleanup {
+  const result: TeamInstanceCleanup = { lifecycle: false, bus: false };
+  const targets = [
+    [LIFECYCLE_GLOBAL_KEY, "lifecycle"],
+    [BUS_GLOBAL_KEY, "bus"],
+  ] as const;
+  for (const [globalKey, slot] of targets) {
+    try {
+      const registry = (globalThis as Record<string, unknown>)[globalKey];
+      if (!(registry instanceof Map)) continue;
+      const instance = registry.get(rawTeamName) as { dispose?: () => void } | undefined;
+      // bus 的 dispose() 会清 pending 计时器与 waiter（团队已回收，安全）；即便它抛错也只记原因、仍删键。
+      try {
+        instance?.dispose?.();
+      } catch {
+        // 忽略：dispose 失败不阻止删键。
+      }
+      result[slot] = registry.has(rawTeamName);
+      registry.delete(rawTeamName);
+    } catch (error) {
+      result.error = error instanceof Error ? error.message : String(error);
+    }
+  }
+  return result;
 }
 
 const deps: TeamActionDeps = {
@@ -48,6 +89,7 @@ const deps: TeamActionDeps = {
     return await lifecycle.release(memberName, { tombstone: false });
   },
   removeTeamDir: (teamDirName) => removeTeamDirectory(teamDirName, teamDirFor),
+  dropInstances: (rawTeamName) => Promise.resolve(dropTeamInstances(rawTeamName)),
 };
 
 function parseAction(value: unknown): TeamLifecycleAction | null {

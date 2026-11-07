@@ -12,6 +12,7 @@ const jiti = createJiti(import.meta.url, {
 });
 const route = await jiti.import("./route.ts");
 const { sanitizeTeamName } = await jiti.import("@/lib/agent-teams-swimlane-store.ts");
+const { getLifecycle } = await jiti.import("pi-team");
 
 /**
  * 路由层：HTTP 契约（200/400/404/409）+ 与 pi-team 进程级生命周期 registry 的真实接线。
@@ -238,4 +239,49 @@ test("stop 即使全部成功也不删目录", async (t) => {
   const res = await post({ action: "stop" });
   assert.equal((await res.json()).removed, false);
   assert.ok((await readdir(dir)).includes("config.json"));
+});
+
+// ── 进程内残留实例清理（回收后同名重建的必要条件）──────────────────────────────
+
+test("reclaim 成功：从全局注册表清理残留 lifecycle/bus 实例", async (t) => {
+  const { lifecycle } = await setup(t);
+  let lifecycleDisposed = false;
+  let busDisposed = false;
+  lifecycle.dispose = () => { lifecycleDisposed = true; };
+  const previousBuses = globalThis.__piTeamBuses;
+  globalThis.__piTeamBuses = new Map([[RAW_NAME, { dispose() { busDisposed = true; } }]]);
+  t.after(() => {
+    if (previousBuses === undefined) delete globalThis.__piTeamBuses;
+    else globalThis.__piTeamBuses = previousBuses;
+  });
+
+  const res = await post({ action: "reclaim" });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.deepEqual(body.cleanup, { lifecycle: true, bus: true }, "两条注册表都命中并清理");
+  assert.equal(lifecycleDisposed, true, "旧 lifecycle 实例被 dispose");
+  assert.equal(busDisposed, true, "旧 bus 实例被 dispose");
+  assert.equal(globalThis.__piTeamLifecycles.has(RAW_NAME), false, "残留 lifecycle 键已从全局 Map 消失");
+  assert.equal(globalThis.__piTeamBuses.has(RAW_NAME), false, "残留 bus 键已从全局 Map 消失");
+});
+
+test("回收后同名再建：getLifecycle 拿到的是新实例，不继承旧成员状态", async (t) => {
+  const { lifecycle } = await setup(t);
+  await post({ action: "reclaim" });
+
+  const registry = globalThis.__piTeamLifecycles;
+  assert.equal(registry.has(RAW_NAME), false, "旧实例键已删");
+
+  // 再取即会新建——这是「同名重建复用已 dispose 旧实例」的根因修复点。
+  const fresh = getLifecycle(RAW_NAME, {});
+  assert.notEqual(fresh, lifecycle, "同名团队拿到的是新实例");
+  assert.deepEqual(await fresh.list(), [], "新实例不继承旧成员状态（generation/状态都不继承）");
+});
+
+test("stop 不动进程内实例（团队仍在，实例保留）", async (t) => {
+  const { lifecycle } = await setup(t);
+  const res = await post({ action: "stop" });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).cleanup, undefined, "stop 不返回 cleanup");
+  assert.equal(globalThis.__piTeamLifecycles.get(RAW_NAME), lifecycle, "实例原地保留");
 });
