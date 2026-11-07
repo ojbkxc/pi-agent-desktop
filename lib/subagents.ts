@@ -16,6 +16,25 @@ export const SUBAGENT_STATUS_TYPE = "pi-web:subagent-status";
 export const SUBAGENT_RESULT_TYPE = "pi-web:subagent-result";
 export const SUBAGENT_CONTROL_TOOL_NAMES = ["Agent", "get_subagent_result", "steer_subagent"] as const;
 
+/**
+ * Team lifecycle tools that belong to a lead conversation only. A subagent session — a
+ * plain delegated worker or a team member — must never manage teams (design doc §8.4
+ * "worker 不能再 spawn worker").
+ *
+ * pi-team refuses them through `requireTeamLead()`, which reads the `PI_AGENT_NAME`
+ * identity. That identity is injected only while the member session is being created
+ * (the env window in `lib/subagent-runtime.ts`), so a member session reopened later has
+ * no identity at all, `requireTeamLead()` degrades open, and `team_delete` (which never
+ * touches the host) would delete the team. `withSubagentExtensionTools` therefore drops
+ * these names from the session's allow-list, and `readSubagentSessionResources` drops
+ * them from a persisted snapshot for sessions created before this rule existed: the
+ * boundary becomes structural instead of depending on the injected identity.
+ *
+ * Members keep the mailbox half (`team_message` / `team_ticket` / …); the set of those
+ * is MEMBER_TEAM_TOOL_NAMES in lib/builtin-extensions.ts.
+ */
+export const TEAM_LIFECYCLE_TOOL_NAMES = ["team_create", "team_plan", "team_delete"] as const;
+
 export type SubagentStatus = SubagentSessionStatus;
 export type SubagentScope = "builtin" | "global" | "workspace" | "project";
 export type SubagentWritableScope = Extract<SubagentScope, "global" | "project">;
@@ -115,6 +134,7 @@ export interface SubagentRunInfo {
 const DEFAULT_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 const BUILTIN_TOOLS = new Set(DEFAULT_TOOLS);
 const SUBAGENT_CONTROL_TOOLS = new Set<string>(SUBAGENT_CONTROL_TOOL_NAMES);
+const TEAM_LIFECYCLE_TOOLS = new Set<string>(TEAM_LIFECYCLE_TOOL_NAMES);
 const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 /**
@@ -556,7 +576,10 @@ export function readSubagentSessionResources(
   ) {
     return {
       appendSystemPrompt: [...snapshot.appendSystemPrompt],
-      tools: [...new Set(snapshot.tools)],
+      // A snapshot written before the team-lifecycle rule existed can still list
+      // `team_create` / `team_plan` / `team_delete`; drop them so a reopened member session
+      // cannot manage its team. See TEAM_LIFECYCLE_TOOL_NAMES.
+      tools: [...new Set(snapshot.tools)].filter((name) => !TEAM_LIFECYCLE_TOOLS.has(name)),
       loadSkills,
       loadExtensions,
       ...(typeof snapshot.exactSystemPrompt === "string" ? { exactSystemPrompt: snapshot.exactSystemPrompt } : {}),
@@ -572,7 +595,7 @@ export function withSubagentExtensionTools(
   return [...new Set([
     ...profileTools,
     ...[...extensionToolNames].filter((name) => !SUBAGENT_CONTROL_TOOLS.has(name)),
-  ])];
+  ])].filter((name) => !TEAM_LIFECYCLE_TOOLS.has(name));
 }
 
 interface SubagentExtensionLike {

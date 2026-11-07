@@ -13,6 +13,7 @@ const jiti = createJiti(import.meta.url, {
 const listRoute = await jiti.import("./route.ts");
 const teamRoute = await jiti.import("./[team]/workbench/route.ts");
 const sessionRoute = await jiti.import("./session/[id]/workbench/route.ts");
+const latestRoute = await jiti.import("./workbench/route.ts");
 const { sanitizeTeamName } = await jiti.import("../../../lib/agent-teams-swimlane-store.ts");
 
 async function writeFixture(root) {
@@ -85,6 +86,40 @@ test("GET /api/teams/[team]/workbench returns a lane snapshot lane-diagram can r
 
   const missing = await teamRoute.GET(new Request("http://localhost/api/teams/ghost/workbench"), { params: Promise.resolve({ team: "ghost" }) });
   assert.equal(missing.status, 404);
+});
+
+test("GET /api/teams/workbench (no session param) serves the newest team for lane-diagram", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pi-teams-api-"));
+  const previous = process.env.PI_TEAM_DIR;
+  process.env.PI_TEAM_DIR = root;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.PI_TEAM_DIR;
+    else process.env.PI_TEAM_DIR = previous;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  // public/lane-diagram.html 无 ?session= 时回退到这个聚合入口。
+  const empty = await latestRoute.GET();
+  assert.equal(empty.status, 404);
+
+  await writeFixture(root);
+  // 再放一个更晚创建的团队：聚合入口必须挑它，而不是目录里的第一个。
+  const older = join(root, sanitizeTeamName("demo"));
+  const newer = join(root, sanitizeTeamName("demo2"));
+  await mkdir(newer, { recursive: true });
+  await writeFile(join(newer, "config.json"), JSON.stringify({
+    name: "demo2",
+    createdAt: Date.parse("2026-11-06T00:00:00.000Z"),
+    leadAgentId: "team-lead",
+    members: [{ agentId: "lead-2", name: "team-lead", joinedAt: Date.parse("2026-11-06T00:00:00.000Z"), cwd: "D:/proj" }],
+  }));
+  assert.ok(older);
+
+  const response = await latestRoute.GET();
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.team.name, "demo2");
+  assert.ok(Array.isArray(body.tasks), "lane-diagram 读的兼容字段仍在");
 });
 
 test("GET /api/teams/session/[id]/workbench resolves the team by lead session", async (t) => {
