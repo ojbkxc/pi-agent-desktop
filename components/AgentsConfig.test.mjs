@@ -159,3 +159,16 @@ test("confirms deletion inline and limits it to writable profiles", () => {
   assert.match(source, /selected && isWritableScope\(selected\.scope\) && mode === "edit"/);
   assert.match(source, /method: "DELETE"/);
 });
+
+test("commits maxConcurrent on blur with the server's bounds and rolls back on failure", () => {
+  // An empty or out-of-range edit stays a draft: Number("") === 0 must never
+  // reach the PUT, and a failed one must not leave the optimistic value showing.
+  const concurrencyBlock = source.match(/<label className="agents-concurrency-control"[\s\S]*?<\/label>/)?.[0] ?? "";
+  assert.match(concurrencyBlock, /value=\{maxConcurrentDraft\}/);
+  assert.match(concurrencyBlock, /onChange=\{\(event\) => setMaxConcurrentDraft\(event\.target\.value\)\}/);
+  assert.match(concurrencyBlock, /onBlur=\{\(\) => void updateMaxConcurrent\(\)\}/);
+  assert.doesNotMatch(concurrencyBlock, /Number\(event\.target\.value\)/);
+  // Same bounds the server enforces: integer 1..MAX_SUBAGENT_MAX_CONCURRENT.
+  assert.match(source, /!Number\.isInteger\(parsed\) \|\| parsed < 1 \|\| parsed > 32/);
+  assert.match(source, /setMaxConcurrent\(previous\);\s*\n\s*setMaxConcurrentDraft\(String\(previous\)\);/);
+});

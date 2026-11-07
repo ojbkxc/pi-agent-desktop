@@ -276,6 +276,9 @@ function AddSkillPanel({
   );
   const [scope, setScope] = useState<"global" | "project">("global");
   const inputRef = useRef<HTMLInputElement>(null);
+  // Search requests are untagged by the network: a slow earlier query must not
+  // overwrite a newer one's results (same guard as ChatInput's @ search).
+  const searchSeqRef = useRef(0);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -283,6 +286,7 @@ function AddSkillPanel({
 
   const search = useCallback(async (q: string) => {
     if (!q.trim()) return;
+    const requestId = ++searchSeqRef.current;
     setSearching(true);
     setSearchError(null);
     setResults([]);
@@ -296,6 +300,7 @@ function AddSkillPanel({
         results?: SkillSearchResult[];
         error?: string;
       };
+      if (requestId !== searchSeqRef.current) return;
       if (d.error) {
         setSearchError(d.error);
         return;
@@ -303,9 +308,11 @@ function AddSkillPanel({
       setResults(d.results ?? []);
       if ((d.results ?? []).length === 0) setSearchError(t("i18n.noSkills"));
     } catch (e) {
+      if (requestId !== searchSeqRef.current) return;
       setSearchError(String(e));
     } finally {
-      setSearching(false);
+      // Only the newest search may end the pending state.
+      if (requestId === searchSeqRef.current) setSearching(false);
     }
   }, [t]);
 

@@ -727,6 +727,7 @@ function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
       synchronize();
     });
     es.addEventListener("change", (e) => {
+      syncRequestRef.current += 1;
       try {
         const d = JSON.parse((e as MessageEvent).data) as { size?: number };
         if (typeof d.size === "number") setSize(d.size);
@@ -999,6 +1000,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, initialPage, watchEnab
       synchronize();
     });
     es.addEventListener("change", (e) => {
+      syncRequestRef.current += 1;
       try {
         const d = JSON.parse((e as MessageEvent).data) as { size?: number };
         if (typeof d.size === "number") {

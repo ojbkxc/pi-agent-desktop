@@ -691,6 +691,37 @@ test("while a run streams, a bare /mcp opens Settings or is queued as before", a
   assert.deepEqual(await run("/copy", true), { builtin: ["/copy"], prompts: [], cleared: 0 });
 });
 
+test("while a run streams, a streamable built-in the builtin layer rejects is queued, not dropped", async () => {
+  const run = async (value, handled, { mode = "steer" } = {}) => {
+    const calls = { builtin: [], prompts: [], cleared: 0 };
+    const sendQueued = chatInputCallback("sendQueued", {
+      value,
+      attachedFilesRef: { current: [] }, composeMessageWithAttachedFiles,
+      attachedImages: [],
+      onAudioUnlock() {},
+      clearInput() { calls.cleared += 1; },
+      onBuiltinCommand: async () => ({ handled }),
+      canRunBuiltinSlashCommandWhileStreaming,
+      isBareMcpCommand,
+      resolveSessionReferences: async (message) => message,
+      sessionMentionTargetsRef: { current: new Map() },
+      runBuiltinCommand: async (message) => { calls.builtin.push(message); return handled; },
+      onPromptWithStreamingBehavior: (message, behavior, attached) => calls.prompts.push([message, behavior, attached?.length ?? 0]),
+      onSteer() { throw new Error("slash messages are prompts"); },
+      onFollowUp: (message, attached) => calls.prompts.push([message, "followUp", attached?.length ?? 0]),
+    });
+    sendQueued(mode);
+    await new Promise((resolve) => setImmediate(resolve));
+    return calls;
+  };
+  // /session and /copy are offered while streaming; when the builtin layer
+  // does not own the call this round, they land in the queue like bare /mcp
+  // instead of vanishing without any feedback.
+  assert.deepEqual(await run("/session", true), { builtin: ["/session"], prompts: [], cleared: 0 });
+  assert.deepEqual(await run("/session", false), { builtin: ["/session"], prompts: [["/session", "steer", 0]], cleared: 1 });
+  assert.deepEqual(await run("/copy", false, { mode: "followup" }), { builtin: ["/copy"], prompts: [["/copy", "followUp", 0]], cleared: 1 });
+});
+
 test("handleSend lets a handled /mcp through while streaming and sends an unowned one when idle", async () => {
   const run = async (value, { isStreaming, handled }) => {
     const calls = { builtin: [], sent: [] };

@@ -75,6 +75,7 @@ export function ServerSection() {
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let lastLive = false;
     const load = async () => {
       try {
         const response = await fetch("/api/public-access", { cache: "no-store" });
@@ -86,15 +87,31 @@ export function ServerSection() {
           initialized.current = true;
           setCustomUrlDraft(next.view.customUrl);
         }
-        if (LIVE_STATES.has(next.view.state)) {
-          timer = setTimeout(() => { if (document.visibilityState === "visible") void load(); }, POLL_MS);
+        lastLive = LIVE_STATES.has(next.view.state);
+        if (lastLive) {
+          timer = setTimeout(() => {
+            timer = undefined;
+            // A background tab skips the tick (and with it the chain's only
+            // continuation); onVisibility resumes the poll on the way back.
+            if (document.visibilityState === "visible") void load();
+          }, POLL_MS);
         }
       } catch {
         if (!cancelled) setError(t("server.loadFailed"));
       }
     };
+    const onVisibility = () => {
+      // The setTimeout chain dies while hidden: resume it when the tab returns
+      // and the tunnel is (as far as we know) still live.
+      if (document.visibilityState === "visible" && !cancelled && lastLive && !timer) void load();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     void load();
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
     // reloadKey re-runs the probe after a download, since `binary.available` is
     // resolved per request and would otherwise stay stale until the panel reopens.
   }, [t, reloadKey]);

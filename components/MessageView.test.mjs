@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createJiti } from "jiti";
+
+const messageViewSource = await readFile(new URL("./MessageView.tsx", import.meta.url), "utf8");
 
 const jiti = createJiti(import.meta.url, {
   jsx: { runtime: "automatic" },
@@ -691,4 +694,11 @@ test("keeps the registered name where no result names the server and tool", (t) 
     details: { calls: [{ id: "call-codemode-mcp/1", name: "mcp__docs_v2__search_pages", args: "{}", status: "ok" }] },
   });
   assert.match(textOf(html), /mcp__docs_v2__search_pages\{\}/);
+});
+
+test("clears thinking-block start times at stream end so a retry restarts timing", () => {
+  // A retry/edited resend re-enters streaming on the same message entry;
+  // stale start times would inflate the second round's thinking durations.
+  assert.match(messageViewSource, /const starts = blockStartTimesRef\.current;/);
+  assert.match(messageViewSource, /blockStartTimesRef\.current = new Map\(\);/);
 });

@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import qrcode from "qrcode-generator";
 import { useI18n } from "@/hooks/useI18n";
 import { copyText } from "@/lib/clipboard";
 import { formatRelativeTime } from "@/lib/i18n/format";
 import type { PendingPairing, RelayStatus } from "@/lib/relay/connector";
 import type { PairedDevice } from "@/lib/relay/store";
+import { ChatConfirmDialog } from "./ChatConfirmDialog";
 import { ConfigButton, ConfigSwitch } from "./SettingsUi";
 
 interface RelayResponse {
@@ -57,6 +59,7 @@ export function RelaySection() {
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [copied, setCopied] = useState(false);
+  const [deviceToRemove, setDeviceToRemove] = useState<PairedDevice | null>(null);
 
   const load = useCallback(async (initial = false) => {
     try {
@@ -143,8 +146,12 @@ export function RelaySection() {
   };
 
   const removeDevice = async (device: PairedDevice) => {
-    if (!window.confirm(t("relay.removeConfirm", { name: device.name }))) return;
-    if (await request(`/api/relay/devices/${encodeURIComponent(device.id)}`, { method: "DELETE" })) await load();
+    // The confirm gate is the shared ChatConfirmDialog (opened by the row's
+    // Remove button), like SessionSidebar's delete — never a native confirm().
+    if (await request(`/api/relay/devices/${encodeURIComponent(device.id)}`, { method: "DELETE" })) {
+      setDeviceToRemove(null);
+      await load();
+    }
   };
 
   const status = data?.status;
@@ -244,7 +251,7 @@ export function RelaySection() {
                   </span>
                 </span>
                 {local && (
-                  <ConfigButton className="settings-option-action" variant="ghost" disabled={busy} onClick={() => void removeDevice(device)}>
+                  <ConfigButton className="settings-option-action" variant="ghost" disabled={busy} onClick={() => { setError(null); setDeviceToRemove(device); }}>
                     {t("relay.remove")}
                   </ConfigButton>
                 )}
@@ -253,6 +260,23 @@ export function RelaySection() {
           </div>
         )}
       </div>
+      {deviceToRemove && createPortal(
+        <ChatConfirmDialog
+          title={t("relay.remove")}
+          body={t("relay.removeConfirm", { name: deviceToRemove.name })}
+          confirmLabel={t("relay.remove")}
+          cancelLabel={t("i18n.cancel")}
+          danger
+          busy={busy}
+          error={error}
+          onCancel={() => setDeviceToRemove(null)}
+          onConfirm={() => {
+            const device = deviceToRemove;
+            if (device) void removeDevice(device);
+          }}
+        />,
+        document.body,
+      )}
     </section>
   );
 }

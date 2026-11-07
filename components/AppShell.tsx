@@ -1435,7 +1435,11 @@ export function AppShell() {
         tag,
         onClick: () => {
           window.focus();
-          if (targetSession) handleSelectSession(targetSession);
+          // Open by id: the notification can outlive the session (deleted in
+          // another window while it sat in the tray), and the click-time
+          // snapshot must not be painted into state. handleOpenSession re-checks
+          // the catalogue / refetches and silently no-ops on failure.
+          if (targetSession) handleOpenSession(targetSession.id);
         },
       });
     };
@@ -1451,7 +1455,7 @@ export function AppShell() {
         }
       });
     }
-  }, [handleSelectSession, locale]);
+  }, [handleOpenSession, locale]);
 
   const handleAgentEnd = useCallback(() => {
     setRefreshKey((k) => k + 1);

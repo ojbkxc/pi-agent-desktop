@@ -47,3 +47,11 @@ test("a group switch sends one batch request for its group and waits for other s
   // Refused skills are named under the heading of the group that ran.
   assert.match(source, /\{groupStatus\?\.group === grpLabel && <ConfigSidebarGroupStatus error=\{groupStatus\.error\} \/>\}/);
 });
+
+test("tags skills.sh searches so a slow earlier response cannot overwrite a newer one", () => {
+  // Same guard as ChatInput's @ search: a response whose request id is no
+  // longer current must neither paint results nor end the pending state.
+  assert.match(source, /const requestId = \+\+searchSeqRef\.current/);
+  assert.match(source, /if \(requestId !== searchSeqRef\.current\) return;/);
+  assert.match(source, /if \(requestId === searchSeqRef\.current\) setSearching\(false\);/);
+});

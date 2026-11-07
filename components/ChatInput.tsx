@@ -1660,7 +1660,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       }
     };
     if (!attachedImages.length && !attachedFilesRef.current.length && onBuiltinCommand && canRunBuiltinSlashCommandWhileStreaming(msg)) {
-      void runBuiltinCommand(msg);
+      // The builtin layer may not know the command (handled:false); like the
+      // bare /mcp branch below, fall through to queueing instead of dropping it.
+      void runBuiltinCommand(msg).then((handled) => {
+        if (!handled) void queue();
+      }, () => void queue());
       return;
     }
     if (!attachedImages.length && !attachedFilesRef.current.length && onBuiltinCommand && isBareMcpCommand(msg)) {

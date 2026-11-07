@@ -71,3 +71,10 @@ test("markdown preview links carry PDF page fragments", () => {
   assert.match(source, /parsePdfPageFragment/);
   assert.match(source, /onOpenFile\(linkedFile, parsePdfPageFragment\(href\) \?\? undefined\)/);
 });
+
+test("every viewer's change event invalidates in-flight meta responses", () => {
+  // Image, Audio, Video and Document all guard synchronize() with a request
+  // tag; a change without the tag would let the older meta response overwrite
+  // the size/error the change just set.
+  assert.equal((source.match(/es\.addEventListener\("change", \(e\) => \{\s*syncRequestRef\.current \+= 1;/g) ?? []).length, 4);
+});

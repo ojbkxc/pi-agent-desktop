@@ -757,9 +757,15 @@ function AssistantMessageView({
     if (!isStreaming) {
       // Finalise any un-finished thinking block durations on stream end
       const now = new Date().getTime();
+      // Capture before clearing: the state updater runs at the next render and
+      // would otherwise read the fresh (empty) map through the ref.
+      const starts = blockStartTimesRef.current;
+      // A retry/edited resend re-enters streaming on this same message; without
+      // the clear its tick would reuse round one's start times.
+      blockStartTimesRef.current = new Map();
       setStreamingDurations((prev: Map<number, number>) => {
         const next = new Map(prev);
-        for (const [idx, start] of blockStartTimesRef.current) {
+        for (const [idx, start] of starts) {
           if (!next.has(idx)) next.set(idx, Math.round((now - start) / 1000));
         }
         return next;

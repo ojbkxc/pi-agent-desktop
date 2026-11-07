@@ -179,6 +179,9 @@ export function AgentsConfig({
   const [error, setError] = useState<string | null>(null);
   const [builtInEnabled, setBuiltInEnabled] = useState(false);
   const [maxConcurrent, setMaxConcurrent] = useState(10);
+  // The raw input text, kept separately so an empty/out-of-range edit is an
+  // editing state instead of Number("") === 0 being committed on blur.
+  const [maxConcurrentDraft, setMaxConcurrentDraft] = useState("10");
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
@@ -242,7 +245,10 @@ export function AgentsConfig({
           throw new Error(data.error ?? `HTTP ${response.status}`);
         }
         setBuiltInEnabled(data.enabled);
-        if (typeof data.maxConcurrent === "number") setMaxConcurrent(data.maxConcurrent);
+        if (typeof data.maxConcurrent === "number") {
+          setMaxConcurrent(data.maxConcurrent);
+          setMaxConcurrentDraft(String(data.maxConcurrent));
+        }
       } catch (cause) {
         if (controller.signal.aborted) return;
         setSettingsError(cause instanceof Error ? cause.message : String(cause));
@@ -435,20 +441,32 @@ export function AgentsConfig({
     }
   };
 
-  const updateMaxConcurrent = async (value: number) => {
-    setMaxConcurrent(value);
+  const updateMaxConcurrent = async () => {
+    // Same bounds the server enforces (app/api/subagents/settings: integer 1..32).
+    // An invalid draft is rejected, not coerced; blur restores the committed value.
+    const parsed = Number(maxConcurrentDraft);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 32 || parsed === maxConcurrent) {
+      setMaxConcurrentDraft(String(maxConcurrent));
+      return;
+    }
+    const previous = maxConcurrent;
+    setMaxConcurrent(parsed);
     setSettingsError(null);
     try {
       const response = await fetch("/api/subagents/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ maxConcurrent: value }),
+        body: JSON.stringify({ maxConcurrent: parsed }),
       });
       const data = await response.json() as Partial<SubagentSettingsResponse> & { error?: string };
       if (!response.ok || data.error || typeof data.maxConcurrent !== "number") throw new Error(data.error ?? `HTTP ${response.status}`);
       setMaxConcurrent(data.maxConcurrent);
+      setMaxConcurrentDraft(String(data.maxConcurrent));
     } catch (cause) {
       setSettingsError(cause instanceof Error ? cause.message : String(cause));
+      // The optimistic value never took effect; roll the field back to it.
+      setMaxConcurrent(previous);
+      setMaxConcurrentDraft(String(previous));
     }
   };
 
@@ -488,10 +506,10 @@ export function AgentsConfig({
               type="number"
               min={1}
               max={32}
-              value={maxConcurrent}
+              value={maxConcurrentDraft}
               disabled={settingsLoading || settingsSaving}
-              onChange={(event) => setMaxConcurrent(Number(event.target.value))}
-              onBlur={() => void updateMaxConcurrent(maxConcurrent)}
+              onChange={(event) => setMaxConcurrentDraft(event.target.value)}
+              onBlur={() => void updateMaxConcurrent()}
             />
           </label>
           <ConfigSwitch

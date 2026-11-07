@@ -2723,7 +2723,15 @@ function SessionItem({
       if (menuButtonRef.current?.contains(target)) return;
       setMenuOpen(false);
     };
-    const onKeyDown = (ev: KeyboardEvent) => { if (ev.key === "Escape" && !isImeComposing(ev)) setMenuOpen(false); };
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape" && !isImeComposing(ev)) {
+        // This menu consumed the Escape: preventDefault keeps it from also
+        // reaching the window-level stop-agent shortcut (handleGlobalEscape
+        // stands down for already-handled keys), like ShortcutHelpDialog.
+        ev.preventDefault();
+        setMenuOpen(false);
+      }
+    };
     const onScrollOrResize = () => setMenuOpen(false);
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);

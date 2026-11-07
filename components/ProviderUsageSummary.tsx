@@ -42,8 +42,11 @@ function ProviderUsageContent({ providerId, enabled }: { providerId: string; ena
   useEffect(() => {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     // Invalidate any in-flight query for the previous provider: its late
-    // response must not paint into this provider's panel.
+    // response must not paint into this provider's panel. The stale request's
+    // finally skips setQuerying(false) (requestId !== seq), so reset the
+    // spinner here — otherwise it spins forever on the new panel.
     querySeqRef.current += 1;
+    setQuerying(false);
     setRefreshDone(false);
     setSnapshot(null);
     try {
