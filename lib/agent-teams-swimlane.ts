@@ -211,7 +211,22 @@ export interface WorkbenchAssignment {
   /** 落盘原样的成员名（runtime 票的 assignee；plan 派生时为 owner 名）。 */
   assignee: string;
   sessionId: string | null;
+  /**
+   * ⚠️ 语义混合的兼容字段，**不要直接当「开始时间」消费**：
+   * - plan 派生票：装的是成员 lifecycle 的 updatedAt（该成员「最后一次更新」时刻）；
+   * - runtime 票：装的是 assignment 的 createdAt（该派活「开始」时刻）。
+   * 同一字段名两种含义——对 plan 票画甘特是错的、对 runtime 票做停滞检测是错的。
+   * 需要「最后活动时间」请用 lastActivityAt（语义单一）；需要「开始时间」请另建字段。
+   * 此取值保持不变，以兼容未知消费方。
+   */
   startedAt: string | null;
+  /**
+   * 最后一次活动时间（ISO，取底层记录的毫秒时间戳；无来源时为 null）。语义单一，可放心消费：
+   * - runtime 票：assignment.updatedAt（该派活最后更新时间；RuntimeAssignmentLike 有该字段）；
+   * - plan 派生票：成员 lifecycle.updatedAt（该成员最后更新时刻）。
+   * 「停滞检测」应基于这里，而不是 startedAt。
+   */
+  lastActivityAt: string | null;
   result: string | null;
   outcome: "completed" | "failed" | "cancelled" | null;
 }
@@ -425,6 +440,7 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
         assignee: owner.name,
         sessionId: owner.sessionId,
         startedAt: isoFromMillis(entry?.updatedAt) || null,
+        lastActivityAt: isoFromMillis(entry?.updatedAt) || null,
         result: null,
         outcome: null,
       });
@@ -460,6 +476,7 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
         assignee: assignment.assignee,
         sessionId: member?.sessionId ?? null,
         startedAt: isoFromMillis(assignment.createdAt) || null,
+        lastActivityAt: isoFromMillis(assignment.updatedAt) || null,
         result: assignment.result ?? null,
         outcome: assignment.outcome ?? null,
       };
