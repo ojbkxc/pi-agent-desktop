@@ -7,6 +7,7 @@ import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, interopDefault: true, moduleCache: false });
 const route = await jiti.import("./route.ts");
+const { parseUnattendedConfigUpdate } = await jiti.import("@/lib/agent-teams-unattended-config.ts");
 const store = await jiti.import("@/lib/agent-teams-unattended-store.ts");
 const { DEFAULT_UNATTENDED_CONFIG } = await jiti.import("@/lib/agent-teams-unattended.ts");
 
@@ -125,12 +126,12 @@ test("POST rejects a bad action or empty keys", async (t) => {
 
 test("parseUnattendedConfigUpdate keeps unspecified fields and validates ranges", () => {
   const current = { enabled: true, approvalTimeoutMs: 600000, maxFailureRetries: 2 };
-  assert.deepEqual(route.parseUnattendedConfigUpdate({ enabled: false }, current), {
+  assert.deepEqual(parseUnattendedConfigUpdate({ enabled: false }, current), {
     ok: true,
     config: { enabled: false, approvalTimeoutMs: 600000, maxFailureRetries: 2 },
   });
-  assert.equal(route.parseUnattendedConfigUpdate({ approvalTimeoutMs: 59_999 }, current).ok, false);
-  assert.equal(route.parseUnattendedConfigUpdate({ maxFailureRetries: 5 }, current).ok, true);
-  assert.equal(route.parseUnattendedConfigUpdate({ maxFailureRetries: 6 }, current).ok, false);
-  assert.equal(route.parseUnattendedConfigUpdate(null, current).ok, false);
+  assert.equal(parseUnattendedConfigUpdate({ approvalTimeoutMs: 59_999 }, current).ok, false);
+  assert.equal(parseUnattendedConfigUpdate({ maxFailureRetries: 5 }, current).ok, true);
+  assert.equal(parseUnattendedConfigUpdate({ maxFailureRetries: 6 }, current).ok, false);
+  assert.equal(parseUnattendedConfigUpdate(null, current).ok, false);
 });

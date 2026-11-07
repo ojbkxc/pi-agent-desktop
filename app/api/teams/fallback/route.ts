@@ -8,7 +8,7 @@ import {
   unattendedSettingsPath,
   writeUnattendedConfig,
 } from "@/lib/agent-teams-unattended-store";
-import { type UnattendedConfig } from "@/lib/agent-teams-unattended";
+import { parseUnattendedConfigUpdate } from "@/lib/agent-teams-unattended-config";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -23,48 +23,11 @@ export const runtime = "nodejs";
  *        不碰 config / approvalNudges / failureNudges。
  *
  * 写操作只允许本机请求（照 app/api/remote-access 的做法）。
+ *
+ * ⚠️ 本文件只能导出 Next 约定名（GET/PUT/POST、dynamic、runtime…）。校验逻辑
+ * 在 lib/agent-teams-unattended-config.ts —— 多一个具名导出会让生成的 .next/types
+ * 做结构校验时报 TS2344，`npm run build`（只在 e2e job 跑）红，而 checks 看不见。
  */
-
-// 下限 1 分钟：再短会在 lead 还没机会处理前反复提醒。
-const MIN_APPROVAL_TIMEOUT_MS = 60_000;
-// 上限 24 小时：再长实际等于「永不提醒」。
-const MAX_APPROVAL_TIMEOUT_MS = 24 * 60 * 60_000;
-// 0=只通知用户、不自动恢复；上限 5 防重试风暴。
-const MAX_RETRY_LIMIT = 5;
-
-export type ConfigUpdateParse =
-  | { ok: true; config: UnattendedConfig }
-  | { ok: false; error: string };
-
-/** 校验并合并 PUT body 到现有 config：只认三个字段，未给的保持原值。 */
-export function parseUnattendedConfigUpdate(raw: unknown, current: UnattendedConfig): ConfigUpdateParse {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    return { ok: false, error: "body must be a JSON object" };
-  }
-  const body = raw as Record<string, unknown>;
-  const config: UnattendedConfig = { ...current };
-
-  if (body.enabled !== undefined) {
-    if (typeof body.enabled !== "boolean") return { ok: false, error: "enabled must be a boolean" };
-    config.enabled = body.enabled;
-  }
-  if (body.approvalTimeoutMs !== undefined) {
-    const value = body.approvalTimeoutMs;
-    if (typeof value !== "number" || !Number.isInteger(value)
-      || value < MIN_APPROVAL_TIMEOUT_MS || value > MAX_APPROVAL_TIMEOUT_MS) {
-      return { ok: false, error: `approvalTimeoutMs must be an integer between ${MIN_APPROVAL_TIMEOUT_MS} and ${MAX_APPROVAL_TIMEOUT_MS}` };
-    }
-    config.approvalTimeoutMs = value;
-  }
-  if (body.maxFailureRetries !== undefined) {
-    const value = body.maxFailureRetries;
-    if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > MAX_RETRY_LIMIT) {
-      return { ok: false, error: `maxFailureRetries must be an integer between 0 and ${MAX_RETRY_LIMIT}` };
-    }
-    config.maxFailureRetries = value;
-  }
-  return { ok: true, config };
-}
 
 function readView(path = unattendedSettingsPath()) {
   const { config, state } = readUnattendedFile(path);
