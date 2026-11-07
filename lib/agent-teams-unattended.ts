@@ -166,18 +166,34 @@ export function formatWaited(ms: number): string {
   return rest > 0 ? `${hours} 小时 ${rest} 分钟` : `${hours} 小时`;
 }
 
+/**
+ * 审批提醒的确定性幂等键。
+ *
+ * `team_plan approve` 强制要求 request_id 且同 id 幂等；若让模型自己编，两次提醒会
+ * 各批一次。这里由提醒方按 planId + revision 纯字符串拼出，同一计划同一版本恒同 id。
+ * 纯函数（不引依赖），客户端可安全 import。
+ */
+export function approvalRequestId(plan: Pick<AwaitingPlan, "planId" | "revision">): string {
+  return `unattended-${plan.planId}-r${plan.revision}`;
+}
+
 /** 提醒 lead：计划久等未批，请自行降级并批准（含边界与汇报要求）。 */
 export function buildApprovalPrompt(plan: AwaitingPlan, waitedMs: number): string {
   const models = plan.members
     .map((member) => `${member.name}（当前 ${member.providerId}/${member.modelId}）`)
     .join("、");
+  const requestId = approvalRequestId(plan);
   return [
-    `【无人值守提醒】团队「${plan.teamName}」的计划已提交并等待人工批准约 ${formatWaited(waitedMs)}，用户当前不在。`,
+    `这是系统自动发出的「无人值守提醒」，不是你本人（用户）发的消息——用户长时间未批准计划，本条消息由系统代发。`,
+    `团队「${plan.teamName}」的计划已提交并等待人工批准约 ${formatWaited(waitedMs)}，用户当前不在。`,
     `请你自己完成收尾，不要再等用户：`,
-    `1. 用 team_plan 的 approve 操作批准当前计划（planId=${plan.planId}，revision=${plan.revision}）。`,
-    `2. 批准前先把重模型成员降级：优先挑 modelId 匹配 /flash/i 的模型，且优先与成员同一 provider；找不到 Flash 就保持原样，别硬改。成员与当前模型：${models || "（未列出）"}。`,
-    `3. 若计划本身非法或无法执行（例如 validateTeamPlanGraph 会拒绝），不要硬批——直接停下并说明原因。`,
-    `4. 完成后用一句话汇报你到底做了什么（降级了谁、是否批准、理由）。`,
+    `1. 若计划可安全执行，用 team_plan 的 approve 操作批准当前计划（planId=${plan.planId}，revision=${plan.revision}）。`,
+    `   批准必须带 request_id，且**只能**用这个值：${requestId}（系统按 planId + revision 生成）。不要自己另编 id——同 id 才幂等，编新 id 会导致重复批准。`,
+    `2. 批准前可先降级重模型成员，但要有条件地做：只挑 modelId 匹配 /flash/i **且与该成员同一 provider** 的模型。`,
+    `   若找不到合适的 Flash 模型（没有匹配项，或只有跨 provider 的选项），**就不要改模型**，保持成员原样并在汇报里说明原因。不要硬改、也不要因此硬批。`,
+    `   成员与当前模型：${models || "（未列出）"}。`,
+    `3. 若计划本身非法或无法安全执行（例如 validateTeamPlanGraph 会拒绝、任务依赖成环、必填字段缺失），不要批准（不要硬批）——停下并说明具体原因。`,
+    `4. 完成后用一句话汇报你实际做了什么：降级了谁、是否批准、理由。`,
   ].join("\n");
 }
 
@@ -191,13 +207,14 @@ export function buildFailurePrompt(
     ? `${assignment.providerId}/${assignment.modelId}`
     : "（未知模型）";
   return [
-    `【失败恢复提醒】团队成员「${assignment.member}」用模型 ${model} 执行工单「${assignment.ticketSubject}」(id=${assignment.ticketId}) 时失败，用户当前不在。`,
+    `这是系统自动发出的「失败恢复提醒」，不是你本人（用户）发的消息——用户当前不在，本条消息由系统代发。`,
+    `团队成员「${assignment.member}」用模型 ${model} 执行工单「${assignment.ticketSubject}」(id=${assignment.ticketId}) 时失败。`,
     `失败原因：${assignment.error ?? "（未记录）"}`,
     `请你自己处理，不要再等用户：`,
     `1. 先判断是模型能力不足、依赖/环境问题，还是任务定义本身有问题。`,
     `2. 适合换模型重派就换一个更稳/更强的模型重新派发这张票。`,
     `3. 不适合重派就你自己接管这张票。`,
-    `4. 若判断无法安全重试（例如任务定义有错），不要硬试——说明原因并停下。`,
+    `4. 若判断无法安全重试（任务定义有错、环境缺依赖、反复失败同一原因），**不要硬试**——说明原因并停下。`,
     `5. 完成后用一句话汇报你做了什么。`,
     `（本票累计已自动提醒 ${attempts} 次，上限 ${maxRetries} 次；达到上限后系统只通知用户、不再提醒。）`,
   ].join("\n");
