@@ -1,8 +1,10 @@
 /**
- * 泳道快照的磁盘读取（服务端专用）。
+ * 泳道快照的磁盘读取 + 团队成员模型的写路径（服务端专用）。
  *
- * 从 ~/.pi/agent/teams/<team>/ 读 pi-team 落盘文件并交给 lib/agent-teams-swimlane.ts
- * 的纯投影。**只读**：不改任何团队文件、不碰会话内部状态。
+ * 读：从 ~/.pi/agent/teams/<team>/ 读 pi-team 落盘文件并交给 lib/agent-teams-swimlane.ts
+ * 的纯投影。
+ * 写：只写 config.json 的 members[].model / providerId（改成员模型用），读-改-写整份文件
+ * 以保留其余字段；**不碰会话内部状态**（发命令由调用方注入的 deliver 负责）。
  *
  * 路径与 pi-team 对齐（constants.getTeamsDir / teamHelpers.sanitizeName），但不 import
  * pi-team 包：其 package.json exports 只暴露 `.` / `./compat` / `./policy`，internal
@@ -10,7 +12,7 @@
  *
  * 客户端组件不要 import 本文件（含 node:fs）；只 import lib/agent-teams-swimlane.ts。
  */
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { userHome } from "./user-home";
 import {
@@ -272,4 +274,118 @@ export async function listTeams(): Promise<Array<{
     };
   }));
   return teams.filter((team): team is NonNullable<typeof team> => team !== null);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 写路径：改团队成员模型（读-改-写 config.json + 投递 set_model）
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface TeamMemberModelUpdate {
+  /** config.json 里成员的 agentId。 */
+  memberId: string;
+  provider: string;
+  modelId: string;
+}
+
+/**
+ * 一次投递的结果：
+ * - applied：已对存活会话执行 set_model，运行态即时生效；
+ * - unavailable：会话不在（未派发 / 已死 / parked），发不了命令，只能写文件。
+ */
+export type MemberModelDelivery = { kind: "applied" } | { kind: "unavailable" };
+
+export interface TeamMemberModelResult {
+  memberId: string;
+  /** 成员名（取不到为 null）。 */
+  name: string | null;
+  /** applied=已生效；saved=已保存待复活；failed=失败。 */
+  status: "applied" | "saved" | "failed";
+  /** status=failed 时的原因（成员不存在 / 模型不存在 / 命令失败）。 */
+  reason?: string;
+}
+
+export interface ApplyTeamMemberModelsOptions {
+  teamName: string;
+  updates: readonly TeamMemberModelUpdate[];
+  /**
+   * 把 set_model 投递到指定会话。会话不可用返回 unavailable；命令失败（如模型不存在）
+   * 请直接抛错——错误信息会原样透传进该成员的结果。
+   */
+  deliver: (sessionId: string, update: { provider: string; modelId: string }) => Promise<MemberModelDelivery>;
+}
+
+/** 原子写回 config.json：先写同目录临时文件再 rename，避免撕裂写入。 */
+async function writeTeamConfig(teamDir: string, config: unknown): Promise<void> {
+  const target = join(teamDir, "config.json");
+  const temp = join(teamDir, `config.json.${process.pid}.tmp`);
+  await writeFile(temp, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  await rename(temp, target);
+}
+
+/**
+ * 改团队成员的模型：读-改-写整份 config.json 的 members[].model / providerId
+ * （其余字段原样保留），并对存活会话投递 { type: "set_model" }。
+ *
+ * 逐条判定（**如实区分，不谎报已生效**）：
+ * - 成员不在 config 名册 → failed("成员不存在")；
+ * - 有存活会话且未 parked：投递成功 → applied 并写盘；投递抛错（如 Model not found）
+ *   → failed 且**不写盘**（保持 config 与运行态一致），错误原样透传；
+ * - 无存活会话 / parked / 未派发：只写盘 → saved（调用方据此显示「已保存待复活」）。
+ *
+ * 团队不存在（无 config.json）时返回 teamExists=false、results=[]。
+ */
+export async function applyTeamMemberModelChanges(
+  options: ApplyTeamMemberModelsOptions,
+): Promise<{ teamExists: boolean; results: TeamMemberModelResult[] }> {
+  const teamDir = teamDirFor(options.teamName);
+  const config = await readJson<Record<string, unknown>>(join(teamDir, "config.json"));
+  const rawMembers = config?.members;
+  if (!config || !Array.isArray(rawMembers)) return { teamExists: false, results: [] };
+
+  const lifecycle = await readLifecycle(teamDir);
+  const results: TeamMemberModelResult[] = [];
+  let mutated = false;
+
+  for (const update of options.updates) {
+    const member = rawMembers.find(
+      (item): item is Record<string, unknown> =>
+        !!item && typeof item === "object" && (item as { agentId?: unknown }).agentId === update.memberId,
+    );
+    if (!member) {
+      results.push({ memberId: update.memberId, name: null, status: "failed", reason: "成员不存在" });
+      continue;
+    }
+
+    const name = typeof member.name === "string" ? member.name : null;
+    const entry = name ? lifecycle[name] : undefined;
+    const sessionId =
+      (typeof entry?.sessionId === "string" && entry.sessionId)
+      || (typeof member.sessionId === "string" && member.sessionId)
+      || "";
+
+    let status: TeamMemberModelResult["status"] = "saved";
+    if (sessionId && entry?.status !== "parked") {
+      try {
+        const delivery = await options.deliver(sessionId, { provider: update.provider, modelId: update.modelId });
+        status = delivery.kind === "applied" ? "applied" : "saved";
+      } catch (error) {
+        // 命令失败（例：Model not found）：不写盘，保持 config 与运行态一致。
+        results.push({
+          memberId: update.memberId,
+          name,
+          status: "failed",
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
+    }
+
+    member.model = update.modelId;
+    member.providerId = update.provider;
+    mutated = true;
+    results.push({ memberId: update.memberId, name, status });
+  }
+
+  if (mutated) await writeTeamConfig(teamDir, config);
+  return { teamExists: true, results };
 }
