@@ -74,6 +74,28 @@ test("interpretLifecycleOutcome: malformed payload is an error", () => {
   assert.equal(interpretLifecycleOutcome("stop", null).tone, "error");
 });
 
+test("interpretLifecycleOutcome reads the 409-shaped payload (ok:false + error + results)", () => {
+  const stop = interpretLifecycleOutcome("stop", {
+    ok: false,
+    removed: false,
+    error: "有成员停止失败，未删除团队目录",
+    results: [{ memberId: "a", name: "impl", status: "failed", reason: "会话拒绝" }],
+  });
+  assert.equal(stop.tone, "error");
+  assert.equal(stop.params.message, "有成员停止失败，未删除团队目录");
+  assert.deepEqual(stop.failed, [{ name: "impl", reason: "会话拒绝" }]);
+
+  const reclaim = interpretLifecycleOutcome("reclaim", {
+    ok: false,
+    removed: false,
+    error: "有成员停止失败，未删除团队目录",
+    results: [],
+  });
+  assert.equal(reclaim.tone, "warning");
+  assert.equal(reclaim.messageKey, "teams.lifecycle.notRemoved");
+  assert.equal(reclaim.params.reason, "有成员停止失败，未删除团队目录");
+});
+
 test("LifecycleOutcomeMessage marks the tone and lists failed members", () => {
   const html = render(React.createElement(LifecycleOutcomeMessage, {
     outcome: interpretLifecycleOutcome("reclaim", { ok: true, removed: false, reason: "有成员仍在运行", results: [] }),

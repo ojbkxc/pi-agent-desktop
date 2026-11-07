@@ -19,6 +19,7 @@ export interface LifecycleResponse {
   ok?: boolean;
   removed?: boolean;
   reason?: string;
+  error?: string;
   results?: LifecycleMemberResult[];
 }
 
@@ -63,13 +64,18 @@ export function interpretLifecycleOutcome(
     return {
       tone: "warning",
       messageKey: "teams.lifecycle.notRemoved",
-      params: { reason: payload.reason ?? failed[0]?.reason ?? "" },
+      params: { reason: payload.reason ?? payload.error ?? failed[0]?.reason ?? "" },
       failed,
     };
   }
 
   if (!ok) {
-    return { tone: "error", messageKey: "teams.lifecycle.requestFailed", params: { message: payload.reason ?? "" }, failed };
+    return {
+      tone: "error",
+      messageKey: "teams.lifecycle.requestFailed",
+      params: { message: payload.reason ?? payload.error ?? "" },
+      failed,
+    };
   }
   return { tone: "success", messageKey: "teams.lifecycle.stopDone", params: { count: stopped, already }, failed };
 }
@@ -164,14 +170,16 @@ export function TeamLifecycleActions({ team, displayName, memberCount, onDone }:
         body: JSON.stringify({ action }),
       });
       const payload = await response.json().catch(() => null) as (LifecycleResponse & { error?: string }) | null;
-      if (!response.ok) {
+      // 契约：失败也以 409 带回结构化的 ok/removed/results（逐条如实），不能当成传输错误丢掉。
+      const structured = Boolean(payload) && (typeof payload!.ok === "boolean" || Array.isArray(payload!.results));
+      if (!structured) {
         setFailure(t("teams.lifecycle.requestFailed", {
           message: payload?.error ?? `HTTP ${response.status}`,
         }));
         return;
       }
       setOutcome(interpretLifecycleOutcome(action, payload));
-      onDone?.();
+      if (response.ok && payload!.ok === true) onDone?.();
     } catch (err) {
       setFailure(t("teams.lifecycle.requestFailed", {
         message: err instanceof Error ? err.message : String(err),

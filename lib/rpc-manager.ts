@@ -2,8 +2,8 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { createAgentSessionFromServices, createAgentSessionServices, getAgentDir, initTheme, SessionManager, SettingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
-import { existsSync, realpathSync, statSync, writeFileSync } from "fs";
-import { resolve } from "path";
+import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "fs";
+import { join, resolve } from "path";
 import { validateAgentImages } from "./image-attachments";
 import { userImageDisplayText, userMessageImageCount } from "./user-image-display";
 import { invalidateModelsCache } from "./models-cache";
@@ -54,6 +54,7 @@ import {
 } from "./subagents";
 import { createSubagentController } from "./subagent-runtime";
 import { createPiExtensionBuiltins } from "./pi-extension-builtins";
+import { findTeamBySession, teamDirFor } from "./agent-teams-swimlane-store";
 import { isBuiltInSubagentsEnabled } from "./subagent-settings";
 import { generateSessionTitle } from "./session-title";
 import { isAutoTitleEnabled } from "./session-title-settings";
@@ -2865,6 +2866,57 @@ export function getCompletionNotificationSuppressedRpcSessionIds(): string[] {
 }
 
 /**
+ * 恢复成员会话时按 sessionId 反查团队身份（团队名 + 成员名）。
+ *
+ * 为什么要反查：恢复走的快照 `SubagentSessionResources` 只有
+ * appendSystemPrompt/tools/loadSkills/loadExtensions/exactSystemPrompt，**没有身份字段**，
+ * 读快照也拿不到 agentName/teamName。缺了身份，重开的成员会话拿不到
+ * `PI_AGENT_NAME`/`PI_TEAM_NAME`，pi-team 就会把它当 lead，于是它以 lead 身份操作团队。
+ *
+ * 口径（已核对 pi-team dist，勿凭直觉改）：
+ * - **团队名取 config.json 的 `name`（原始名，不是 sanitize 后的目录名）**。pi-team 的
+ *   `team_create` 就是把原始 `team_name` 交给 `host.start({ teamName })` 作为
+ *   `PI_TEAM_NAME`；目录名只在 `getTeamFilePath` 内部 sanitize。用原始名才能与新建路径
+ *   逐字一致（「跑一次 → 重开」行为不漂移）。
+ * - 成员名优先取 `config.json` 的 `members[]`（按 sessionId 命中）；team_create 的派发只写
+ *   `lifecycle.json`，故回落那里。命中 lead（或查不到）返回 undefined —— **不注入**，
+ *   保持现状，绝不瞎填。
+ */
+export async function resolveTeamMemberIdentity(
+  sessionId: string,
+): Promise<{ agentName?: string; teamName?: string } | undefined> {
+  try {
+    const teamDirName = await findTeamBySession(sessionId);
+    if (!teamDirName) return undefined;
+    const teamDir = teamDirFor(teamDirName);
+    const config = JSON.parse(readFileSync(join(teamDir, "config.json"), "utf8")) as {
+      name?: unknown;
+      members?: Array<{ name?: unknown; sessionId?: unknown }> | undefined;
+    };
+    const teamName = typeof config.name === "string" && config.name.trim() ? config.name : teamDirName;
+    let agentName: string | undefined;
+    if (Array.isArray(config.members)) {
+      const member = config.members.find(
+        (entry) => entry?.sessionId === sessionId && typeof entry.name === "string",
+      );
+      if (member) agentName = member.name as string;
+    }
+    if (!agentName) {
+      const lifecycle = JSON.parse(readFileSync(join(teamDir, "lifecycle.json"), "utf8")) as {
+        members?: Record<string, { sessionId?: unknown }> | undefined;
+      };
+      const found = Object.entries(lifecycle.members ?? {}).find(([, entry]) => entry?.sessionId === sessionId);
+      if (found) agentName = found[0];
+    }
+    // 命中的是 team-lead（或没有成员名）时不注入：lead 不通过这条成员路径恢复。
+    if (!agentName || agentName === "team-lead") return undefined;
+    return { agentName, teamName };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Get or create an AgentSession for the given session.
  * For new sessions (sessionFile === ""), pi generates its own id.
  * New sessions resolve enabledModels before construction so the initial model,
@@ -3008,11 +3060,18 @@ export async function startRpcSession(
     // the member set instead (plus pi-lsp / pi-team) — but only if its snapshot carries
     // member-extension tools, so a session created before that change stays as it was.
     // Lean loads none of them, and therefore builds no MCP host either.
+    // 恢复成员会话必须补回身份：快照里没有 agentName/teamName，按 sessionId 反查团队文件
+    // （见 resolveTeamMemberIdentity）。缺它，重开的成员会话会被 pi-team 当 lead。新建路径
+    // 见 lib/subagent-runtime.ts，两处必须装配同一批内置扩展与同一份身份。
+    const memberIdentity = subagentResources ? await resolveTeamMemberIdentity(sessionId) : undefined;
     const builtins = chatOnly || lean
       ? undefined
       : subagentResources
         ? snapshotWantsSubagentExtensions(subagentResources.tools)
-          ? await createSubagentBuiltinExtensions({ agentDir })
+          ? await createSubagentBuiltinExtensions({
+              agentDir,
+              ...(memberIdentity ? { teamIdentity: memberIdentity } : {}),
+            })
           : undefined
         : await createPiWebBuiltinExtensions({ agentDir });
     const services = await createAgentSessionServices({

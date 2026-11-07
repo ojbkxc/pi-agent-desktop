@@ -15,12 +15,15 @@
  *     项目会话里才有意义；pi-purge 的 `/purge` 命令在聊天策略下没有意义。
  */
 import type { ExtensionAPI, ExtensionContext, InlineExtension } from "@earendil-works/pi-coding-agent";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createPiTeamExtension } from "pi-team";
 import lspExtension from "lsp-mcp";
 import { createSubagentTeamHost, createUnavailableTeamHost } from "./pi-team-host";
 import { PI_EXTENSION_BUILTIN_NAMES } from "./pi-extension-names";
 import { isBuiltInSubagentsEnabled } from "./subagent-settings";
 import type { SubagentController } from "./subagent-runtime";
+import { sanitizeTeamName, teamDirFor } from "./agent-teams-swimlane-store";
 
 // pi-purge 的加载方式与另两个不同，这里必须用运行时加载而不是顶层 import：
 // 它不编译、不发 dist，入口是纯 TS 源码 `extensions/pi-purge.ts`，且 package.json
@@ -46,6 +49,39 @@ const [LSP_BUILTIN_NAME, TEAM_BUILTIN_NAME, PURGE_BUILTIN_NAME] = PI_EXTENSION_B
 
 function builtin(name: string, factory: (pi: ExtensionAPI) => void | Promise<void>): InlineExtension {
   return { name, factory, replaceable: true, builtin: true };
+}
+
+const TEAM_CREATE_TOOL_NAME = "team_create";
+
+/** 命名提示的 system prompt 截面名。 */
+export const TEAM_NAMING_SECTION = "team-naming";
+
+// 只对 lead 注入的命名提示。语言中立（英文），因为服务端拿不到 locale —— i18n 只在浏览器
+// localStorage，见 docs/i18n.md：i18n 不与服务端耦合，故这里不按语言分叉。
+export const TEAM_NAMING_GUIDE = `When you call team_create, team_name must be a path-safe identifier: ASCII letters, digits and hyphens only. It becomes the team's directory name. Put the human-readable name — including a Chinese name — in the description field; that is what the team list shows.
+
+Two names that sanitize to the same identifier collide: every non-ASCII character (e.g. any Chinese character) collapses to a hyphen, so two all-Chinese names both become "-". The second team_create then fails because that directory already exists. Give each team a distinct ASCII team_name.`;
+
+/**
+ * team_create 撞目录时的拦截文案。
+ *
+ * 目录 slug 是把 team_name 里所有非字母数字字符压成 `-` 得出的，因此「前端队」「后端队」
+ * 这类中文名的 slug 都是同一串短横线。pi-team 只会回一句「团队 "后端队" 已存在」，用的还是
+ * 请求原名 —— 用户会以为「后端队」被占了，完全看不懂。这里说清是**目录名**撞了、跟谁撞。
+ */
+export function teamCreateCollisionReason(slug: string, existingDisplayName: string): string {
+  return `目录名 "${slug}" 已被团队「${existingDisplayName}」占用（中文/符号名会被压成同一串短横线）。`
+    + `请给 team_name 一个路径安全的 ASCII 标识符（字母、数字、短横线），人类可读名（含中文名）写进 description。`;
+}
+
+/** 读既有团队的 displayName（config.json 的原始 name）；读不到回落 null。 */
+function readTeamDisplayName(teamDir: string): string | null {
+  try {
+    const config = JSON.parse(readFileSync(join(teamDir, "config.json"), "utf8")) as { name?: unknown };
+    return typeof config.name === "string" && config.name.trim() ? config.name : null;
+  } catch {
+    return null;
+  }
 }
 
 /** LSP 扩展：注册单个 `lsp` 工具，并把 write/edit 后的诊断织入工具结果。 */
@@ -80,6 +116,29 @@ function teamBuiltin(
     pi.on("session_start", (_event, ctx) => {
       sessionContext = ctx;
     });
+    // team_create 撞目录预检：中文/符号名会被 pi-team 压成同一串短横线（「前端队」「后端队」
+    // 的 slug 都是 "---"），pi-team 只会说「团队 "后端队" 已存在」，用户看不懂。这里提前拦下
+    // 并说清是目录名撞了、跟哪个既有团队撞。放在 team_create 自己的检查之前。
+    pi.on("tool_call", (event) => {
+      if (event.toolName !== TEAM_CREATE_TOOL_NAME) return undefined;
+      const input = event.input as { team_name?: unknown } | undefined;
+      // 与 pi-team 逐字一致：它用未 trim 的 params.team_name 落目录（sanitizeName 会把空格
+      // 也压成 '-'），所以这里也不 trim，只拿 trim 结果判空。
+      const rawName = typeof input?.team_name === "string" ? input.team_name : "";
+      if (!rawName.trim()) return undefined;
+      const dir = teamDirFor(rawName);
+      if (!existsSync(dir)) return undefined;
+      const slug = sanitizeTeamName(rawName);
+      const display = readTeamDisplayName(dir) ?? slug;
+      return { block: true, reason: teamCreateCollisionReason(slug, display) };
+    });
+    // 命名提示只给 lead：成员（identity.agentName 存在）不建团队。
+    if (!identity?.agentName) {
+      pi.on("before_agent_start", (event) => {
+        event.systemPromptOptions.sections[TEAM_NAMING_SECTION] = TEAM_NAMING_GUIDE;
+        return undefined;
+      });
+    }
     const previousAgentName = process.env.PI_AGENT_NAME;
     const previousTeamName = process.env.PI_TEAM_NAME;
     const captureIdentity = Boolean(identity?.agentName || identity?.teamName);
