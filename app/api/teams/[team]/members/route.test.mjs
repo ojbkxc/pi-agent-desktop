@@ -206,7 +206,7 @@ test("重复 memberId 去重，同一会话只投递一次", async (t) => {
 
 const PLAN_ONLY = {
   createdAt: 111,
-  members: [{ id: "p-carol", name: "carol", runtime: { modelId: "plan-old" } }],
+  members: [{ id: "p-carol", name: "carol", agentType: "general-purpose", runtime: { modelId: "plan-old" } }],
   tasks: [],
 };
 const LIFECYCLE_WITH_CAROL = {
@@ -235,6 +235,7 @@ test("plan 独有成员：追加 config 名册、投影能读到新模型、幂�
   assert.equal(carol.model, "claude-opus-4-1");
   assert.equal(carol.providerId, "ty");
   assert.equal(carol.sessionId, undefined, "刻意不写 sessionId（避免遮蔽 lifecycle 里后续换新的会话）");
+  assert.equal(carol.agentType, "general-purpose", "带上 plan 的 agentType，角色不退化成通用 member");
   assert.equal(memberOf(config, "m-impl").note, "keep-me", "原有成员不受影响");
 
   // 投影能读到新模型 —— 即「改完确实在界面上可见」，不制造 H3 式假象
@@ -242,6 +243,7 @@ test("plan 独有成员：追加 config 名册、投影能读到新模型、幂�
   const carolView = snapshot.members.find((member) => member.name === "carol");
   assert.ok(carolView, "投影名册出现 carol");
   assert.equal(carolView.model, "claude-opus-4-1", "config.member.model 优先于 plan.runtime.modelId");
+  assert.equal(carolView.role, "general-purpose", "角色保持 plan 口径");
 
   // 幂等：改第二次不再追加，只更新
   await patch({ memberId: "p-carol", provider: "ty", modelId: "m2" });

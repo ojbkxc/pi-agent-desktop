@@ -415,9 +415,11 @@ export async function applyTeamMemberModelChanges(
     }
 
     // 成功路径才落库：plan 独有成员在此追加名册条目（幂等，见函数注释）。
+    // 带上 plan 的 agentType，否则投影里该成员的角色会从 plan 值退化成通用 "member"。
     const member = existing ?? {
       agentId: update.memberId,
       name,
+      ...(planMember?.agentType ? { agentType: planMember.agentType } : {}),
       joinedAt: typeof plan?.createdAt === "number" ? plan.createdAt : 0,
       cwd: "",
     };
