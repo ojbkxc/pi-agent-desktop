@@ -11053,6 +11053,7 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 }
 
 .model-picker-filter,
+.model-picker-flash,
 .model-picker-clear {
   flex: none;
   padding: 4px 10px;
@@ -11064,15 +11065,22 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   cursor: pointer;
 }
 
-.model-picker-filter[aria-pressed="true"] {
+.model-picker-filter[aria-pressed="true"],
+.model-picker-flash[aria-pressed="true"] {
   border-color: var(--accent);
   color: var(--text);
 }
 
 .model-picker-filter:focus-visible,
+.model-picker-flash:focus-visible,
 .model-picker-clear:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+.model-picker-flash:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 .model-picker-count {

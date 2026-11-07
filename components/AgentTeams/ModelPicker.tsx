@@ -26,6 +26,27 @@ export function toggleModelRef(value: string[], ref: string): string[] {
   return value.includes(ref) ? value.filter((item) => item !== ref) : [...value, ref];
 }
 
+/**
+ * Flash 档判定：模型 id 匹配 /flash/i。数据驱动，将来任何 provider 新增 flash
+ * 模型都自动纳入，不需要改代码。
+ */
+export function isFlashModelId(id: string): boolean {
+  return /flash/i.test(id);
+}
+
+/**
+ * 当前可见集里的 Flash 档：refs 是它们的 ref，active 表示「已全部选中」。
+ * 作用域是传入的可见集（受当前搜索/筛选影响），无 flash 项时 refs 为空。
+ */
+export function flashPresetState(
+  visible: ModelCatalogEntry[],
+  value: string[],
+): { refs: string[]; active: boolean } {
+  const refs = visible.filter((entry) => isFlashModelId(entry.id)).map((entry) => entry.ref);
+  const selected = new Set(value);
+  return { refs, active: refs.length > 0 && refs.every((ref) => selected.has(ref)) };
+}
+
 /** 按 provider 分组（保持传入顺序）。 */
 function groupEntries(entries: ModelCatalogEntry[]): { provider: string; models: ModelCatalogEntry[] }[] {
   const groups: { provider: string; models: ModelCatalogEntry[] }[] = [];
@@ -72,6 +93,24 @@ export function ModelPicker({
     [catalog.entries, query, enabledOnly],
   );
   const groups = useMemo(() => groupEntries(filtered), [filtered]);
+  const flash = useMemo(() => flashPresetState(filtered, value), [filtered, value]);
+  const flashSelectedCount = useMemo(() => {
+    const byRef = new Map(catalog.entries.map((entry) => [entry.ref, entry]));
+    return value.filter((ref) => {
+      const entry = byRef.get(ref);
+      return entry ? isFlashModelId(entry.id) : isFlashModelId(ref);
+    }).length;
+  }, [catalog.entries, value]);
+
+  const toggleFlash = () => {
+    if (flash.refs.length === 0) return;
+    if (flash.active) {
+      const remove = new Set(flash.refs);
+      onChange(value.filter((ref) => !remove.has(ref)));
+      return;
+    }
+    onChange([...new Set([...value, ...flash.refs])]);
+  };
 
   return (
     <div
@@ -102,8 +141,27 @@ export function ModelPicker({
             {t("teams.modelPicker.enabledOnly")}
           </button>
         )}
-        <span className="model-picker-count" aria-live="polite" data-count={value.length}>
-          {t("teams.modelPicker.selected", { count: value.length })}
+        <button
+          type="button"
+          className="model-picker-flash"
+          aria-pressed={flash.active}
+          disabled={disabled || flash.refs.length === 0}
+          title={flash.refs.length === 0
+            ? t("teams.modelPicker.flashNone")
+            : t("teams.modelPicker.flashAll")}
+          onClick={toggleFlash}
+        >
+          {t("teams.modelPicker.flashAll")}
+        </button>
+        <span
+          className="model-picker-count"
+          aria-live="polite"
+          data-count={value.length}
+          data-flash-count={flashSelectedCount}
+        >
+          {flashSelectedCount > 0
+            ? t("teams.modelPicker.selectedFlash", { count: value.length, flash: flashSelectedCount })
+            : t("teams.modelPicker.selected", { count: value.length })}
         </span>
         {value.length > 0 && (
           <button
@@ -118,13 +176,13 @@ export function ModelPicker({
       </div>
 
       {loading ? (
-        <p className="model-picker-hint">{t("teams.modelPicker.loading")}</p>
+        <p className="model-picker-hint" data-state="loading">{t("teams.modelPicker.loading")}</p>
       ) : error ? (
-        <p className="model-picker-hint model-picker-hint--error" role="alert">{t("teams.modelPicker.error")}</p>
+        <p className="model-picker-hint model-picker-hint--error" role="alert" data-state="error">{t("teams.modelPicker.error")}</p>
       ) : catalog.entries.length === 0 ? (
-        <p className="model-picker-hint">{t("teams.modelPicker.empty")}</p>
+        <p className="model-picker-hint" data-state="empty">{t("teams.modelPicker.empty")}</p>
       ) : groups.length === 0 ? (
-        <p className="model-picker-hint">{t("teams.modelPicker.noMatch")}</p>
+        <p className="model-picker-hint" data-state="no-match">{t("teams.modelPicker.noMatch")}</p>
       ) : (
         <div className="model-picker-groups">
           {groups.map((group) => (

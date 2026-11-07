@@ -7,7 +7,8 @@ const jiti = createJiti(import.meta.url, {
   jsx: { runtime: "automatic" },
   tsconfigPaths: true,
 });
-const { ModelPicker, filterCatalogEntries, toggleModelRef } = await jiti.import("./ModelPicker.tsx");
+const { ModelPicker, filterCatalogEntries, toggleModelRef, isFlashModelId, flashPresetState } =
+  await jiti.import("./ModelPicker.tsx");
 const { buildModelCatalog } = await jiti.import("@/hooks/useModelCatalog.ts");
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
@@ -88,16 +89,16 @@ test("tags models the user has not enabled", () => {
   assert.match(html, /model-picker-model-tag/, "未启用模型带标记");
 });
 
-test("shows dedicated states for loading, error, empty and no-match", () => {
-  assert.match(render({ loading: true }), /teams\.modelPicker\.loading/);
-  assert.match(render({ error: "boom" }), /role="alert"/);
+test("shows dedicated states for loading, error and empty", () => {
+  assert.match(render({ loading: true }), /data-state="loading"/);
+  assert.match(render({ error: "boom" }), /role="alert" data-state="error"/);
   const emptyCatalog = buildModelCatalog({ modelList: [] }, ENABLED_PAYLOAD);
   const empty = renderToStaticMarkup(React.createElement(
     I18nProvider,
     { initialLocale: "en" },
     React.createElement(ModelPicker, { catalog: emptyCatalog, value: [], onChange: () => {} }),
   ));
-  assert.match(empty, /model-picker-hint/);
+  assert.match(empty, /data-state="empty"/);
   assert.doesNotMatch(empty, /class="model-picker-group"/);
 });
 
@@ -118,4 +119,57 @@ test("keyboard access is real buttons with visible focus rings (source + CSS)", 
   const css = await readFile(new URL("../../app/native-theme.css", import.meta.url), "utf8");
   assert.match(css, /\.model-picker-model:focus-visible/);
   assert.match(css, /\.model-picker-search:focus-visible/);
+  assert.match(css, /\.model-picker-flash:focus-visible/);
+});
+
+// ── Flash 预设 ──────────────────────────────────────────────────────────────
+const FLASH_PAYLOAD = {
+  modelList: [
+    { id: "qwen3.8-flash", name: "Qwen Flash", provider: "qwen" },
+    { id: "deepseek-v4.1-flash", name: "DeepSeek Flash", provider: "deepseek" },
+    { id: "claude-sonnet", name: "Claude Sonnet", provider: "zenmux" },
+  ],
+};
+const flashCatalog = buildModelCatalog(FLASH_PAYLOAD, { allEnabled: true, providers: [] });
+
+test("isFlashModelId is data-driven on /flash/i, not a hard-coded list", () => {
+  assert.equal(isFlashModelId("qwen3.8-flash"), true);
+  assert.equal(isFlashModelId("deepseek-v4.1-flash"), true);
+  assert.equal(isFlashModelId("GLM-5.3-FLASH"), true, "大小写不敏感");
+  assert.equal(isFlashModelId("future-provider/nano-flash-preview"), true, "将来新增自动纳入");
+  assert.equal(isFlashModelId("claude-sonnet"), false);
+});
+
+test("flashPresetState scopes to the visible set and reports full selection", () => {
+  const entries = flashCatalog.entries;
+  const none = flashPresetState(entries, []);
+  assert.deepEqual(none.refs, ["deepseek/deepseek-v4.1-flash", "qwen/qwen3.8-flash"], "按目录排序");
+  assert.equal(none.active, false);
+  assert.equal(flashPresetState(entries, ["qwen/qwen3.8-flash"]).active, false);
+  assert.equal(
+    flashPresetState(entries, ["qwen/qwen3.8-flash", "deepseek/deepseek-v4.1-flash"]).active,
+    true,
+  );
+  // 无 flash 项的可见集（例如搜索命中非 flash）→ refs 空，按钮应禁用
+  const noFlash = entries.filter((entry) => entry.id === "claude-sonnet");
+  assert.deepEqual(flashPresetState(noFlash, []).refs, []);
+});
+
+test("flash preset button is disabled with an explanatory title when no flash model is visible", () => {
+  const html = render({ value: [] }); // 基础目录里没有 flash 模型
+  assert.match(html, /class="model-picker-flash" aria-pressed="false" disabled="" title="[^"]+"/, "禁用且带非空 title 说明");
+});
+
+test("flash preset button activates when every visible flash model is selected and counts them", () => {
+  const html = renderToStaticMarkup(React.createElement(
+    I18nProvider,
+    { initialLocale: "en" },
+    React.createElement(ModelPicker, {
+      catalog: flashCatalog,
+      value: ["qwen/qwen3.8-flash", "deepseek/deepseek-v4.1-flash"],
+      onChange: () => {},
+    }),
+  ));
+  assert.match(html, /class="model-picker-flash" aria-pressed="true"/, "全选 flash 时按钮激活");
+  assert.match(html, /data-flash-count="2"/);
 });
