@@ -133,7 +133,6 @@ test("countTaskStates is mutually exclusive, five-state and treats missing depen
     available: 2,
     running: 1,
     completed: 1,
-    in_progress: 1,
   });
 });
 
@@ -155,6 +154,33 @@ test("renders one lane per dependency depth with root/layer/wrap-up titles", () 
   assert.match(html, /Layer 2/);
   assert.match(html, /Wrap-up/);
   assert.match(html, /agent-teams-board-lane/);
+});
+
+test("draws the lane plates inside the SVG before the dependency edges (no occlusion)", () => {
+  const html = render(snapshot([
+    ticket("t1", { status: "ended", assignments: [assignment("ended", "completed")] }),
+    ticket("t2", { dependencies: ["t1"] }),
+  ]));
+  const plateIndex = html.indexOf("agent-teams-board-plate");
+  // 用「--done」锁定依赖连线本身，避免撞上 SVG 容器类 `agent-teams-board-edges`。
+  const edgeIndex = html.indexOf("agent-teams-board-edge--done");
+  assert.ok(plateIndex >= 0, "底板画在 SVG 里");
+  assert.ok(edgeIndex >= 0, "依赖连线仍在");
+  assert.ok(plateIndex < edgeIndex, "底板必须先于连线绘制，连线才不被遮挡");
+});
+
+test("renders the formation slot with the board's own width", () => {
+  const html = renderToStaticMarkup(React.createElement(
+    I18nProvider,
+    { initialLocale: "en" },
+    React.createElement(TaskBoardCanvas, {
+      snapshot: snapshot([ticket("t1")]),
+      requestedWidth: 900,
+      formation: (width) => React.createElement("div", { className: "test-formation" }, `w=${width}`),
+    }),
+  ));
+  assert.match(html, /test-formation/);
+  assert.match(html, /w=900/, "编队带拿到的是画布最终宽度");
 });
 
 test("renders owner name and a blockedBy count badge on task cards", () => {

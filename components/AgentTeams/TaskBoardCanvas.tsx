@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import {
   TASK_HEIGHT,
@@ -38,28 +38,17 @@ export function laneTitleKey(depth: number, maxDepth: number): string {
 
 /**
  * 五态紧急度计数（互斥），口径与 getTicketUrgency 完全一致；统计头直接复用。
- * `in_progress` 是保留给旧调用方的别名，恒等于 `running`（同一状态两种命名）。
  */
-export interface TaskUrgencyCounts extends Record<TicketUrgency, number> {
-  /** @deprecated 旧命名；与 `running` 同值，新代码请读 `running`。 */
-  in_progress: number;
-}
-
-export function countTaskStates(tickets: WorkbenchTicket[]): TaskUrgencyCounts {
+export function countTaskStates(tickets: WorkbenchTicket[]): Record<TicketUrgency, number> {
   const byId = new Map(tickets.map((ticket) => [ticket.id, ticket]));
-  const counts: TaskUrgencyCounts = {
+  const counts: Record<TicketUrgency, number> = {
     failed: 0,
     blocked: 0,
     available: 0,
     running: 0,
     completed: 0,
-    in_progress: 0,
   };
-  for (const ticket of tickets) {
-    const urgency = getTicketUrgency(ticket, byId);
-    counts[urgency] += 1;
-    if (urgency === "running") counts.in_progress += 1;
-  }
+  for (const ticket of tickets) counts[getTicketUrgency(ticket, byId)] += 1;
   return counts;
 }
 
@@ -81,16 +70,26 @@ export function dependencyPath(
 
 interface Props {
   snapshot: TeamWorkbenchSnapshot;
+  /** 画布至少占满的宽度（容器宽 / 编队带自然宽）；缺省按任务自然宽。 */
+  requestedWidth?: number;
+  /**
+   * 编队带槽位：收到本画布实际宽度后返回要铺在上半区（y 0..410）的节点。
+   * 编队带必须与任务泳道共用同一宽度与滚动容器，才真正填掉泳道上方那片空白。
+   */
+  formation?: (width: number) => ReactNode;
 }
 
 /**
- * 共享任务列表画布（Agent Teams 页任务区）：按依赖深度分层，每层一条竖向
- * 泳道自左向右排列（根任务 → 中间层 → 收尾），任务卡片按状态着色，SVG
- * 贝塞尔曲线连接依赖。可横向滚动，尺寸由纯布局引擎给出。
+ * 共享任务列表画布（Agent Teams 页任务区）：上半区是编队带（formation 槽位），
+ * 下半区按依赖深度分层，每层一条竖向泳道自左向右排列（根任务 → 中间层 → 收尾）。
+ * 泳道底板与依赖连线画在同一个 SVG 里、且底板在连线之前，连线才不会被底板遮挡。
  */
-export function TaskBoardCanvas({ snapshot }: Props) {
+export function TaskBoardCanvas({ snapshot, requestedWidth = 0, formation }: Props) {
   const { t } = useI18n();
-  const layout = useMemo(() => layoutTeamWorkbenchTasks(snapshot), [snapshot]);
+  const layout = useMemo(
+    () => layoutTeamWorkbenchTasks(snapshot, requestedWidth),
+    [snapshot, requestedWidth],
+  );
   const membersById = useMemo(
     () => new Map(snapshot.members.map((member) => [member.id, member.name])),
     [snapshot.members],
@@ -118,72 +117,96 @@ export function TaskBoardCanvas({ snapshot }: Props) {
         <p className="agent-teams-board-cycle-warning" role="status">{t("teams.cycleWarning")}</p>
       )}
       <div className="agent-teams-board-scroll">
-      <div className="agent-teams-board" style={{ width: layout.width, minWidth: layout.width, height: layout.height }}>
-        <svg className="agent-teams-board-edges" width={layout.width} height={layout.height} aria-hidden="true">
-          {edges.map((edge) => (
-            <path
-              key={edge.key}
-              className={`agent-teams-board-edge${edge.satisfied ? " agent-teams-board-edge--done" : ""}`}
-              d={edge.path}
-            />
-          ))}
-        </svg>
+        <div className="agent-teams-board" style={{ width: layout.width, minWidth: layout.width, height: layout.height }}>
+          {formation?.(layout.width)}
 
-        {layout.lanes.map((lane) => {
-          const completed = layout.tasks.filter((task) => task.depth === lane.depth && task.urgency === "completed").length;
-          const titleKey = laneTitleKey(lane.depth, maxDepth);
-          return (
-            <div
-              key={lane.depth}
-              className="agent-teams-board-lane"
-              style={{ left: lane.x, top: lane.y, width: lane.width, height: lane.height }}
-            >
-              <div className="agent-teams-board-lane-head">
-                <span className="agent-teams-board-lane-title">
-                  {titleKey === "teams.boardLayer" ? t(titleKey, { layer: lane.depth + 1 }) : t(titleKey)}
-                </span>
-                <span className="agent-teams-board-lane-count">
-                  {t("teams.boardCompleted", { completed, total: lane.count })}
-                </span>
-              </div>
-            </div>
-          );
-        })}
+          <svg className="agent-teams-board-edges" width={layout.width} height={layout.height} aria-hidden="true">
+            {/* 泳道底板画在依赖连线之前 —— 与上游一致，连线压在上面不会被遮住。 */}
+            {layout.lanes.map((lane, index) => (
+              <g key={`plate-${lane.depth}`} className="agent-teams-board-plate">
+                <rect
+                  x={lane.x}
+                  y={lane.y}
+                  width={lane.width}
+                  height={lane.height}
+                  rx={12}
+                  fill={index % 2 === 0 ? "var(--surface)" : "var(--bg-hover)"}
+                  fillOpacity={0.62}
+                  stroke="var(--separator)"
+                />
+                <line
+                  x1={lane.x + 12}
+                  y1={lane.y + 26}
+                  x2={lane.x + lane.width - 12}
+                  y2={lane.y + 26}
+                  stroke="var(--separator)"
+                />
+              </g>
+            ))}
+            {edges.map((edge) => (
+              <path
+                key={edge.key}
+                className={`agent-teams-board-edge${edge.satisfied ? " agent-teams-board-edge--done" : ""}`}
+                d={edge.path}
+              />
+            ))}
+          </svg>
 
-        {layout.tasks.map((task) => {
-          const { ticket } = task;
-          const ownerName = ticket.ownerId
-            ? membersById.get(ticket.ownerId) ?? ticket.ownerId
-            : t("teams.unassigned");
-          return (
-            <article
-              key={ticket.id}
-              className={`agent-teams-board-task ${taskToneClass(task.urgency)}${task.cycleId === null ? "" : " agent-teams-board-task--cycle"}`}
-              data-state={task.urgency}
-              data-cycle={task.cycleId === null ? undefined : task.cycleId}
-              style={{ left: task.x, top: task.y, width: TASK_WIDTH, height: TASK_HEIGHT }}
-            >
-              <span className="agent-teams-board-task-head">
-                <span className="agent-teams-board-task-id">#{ticket.id}</span>
-                <span className="agent-teams-board-task-dot" aria-hidden="true" />
-              </span>
-              <span className="agent-teams-board-task-subject" title={ticket.subject}>{ticket.subject}</span>
-              <span className="agent-teams-board-task-foot">
-                <span className="agent-teams-board-task-avatar" aria-hidden="true">{ownerName.slice(0, 1)}</span>
-                <span className="agent-teams-board-task-owner">{ownerName}</span>
-                {ticket.dependencies.length > 0 && (
-                  <span
-                    className="agent-teams-board-task-deps"
-                    title={t("teams.dependsOn", { deps: ticket.dependencies.join(", ") })}
-                  >
-                    {t("teams.boardBlockedBadge", { count: ticket.dependencies.length })}
+          {layout.lanes.map((lane) => {
+            const completed = layout.tasks.filter((task) => task.depth === lane.depth && task.urgency === "completed").length;
+            const titleKey = laneTitleKey(lane.depth, maxDepth);
+            return (
+              <div
+                key={lane.depth}
+                className="agent-teams-board-lane"
+                style={{ left: lane.x, top: lane.y, width: lane.width, height: lane.height }}
+              >
+                <div className="agent-teams-board-lane-head">
+                  <span className="agent-teams-board-lane-title">
+                    {titleKey === "teams.boardLayer" ? t(titleKey, { layer: lane.depth + 1 }) : t(titleKey)}
                   </span>
-                )}
-              </span>
-            </article>
-          );
-        })}
-      </div>
+                  <span className="agent-teams-board-lane-count">
+                    {t("teams.boardCompleted", { completed, total: lane.count })}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+
+          {layout.tasks.map((task) => {
+            const { ticket } = task;
+            const ownerName = ticket.ownerId
+              ? membersById.get(ticket.ownerId) ?? ticket.ownerId
+              : t("teams.unassigned");
+            return (
+              <article
+                key={ticket.id}
+                className={`agent-teams-board-task ${taskToneClass(task.urgency)}${task.cycleId === null ? "" : " agent-teams-board-task--cycle"}`}
+                data-state={task.urgency}
+                data-cycle={task.cycleId === null ? undefined : task.cycleId}
+                style={{ left: task.x, top: task.y, width: TASK_WIDTH, height: TASK_HEIGHT }}
+              >
+                <span className="agent-teams-board-task-head">
+                  <span className="agent-teams-board-task-id">#{ticket.id}</span>
+                  <span className="agent-teams-board-task-dot" aria-hidden="true" />
+                </span>
+                <span className="agent-teams-board-task-subject" title={ticket.subject}>{ticket.subject}</span>
+                <span className="agent-teams-board-task-foot">
+                  <span className="agent-teams-board-task-avatar" aria-hidden="true">{ownerName.slice(0, 1)}</span>
+                  <span className="agent-teams-board-task-owner">{ownerName}</span>
+                  {ticket.dependencies.length > 0 && (
+                    <span
+                      className="agent-teams-board-task-deps"
+                      title={t("teams.dependsOn", { deps: ticket.dependencies.join(", ") })}
+                    >
+                      {t("teams.boardBlockedBadge", { count: ticket.dependencies.length })}
+                    </span>
+                  )}
+                </span>
+              </article>
+            );
+          })}
+        </div>
       </div>
     </>
   );

@@ -10632,6 +10632,9 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 
 .agent-teams-board-edge--done { stroke: var(--success); }
 
+.agent-teams-board-plate { pointer-events: none; }
+
+/* Lane head only; the visible plate is the SVG rect drawn before the edges. */
 .agent-teams-board-lane {
   position: absolute;
   box-sizing: border-box;
@@ -10639,9 +10642,7 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   flex-direction: column;
   gap: 8px;
   padding: 8px 10px;
-  border: 1px solid var(--separator);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
+  pointer-events: none;
 }
 
 .agent-teams-board-lane-head {
@@ -10826,7 +10827,191 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 
 .agent-teams-board-stat--info .agent-teams-board-stat-value { color: var(--info); }
 .agent-teams-board-stat--muted .agent-teams-board-stat-value { color: var(--text-dim); }
+.agent-teams-board-stat--danger .agent-teams-board-stat-value { color: var(--danger); }
+
+/* 回放时被钉住的帧已被淘汰、视图夹到最旧帧的提示。 */
+.agent-teams-timeline-expired {
+  margin: 0;
+  color: var(--warning);
+}
 
 @media (prefers-reduced-motion: reduce) {
   .agent-teams-board-task--running .agent-teams-board-task-dot { animation: none; }
+}
+
+/* ==========================================================================
+   Agent Teams · formation band (components/AgentTeams/FormationBand.tsx).
+   The canvas's upper band (y 0..410): lead centered on top, member row below,
+   lead/peer buses between. Accent colour comes from --formation-accent, set by
+   the palette classes at the bottom; no hard-coded colours.
+   ========================================================================== */
+.agent-teams-formation {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+
+.agent-teams-formation-title {
+  position: absolute;
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+}
+
+.agent-teams-formation-sort {
+  position: absolute;
+  top: 6px;
+  right: 12px;
+  pointer-events: auto;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: var(--fs-micro);
+  cursor: pointer;
+}
+
+.agent-teams-formation-sort[aria-pressed="true"] { border-color: var(--accent); color: var(--text); }
+
+.agent-teams-formation-buses {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.agent-teams-formation-bus {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 2;
+  stroke-dasharray: 6 6;
+}
+
+.agent-teams-formation-card {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: auto;
+}
+
+.agent-teams-formation-hit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  color: var(--text);
+  text-align: center;
+  cursor: pointer;
+}
+
+.agent-teams-formation-card--lead .agent-teams-formation-hit { border-color: var(--formation-accent); }
+.agent-teams-formation-hit:hover { background: var(--bg-hover); }
+.agent-teams-formation-hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.agent-teams-formation-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--formation-accent);
+  color: var(--bg);
+  font-weight: var(--fw-semibold);
+}
+
+.agent-teams-formation-identity {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.agent-teams-formation-role { color: var(--text-dim); font-size: var(--fs-micro); }
+
+.agent-teams-formation-name {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.agent-teams-formation-lead-tag,
+.agent-teams-formation-model {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: var(--fs-micro);
+}
+
+.agent-teams-formation-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: var(--fs-micro);
+}
+
+.agent-teams-formation-state-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.agent-teams-formation-state--working .agent-teams-formation-state-dot {
+  background: var(--info);
+  animation: scheduled-pulse 1.4s ease-in-out infinite;
+}
+.agent-teams-formation-state--retrying .agent-teams-formation-state-dot { background: var(--warning); }
+.agent-teams-formation-state--error .agent-teams-formation-state-dot { background: var(--danger); }
+
+.agent-teams-formation-progress {
+  display: flex;
+  width: 130px;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--bg-hover);
+}
+
+.agent-teams-formation-seg { display: block; height: 100%; }
+.agent-teams-formation-seg--completed { background: var(--success); }
+.agent-teams-formation-seg--running { background: var(--info); }
+.agent-teams-formation-seg--blocked { background: var(--warning); }
+.agent-teams-formation-seg--failed { background: var(--danger); }
+.agent-teams-formation-seg--available { background: var(--text-dim); }
+
+.agent-teams-formation-badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+}
+.agent-teams-formation-badge--completed { background: var(--success); color: var(--bg); }
+.agent-teams-formation-badge--running { background: var(--info); color: var(--bg); }
+.agent-teams-formation-badge--blocked { background: var(--warning); color: var(--bg); }
+.agent-teams-formation-badge--failed { background: var(--danger); color: var(--bg); }
+.agent-teams-formation-badge--available { background: var(--bg-hover); color: var(--text-muted); }
+
+.agent-teams-formation-accent--blue { --formation-accent: var(--info); }
+.agent-teams-formation-accent--green { --formation-accent: var(--success); }
+.agent-teams-formation-accent--purple { --formation-accent: var(--accent); }
+.agent-teams-formation-accent--orange { --formation-accent: var(--warning); }
+.agent-teams-formation-accent--teal { --formation-accent: var(--info); }
+.agent-teams-formation-accent--pink { --formation-accent: var(--accent); }
+.agent-teams-formation-accent--red { --formation-accent: var(--danger); }
+.agent-teams-formation-accent--gray { --formation-accent: var(--text-dim); }
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-teams-formation-state--working .agent-teams-formation-state-dot { animation: none; }
 }

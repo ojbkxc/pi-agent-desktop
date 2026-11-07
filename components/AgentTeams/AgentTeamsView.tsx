@@ -13,6 +13,8 @@ import {
 } from "@/lib/agent-teams-swimlane";
 import { AppSelect } from "@/components/AppSelect";
 import { TaskBoardCanvas, countTaskStates } from "@/components/AgentTeams/TaskBoardCanvas";
+import { FormationBand } from "@/components/AgentTeams/FormationBand";
+import { formationNaturalWidth } from "@/lib/agent-teams-formation-layout";
 
 interface Props {
   /** 指定团队名；缺省时自动挑选本机最新创建的团队。 */
@@ -98,8 +100,13 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
     return { done, total, percent: total > 0 ? Math.round((done / total) * 100) : 0 };
   }, [snapshot]);
 
-  // 四态计数：口径与任务画布完全一致（lib/agent-teams-task-layout.ts）。
+  // 五态紧急度计数：与任务画布同源（lib/agent-teams-task-layout.ts）。
   const counts = useMemo(() => countTaskStates(snapshot?.tickets ?? []), [snapshot]);
+  // 画布宽度：编队带需要按成员数撑开，任务泳道共用同一宽度才不会错位。
+  const boardWidth = useMemo(
+    () => (snapshot ? formationNaturalWidth(snapshot.members.length) : 0),
+    [snapshot],
+  );
 
   return (
     <main ref={rootRef} tabIndex={-1} className="scheduled-view agent-teams-view" aria-label={t("teams.title")}>
@@ -121,7 +128,7 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
                 </div>
                 <div className="agent-teams-board-stat agent-teams-board-stat--info">
                   <span className="agent-teams-board-stat-label">{t("teams.stats.running")}</span>
-                  <span className="agent-teams-board-stat-value">{counts.in_progress}</span>
+                  <span className="agent-teams-board-stat-value">{counts.running}</span>
                 </div>
                 <div className="agent-teams-board-stat">
                   <span className="agent-teams-board-stat-label">{t("teams.stats.available")}</span>
@@ -130,6 +137,10 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
                 <div className="agent-teams-board-stat agent-teams-board-stat--muted">
                   <span className="agent-teams-board-stat-label">{t("teams.stats.blocked")}</span>
                   <span className="agent-teams-board-stat-value">{counts.blocked}</span>
+                </div>
+                <div className="agent-teams-board-stat agent-teams-board-stat--danger">
+                  <span className="agent-teams-board-stat-label">{t("teams.urgency.failed")}</span>
+                  <span className="agent-teams-board-stat-value">{counts.failed}</span>
                 </div>
               </div>
             </div>
@@ -190,6 +201,10 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
               </button>
             )}
           </div>
+        )}
+
+        {snapshot && timeline.isReplaying && timeline.frameExpired && (
+          <p className="scheduled-hint agent-teams-timeline-expired" role="status">{t("teams.frameExpired")}</p>
         )}
 
         {teams.length > 1 && (
@@ -282,7 +297,11 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
 
             <section className="agent-teams-section" aria-label={t("teams.ticketsHeading")}>
               <h3 className="agent-teams-section-title">{t("teams.ticketsHeading")}</h3>
-              <TaskBoardCanvas snapshot={snapshot} />
+              <TaskBoardCanvas
+                snapshot={snapshot}
+                requestedWidth={boardWidth}
+                formation={(width) => <FormationBand snapshot={snapshot} width={width} />}
+              />
             </section>
           </>
         )}
