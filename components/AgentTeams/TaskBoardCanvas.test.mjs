@@ -203,6 +203,22 @@ test("renders the empty state when the team has no tasks", () => {
   assert.doesNotMatch(html, /agent-teams-board-lane/);
 });
 
+test("still renders the formation band when there are no tickets yet", () => {
+  const html = renderToStaticMarkup(React.createElement(
+    I18nProvider,
+    { initialLocale: "en" },
+    React.createElement(TaskBoardCanvas, {
+      snapshot: snapshot([]),
+      requestedWidth: 900,
+      formation: (width) => React.createElement("div", { className: "test-formation" }, `w=${width}`),
+    }),
+  ));
+  assert.match(html, /test-formation/, "成员已 spawn、票还没建时也要看到编队带");
+  assert.match(html, /w=900/);
+  assert.match(html, /No tasks yet/);
+  assert.doesNotMatch(html, /agent-teams-board-lane/);
+});
+
 test("marks cycle tickets and shows a warning banner when the graph has a cycle", () => {
   const html = render(snapshot([
     ticket("a", { dependencies: ["b"] }),

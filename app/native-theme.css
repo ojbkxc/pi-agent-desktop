@@ -10319,6 +10319,8 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .agent-teams-dot--completed { background: var(--success); }
 .agent-teams-dot--idle { background: var(--text-dim); }
 .agent-teams-dot--queued { background: var(--warning); }
+/* parked（已挂起、可复活）区别于 idle（静默）与 aborted（终止）。 */
+.agent-teams-dot--parked { background: var(--text-muted); }
 .agent-teams-dot--failed,
 .agent-teams-dot--aborted { background: var(--danger); }
 
@@ -10973,6 +10975,7 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   animation: scheduled-pulse 1.4s ease-in-out infinite;
 }
 .agent-teams-formation-state--retrying .agent-teams-formation-state-dot { background: var(--warning); }
+.agent-teams-formation-state--parked .agent-teams-formation-state-dot { background: var(--text-muted); }
 .agent-teams-formation-state--error .agent-teams-formation-state-dot { background: var(--danger); }
 
 .agent-teams-formation-progress {

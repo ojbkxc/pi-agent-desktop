@@ -3,6 +3,8 @@
 import { useMemo, type ReactNode } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import {
+  DEPTH_COLUMN_TOP,
+  HORIZONTAL_PADDING,
   TASK_HEIGHT,
   TASK_WIDTH,
   getTicketUrgency,
@@ -96,7 +98,24 @@ export function TaskBoardCanvas({ snapshot, requestedWidth = 0, formation }: Pro
   );
 
   if (snapshot.tickets.length === 0) {
-    return <p className="scheduled-hint agent-teams-board-empty">{t("teams.emptyTasks")}</p>;
+    // 编队带展示的是「成员」，与票无关：成员已 spawn 但还没建票的团队也应看到编队带。
+    // 只有传了 formation 槽位时才铺画布，否则退回纯空态提示。
+    if (!formation) {
+      return <p className="scheduled-hint agent-teams-board-empty">{t("teams.emptyTasks")}</p>;
+    }
+    return (
+      <div className="agent-teams-board-scroll">
+        <div className="agent-teams-board" style={{ width: layout.width, minWidth: layout.width, height: layout.height }}>
+          {formation(layout.width)}
+          <p
+            className="scheduled-hint agent-teams-board-empty"
+            style={{ position: "absolute", top: DEPTH_COLUMN_TOP + 8, left: HORIZONTAL_PADDING }}
+          >
+            {t("teams.emptyTasks")}
+          </p>
+        </div>
+      </div>
+    );
   }
 
   const maxDepth = Math.max(0, ...layout.lanes.map((lane) => lane.depth));

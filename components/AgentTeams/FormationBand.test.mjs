@@ -119,3 +119,9 @@ test("无成员时渲染空带不崩溃", () => {
   assert.match(html, /data-testid="agent-teams-formation"/);
   assert.doesNotMatch(html, /data-member-id=/);
 });
+
+test("parked 成员显示为独立态（不并入 idle/stopped）", () => {
+  const html = render(snapshot([LEAD, member("w1", { status: "parked" })]));
+  assert.match(html, /data-member-state="parked"/);
+  assert.match(html, /agent-teams-formation-state--parked/);
+});

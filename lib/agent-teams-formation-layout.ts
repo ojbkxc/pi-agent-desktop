@@ -38,18 +38,20 @@ export const FORMATION_HEIGHT = TASKS_TITLE_Y;
 export const FORMATION_BOTTOM = 410;
 
 /**
- * 成员工作态——只读名册自身的字段，绝不看任务：
- * working 有活跃 turn / idle 静默 / retrying 等自动重试 / stopped 进程已退出
- * （仍留在队里，消息可救回）/ exited 已归档 / error 上次 turn 失败。
+ * 成员工作态——只读名册自身的状态与时间戳，绝不看任务状态（保持与票级 urgency 解耦）：
+ * working 有活跃 turn / idle 静默 / parked 已挂起（可复活）/ retrying 等自动重试 /
+ * stopped 进程已退出（终止）/ exited 已归档 / error 上次 turn 失败。
+ * `parked` 与 `idle`、`stopped` 都不同：挂起是「暂时歇工、消息可唤醒」，不是静默也不是终止。
  * 说明：我们的投影目前没有 autoRetry 字段，`retrying` 作为保留态暂不产生。
  */
-export type MemberWorkState = "working" | "idle" | "retrying" | "stopped" | "exited" | "error";
+export type MemberWorkState = "working" | "idle" | "parked" | "retrying" | "stopped" | "exited" | "error";
 
-/** 工作态 → 展示优先级（越小越「需要关注」）；排序与徽标配色用。 */
+/** 工作态 → 展示优先级（越大越「需要关注」）；排序与徽标配色用。 */
 export const MEMBER_WORK_STATE_WEIGHT: Record<MemberWorkState, number> = {
-  error: 5,
-  stopped: 4,
-  retrying: 3,
+  error: 6,
+  stopped: 5,
+  retrying: 4,
+  parked: 3,
   working: 2,
   idle: 1,
   exited: 0,
@@ -58,7 +60,8 @@ export const MEMBER_WORK_STATE_WEIGHT: Record<MemberWorkState, number> = {
 /**
  * 成员工作态推导（与票级 urgency 解耦）。上游有 runner 写 turn 标记，我们的名册
  * status 已由 lifecycle.json 投影（lead 恒 running），故此处以其为准：
- * completed → exited；aborted → stopped；failed → error；running → working；其余 idle。
+ * completed → exited；aborted → stopped；parked → parked；failed → error；
+ * running → working；其余 idle。
  * lead 没有独立 runner，调用方用 leadIsStreaming 传入其会话是否在流式输出。
  */
 export function getMemberWorkState(
@@ -67,6 +70,7 @@ export function getMemberWorkState(
 ): MemberWorkState {
   if (member.status === "completed") return "exited";
   if (member.status === "aborted") return "stopped";
+  if (member.status === "parked") return "parked";
   if (options.isLead) {
     if (member.status === "failed") return "error";
     return options.leadIsStreaming ? "working" : "idle";
@@ -74,6 +78,57 @@ export function getMemberWorkState(
   if (member.status === "failed") return "error";
   if (member.status === "running") return "working";
   return "idle";
+}
+
+/** 队长超过这个时长没有活动就视为空闲（不再假装 working）。 */
+export const LEAD_IDLE_AFTER_MS = 10 * 60_000;
+
+/**
+ * 成员「最后一次活动」时刻（ISO）：取该成员泳道事件与其名下派活 lastActivityAt 的最新值。
+ * 只取时间戳，不取任务状态——工作态与票级 urgency 解耦的原则不被破坏。
+ */
+function memberLastActivityAt(snapshot: TeamWorkbenchSnapshot, memberId: string): string | null {
+  let latest = "";
+  const lane = snapshot.lanes.find((item) => item.memberId === memberId);
+  for (const event of lane?.events ?? []) {
+    if (event.at > latest) latest = event.at;
+  }
+  for (const ticket of snapshot.tickets) {
+    for (const assignment of ticket.assignments) {
+      if (assignment.memberId !== memberId) continue;
+      if (assignment.lastActivityAt && assignment.lastActivityAt > latest) latest = assignment.lastActivityAt;
+    }
+  }
+  return latest || null;
+}
+
+/** 全队最新活动时刻；队长本身没有活动记录时的兜底（团队在动 ⇒ 队长很可能也在动）。 */
+function teamLastActivityAt(snapshot: TeamWorkbenchSnapshot): string | null {
+  let latest = "";
+  for (const lane of snapshot.lanes) {
+    for (const event of lane.events) if (event.at > latest) latest = event.at;
+  }
+  for (const ticket of snapshot.tickets) {
+    for (const assignment of ticket.assignments) {
+      if (assignment.lastActivityAt && assignment.lastActivityAt > latest) latest = assignment.lastActivityAt;
+    }
+  }
+  return latest || null;
+}
+
+/**
+ * 队长是否正在读流：名册 running 且最近活动不超过 LEAD_IDLE_AFTER_MS（以快照的
+ * generatedAt 为「现在」，保证纯函数、可复现）。没有任何活动可依时不做空闲判定，
+ * 避免把刚建好、还没产生活动的团队误判为空闲。
+ */
+function leadIsStreaming(snapshot: TeamWorkbenchSnapshot, lead: WorkbenchMember): boolean {
+  if (lead.status !== "running") return false;
+  const last = memberLastActivityAt(snapshot, lead.id) ?? teamLastActivityAt(snapshot);
+  if (!last) return true;
+  const at = Date.parse(last);
+  const now = Date.parse(snapshot.generatedAt);
+  if (!Number.isFinite(at) || !Number.isFinite(now)) return true;
+  return now - at <= LEAD_IDLE_AFTER_MS;
 }
 
 /** 成员一条分段进度条的一段：某紧急度占其名下票的比例。 */
@@ -174,6 +229,9 @@ export function layoutFormation(snapshot: TeamWorkbenchSnapshot, width: number):
 
   const leadCenter = safeWidth / 2;
   const workerStart = leadCenter - Math.max(0, workers.length - 1) * MEMBER_PITCH / 2;
+  // 队长没有独立 runner：用「名册 running + 最近活动」推断其是否在读流，
+  // 长时间无活动就显示 idle，别永远假装在干活。
+  const leadStreaming = lead ? leadIsStreaming(snapshot, lead) : false;
 
   const build = (member: WorkbenchMember, isLead: boolean, centerX: number, index: number): FormationMember => {
     const { segments, total, completed, urgency } = memberSegments(snapshot, member.id);
@@ -185,9 +243,7 @@ export function layoutFormation(snapshot: TeamWorkbenchSnapshot, width: number):
       accent: member.color || (isLead ? "gray" : "blue"),
       workState: getMemberWorkState(member, {
         isLead,
-        // 我们没有独立 runner 告知队长会话是否在流式输出；名册对 lead 恒 running，
-        // 故以 status 近似（队长在跑即视为 working）。
-        leadIsStreaming: member.status === "running",
+        leadIsStreaming: isLead ? leadStreaming : undefined,
       }),
       total,
       completed,
