@@ -1,4 +1,5 @@
 import { lstatSync, readdirSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
   hasTrustRequiringProjectResources,
@@ -9,7 +10,28 @@ import type { FreshFolderTrustBreadth, ProjectTrustStatus } from "./api-types";
 import { serializeByKey } from "./key-serializer";
 import { isPathWithinRoots } from "./path-security";
 import { samePath } from "./paths";
-import { userHome } from "./user-home";
+
+/**
+ * The user's own home as the SDK sees it: `process.env.HOME || homedir()`, the
+ * same expression as the SDK's `getHomeDir()` (`dist/core/package-manager.js`),
+ * which is what resolves the user-level `~/.agents/skills` root.
+ *
+ * Deliberately not `userHome()`: that one answers "where does Pi keep its data
+ * (`PI_AGENT_HOME`)" and is used for paths this app reads, writes and traces.
+ * Here the question is different — `hasTrustRelevantEntries()` excludes the
+ * user's own skill folder from what counts as project resources, and
+ * `freshFolderTrustBreadth()` classifies a folder as `home`/`contains-home`.
+ * Both must agree with the SDK, or with `PI_AGENT_HOME` pointing elsewhere than
+ * `HOME` the app would stop recognising the user-level skills folder and treat
+ * it as a project entry that needs trust, which refuses the folder for good.
+ *
+ * The `process.env.HOME` read also keeps the expression dynamic, so nft does
+ * not fold a literal `homedir()` into an fs call — the reason AGENTS.md asks for
+ * `userHome()` in the traced paths (see lib/user-home.ts).
+ */
+function sdkHome(): string {
+  return process.env.HOME || homedir();
+}
 
 /** The folder as `trust.json` keys it: resolved, then its real path when it exists. */
 function trustKeyPath(cwd: string): string {
@@ -208,7 +230,7 @@ function somethingAt(path: string): boolean {
  * skips a link to nothing: such a link starts counting the moment its target
  * appears, after the folder was trusted as one with nothing in it.
  */
-export function hasTrustRelevantEntries(cwd: string, home: string = userHome()): boolean {
+export function hasTrustRelevantEntries(cwd: string, home: string = sdkHome()): boolean {
   const folder = realPathOr(cwd);
   if (hasOwnTrustEntries(folder)) return true;
   const userSkills = join(realPathOr(home), ".agents", "skills");
@@ -319,7 +341,7 @@ export function freshFolderTrustBreadth(
 ): FreshFolderTrustBreadth | undefined {
   const folder = realPathOr(cwd);
   if (dirname(folder) === folder) return { kind: "root", path: folder };
-  const home = realPathOr(options.home ?? userHome());
+  const home = realPathOr(options.home ?? sdkHome());
   if (samePath(folder, home)) return { kind: "home", path: folder };
   if (within(home, folder)) return { kind: "contains-home", path: home };
   const agentDir = realPathOr(options.agentDir);
