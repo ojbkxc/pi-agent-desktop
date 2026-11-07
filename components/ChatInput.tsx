@@ -34,7 +34,7 @@ import { ImagePreview } from "./ImagePreview";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useMenuNavigation } from "@/hooks/useMenuNavigation";
 import { useEnterSendMode } from "@/hooks/useEnterSendMode";
-import { useAgentTeamsEnabled } from "@/hooks/useAgentTeamsEnabled";
+import { useAgentTeamsEnabled, disarmAgentTeam, shouldDisarmAgentTeam } from "@/hooks/useAgentTeamsEnabled";
 import { withAgentTeamRequest, stripAgentTeamRequest } from "@/lib/agent-team-request";
 import { useI18n } from "@/hooks/useI18n";
 import type { ReactNode } from "react";
@@ -876,7 +876,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const isCompact = composerTier === "compact" || isNarrow;
 
   const enterSendMode = useEnterSendMode();
-  // Agent Team 开关（默认开）：开启时发送的消息前置团队指令，气泡仍只显示用户原文。
+  // Agent Team armed（默认开，一次性）：开启时发送的消息前置团队指令，气泡仍只显示用户原文。
   const agentTeamsEnabled = useAgentTeamsEnabled();
   const [value, setValue] = useState(() => (draftKey ? getDraft(draftKey)?.value ?? "" : ""));
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1386,10 +1386,13 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       await resolveSessionReferences(msg, sessionMentionTargetsRef.current),
       attachedFilesRef.current,
     );
-    // Agent Team 开关（默认开）：团队指令只对模型可见，落盘的消息体因此带着包装块，
+    // Agent Team armed（默认开，一次性）：团队指令只对模型可见，落盘的消息体因此带着包装块，
     // 界面渲染时用 stripAgentTeamRequest 剥掉（见 lib/agent-team-request.ts）。
     const messageForModel = agentTeamsEnabled ? withAgentTeamRequest(resolvedMessage) : resolvedMessage;
     onSend(messageForModel, attachedImages.length ? attachedImages : undefined);
+    // 发出去即复位（对齐 cc-haha 发送调用之后的 `disarmAgentTeam()`）：团队只作用于这一条，
+    // 后续闲聊不再累积建团指令。命令类消息不被包装，也就不消耗这次勾选。
+    if (shouldDisarmAgentTeam(agentTeamsEnabled, messageForModel)) disarmAgentTeam();
     clearInput();
   }, [value, attachedImages, workspaceUnavailable, isStreaming, runBuiltinCommand, onSend, clearInput, onAudioUnlock, sessionMentionTargetsRef, agentTeamsEnabled]);
 

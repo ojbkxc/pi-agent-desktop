@@ -16,6 +16,7 @@ const { ChatInput, ModelErrorBanner, ModelScopeWarningBanner, canClearBuiltinCom
 const { isBareMcpCommand } = await jiti.import("@/lib/mcp-command.ts");
 const { composeMessageWithAttachedFiles } = await jiti.import("@/lib/chat-attachments.ts");
 const { withAgentTeamRequest } = await jiti.import("@/lib/agent-team-request.ts");
+const { shouldDisarmAgentTeam } = await jiti.import("@/hooks/useAgentTeamsEnabled.ts", { default: false });
 const { ModelSelector } = await jiti.import("./ModelSelector.tsx");
 const { clearDraft, getDraft, mergeRestoredSubmissionDraft, mergeRestoredSubmissionText, rekeyDraft, setDraft } = await jiti.import("@/lib/draft-store");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
@@ -706,9 +707,11 @@ test("handleSend lets a handled /mcp through while streaming and sends an unowne
       runBuiltinCommand: async (message) => { calls.builtin.push(message); return handled; },
       clearInput() {},
       onSend: (message) => calls.sent.push(message),
-      // 本用例只关心 /mcp 的路由，Agent Team 开关显式关掉，让发送的就是原文。
+      // 本用例只关心 /mcp 的路由，Agent Team armed 显式关掉，让发送的就是原文。
       agentTeamsEnabled: false,
       withAgentTeamRequest,
+      shouldDisarmAgentTeam,
+      disarmAgentTeam() { throw new Error("disarmed while nothing was armed"); },
     });
     await handleSend();
     return calls;
@@ -942,6 +945,7 @@ test("handleSend sends exactly once and routes builtin commands through the pend
     let sends = 0;
     let cleared = 0;
     let builtinCalls = 0;
+    let disarms = 0;
     const handler = script.runInNewContext({
       value, attachedImages, isStreaming: false, workspaceUnavailable,
       attachedFilesRef: { current: [] }, composeMessageWithAttachedFiles,
@@ -956,8 +960,10 @@ test("handleSend sends exactly once and routes builtin commands through the pend
       clearInput() { cleared += 1; },
       agentTeamsEnabled,
       withAgentTeamRequest,
+      shouldDisarmAgentTeam,
+      disarmAgentTeam() { disarms += 1; },
     });
-    return handler().then(() => ({ sends, cleared, builtinCalls, sent: handler.sent }));
+    return handler().then(() => ({ sends, cleared, builtinCalls, disarms, sent: handler.sent }));
   }
 
   // Plain message: one send of the resolved text, one clear, no double-send.
@@ -987,12 +993,19 @@ test("handleSend sends exactly once and routes builtin commands through the pend
   const local = await run({ value: "/copy", builtinHandled: true, workspaceUnavailable: gone });
   assert.equal(local.builtinCalls, 1);
 
-  // Agent Team 开关：关着发原文，开着在原文前加团队指令块（原文保持不变，在块之后）。
+  // Agent Team armed：关着发原文且不动开关；开着在原文前加团队指令块（原文在块之后），
+  // 发完即复位（对齐 cc-haha 发送调用之后 disarmAgentTeam()）。
   const teamOff = await run({ value: "拆一下这活", agentTeamsEnabled: false });
   assert.equal(teamOff.sent.message, "拆一下这活");
+  assert.equal(teamOff.disarms, 0, "nothing was armed");
   const teamOn = await run({ value: "拆一下这活", agentTeamsEnabled: true });
   assert.equal(teamOn.sent.message, withAgentTeamRequest("拆一下这活"));
   assert.ok(teamOn.sent.message.endsWith("拆一下这活"), "用户原文应完整保留在块之后");
+  assert.equal(teamOn.disarms, 1, "a sent team message disarms the next one");
+  // 命令类消息不被包装，也就不消耗这次 armed（isAgentTeamCommand 的豁免）。
+  const command = await run({ value: "/compact", agentTeamsEnabled: true, builtinHandled: false });
+  assert.equal(command.sent.message, "/compact");
+  assert.equal(command.disarms, 0, "commands leave the arming for the next real prompt");
 });
 
 test("a missing workspace replaces the model error and disables Send", () => {
