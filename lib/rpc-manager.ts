@@ -58,7 +58,7 @@ import { findTeamBySession, teamDirFor } from "./agent-teams-swimlane-store";
 import { isBuiltInSubagentsEnabled } from "./subagent-settings";
 import { generateSessionTitle } from "./session-title";
 import { isAutoTitleEnabled } from "./session-title-settings";
-import { resolveShellTools } from "./powershell-settings";
+import { resolveDefaultToolEntries, resolveShellTools } from "./powershell-settings";
 import { CHAT_ONLY_RESOURCE_LOADER_OPTIONS, contextFilesSystemPrompt } from "./chat-only";
 import { isLeanMode, LEAN_RESOURCE_LOADER_OPTIONS, LEAN_TOOL_NAMES } from "./lean-mode";
 import { additionalCcHahaSkillPaths } from "./cc-haha-skills";
@@ -343,6 +343,14 @@ const SESSION_TOOL_NAMES = new Set<string>(["codemode", "tool_search", ...SUBAGE
  * tool one switched off stays off. Nothing else is added: pi itself activates the extension
  * tools it registers (all of them when it builds or reloads a session, then each new one), so
  * `carry` already holds them. An empty selection is Chat only.
+ *
+ * Modifier entries (`+name`/`-name`, the "full" preset's form since 需求3) follow the SDK's
+ * `applyToolModifiers` rule (settings-manager.js): a list of only modifiers applies on top of
+ * the resolved `defaultTools` instead of replacing it — `+name` forces a coding tool open even
+ * when defaultTools is smaller (the default 4), `-name` removes. Our pin validator
+ * (lib/session-tool-selection.ts) only persists `+name`, never `-name`, so `-` here is for
+ * parity with the SDK rule, not a shape users can write. Bare names keep the old
+ * allowlist semantics: they filter to coding tools and replace the coding part wholesale.
  */
 export function resolveActiveToolNames(
   session: AgentSessionLike,
@@ -353,10 +361,18 @@ export function resolveActiveToolNames(
 
   const codingToolNames = new Set(CODING_TOOL_NAMES);
   const registered = new Map(session.getAllTools().map((tool) => [tool.name, tool]));
-  const selectedToolNames = resolveShellTools(
-    requested.filter((name) => codingToolNames.has(name)),
-    session.settingsManager.getDefaultTools(),
-  );
+  const defaultTools = session.settingsManager.getDefaultTools();
+  const allModifiers = requested.every((name) => name.startsWith("+") || name.startsWith("-"));
+  // 需求3: "+bash" is not a bare name — filtering it against CODING_TOOL_NAMES would
+  // silently drop every entry and leave the session with no coding tools at all.
+  // A pure-modifier list instead forces tools open/closed on top of defaultTools,
+  // exactly what the SDK does with the `tools` option (sdk.js applyToolModifiers).
+  const selectedToolNames = allModifiers
+    ? resolveDefaultToolEntries([...requested]).filter((name) => codingToolNames.has(name))
+    : resolveShellTools(
+      requested.filter((name) => codingToolNames.has(name)),
+      defaultTools,
+    );
   const carriedToolNames = carry.filter((name) => {
     const tool = registered.get(name);
     return tool !== undefined && !codingToolNames.has(name) && tool.exposure !== "hidden";
