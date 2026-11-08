@@ -108,6 +108,20 @@ export class PublicAccessManager {
   constructor(options: PublicAccessManagerOptions = {}) {
     this.options = options;
     this.settings = readPublicAccessConfig(this.settingsPath());
+    // 自愈（H5-4）：origin 正常只在 gateway 验证通过后写入、stop/失败时清除
+    // （start 的 catch 与 stop() 都写 null）。若进程恰在「写入后、清除前」
+    // 被 SIGKILL，文件里会留下一个上一进程的 origin——它对应的主机名在下次
+    // 启动后仍会被 proxy 当作可信隧道来源。构造即清（此时状态恒非 online，
+    // 任何非空 origin 都必然是残留）；只做收紧，不违反「手改设置文件不得
+    // 放宽白名单」——真正的 origin 由本次 start() 验证通过后重新写入。
+    if (this.settings.origin) {
+      try {
+        writePublicAccessOrigin(null, this.settingsPath());
+      } catch {
+        // 只读设置文件：残留保留，proxy 侧的密码前置仍是硬门槛。
+      }
+      this.settings = readPublicAccessConfig(this.settingsPath());
+    }
     this.status = {
       state: isPublicAccessConfigured(this.settings) ? "disabled" : "unconfigured",
       phase: null,
