@@ -2648,10 +2648,14 @@ function SessionItem({
       setFolderDeleteOpen(false);
       onDeleted?.(session.id);
     } catch (e) {
-      setDeleting(false);
       const message = t("sidebar.deleteFailed", { error: e instanceof Error ? e.message : String(e) });
       if (confirmDelete || folderDeleteOpen) setDeleteError(message);
       else reportActionError(message);
+    } finally {
+      // d5-6：成功路径此前不复位 deleting——列表重载在途/失败时行仍挂载，
+      // 重开删除确认框会以 busy=true 弹出，Escape/遮罩/取消三条退出路径全被
+      // ChatConfirmDialog 的 busy 守卫封死。无论成败都必须复位。
+      setDeleting(false);
     }
   }, [session.id, session.transient, onDeleted, reportActionError, t, confirmDelete, folderDeleteOpen]);
 

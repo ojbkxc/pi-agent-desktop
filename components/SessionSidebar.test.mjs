@@ -383,3 +383,20 @@ test("the row menu shows the compaction count only when the session was compacte
     /\{\(session\.compactionCount \?\? 0\) > 0 && \(\s*<div>\{t\("sidebar\.compactionCount", \{ count: session\.compactionCount \?\? 0 \}\)\}<\/div>/,
   );
 });
+
+// d5-6：删除成功路径此前不复位 deleting——列表重载在途/失败时行仍挂载，重开
+// 删除确认框会以 busy=true 弹出，Escape/遮罩/取消三条退出路径全被
+// ChatConfirmDialog 的 busy 守卫封死（只能刷新应用）。守卫：performDelete 的
+// finally 必须复位 deleting（成功与失败两条路径都经过）。
+test("performDelete 无论成败都在 finally 复位 deleting", () => {
+  const start = source.indexOf("const performDelete = useCallback(async (trashChatFolder = false) => {");
+  assert.ok(start !== -1, "performDelete 存在");
+  const body = source.slice(start, source.indexOf("const archive:", start));
+  // 不变量：复位收敛到 finally（成功与失败两条路径都经过），try 成功分支不再各自复位。
+  assert.match(body, /\} finally \{[\s\S]*?setDeleting\(false\);\s*\n\s*\}\), \[/, "成功路径必须经 finally 复位 deleting");
+  // 成功分支不再各自复位（复位收敛到 finally），失败分支保留 setDeleteError。
+  const tryBody = body.slice(body.indexOf("try {"), body.indexOf("} catch (e) {"));
+  assert.doesNotMatch(tryBody, /setDeleting\(false\)/, "成功分支不得自行复位（收敛到 finally）");
+  assert.match(tryBody, /setConfirmDelete\(false\);/);
+  assert.match(body, /setDeleteError\(message\);/);
+});
