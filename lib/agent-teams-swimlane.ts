@@ -500,11 +500,26 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
   // 派生票在前；运行时独有的票（id 不与 plan 任务重复）按 createdAt 升序追加在后；
   // 同 id 时运行时的 assignments / status 覆盖派生值。没有运行时票时结果与改动前等价。
   const tasks = plan?.tasks ?? [];
+  /**
+   * accepted.jsonl 只有成员名、没有票 id（teamTools.js appendAccepted 落盘形态：
+   * member/sessionId/summary/result/at），「成员被验收过」对 plan 派生票只能是成员
+   * 粒度信号——成员一次验收会把名下全部 plan 派生票标 ended（D4-2，v2 裁定：
+   * running 派生同为成员粒度，两口径一致，禁止大改派生口径）。
+   * 唯一被认可可收窄的失真是「从未派发 runtime 票的 plan-only 票」：带 runtime 票的
+   * 任务其真实状态由下方同 id 覆盖兜底，accepted 信号对它们只是占位。因此 ended
+   * 只对**没有任何 runtime 票认领**的任务生效；runtime 票覆盖后，此处的 ended
+   * 对这类票恒被替换为真实状态，原语义保留。
+   */
+  const runtimeTaskIds = new Set(
+    runtimeTickets
+      .map((runtime) => (typeof runtime?.id === "string" ? runtime.id : ""))
+      .filter(Boolean),
+  );
   const baseTickets: WorkbenchTicket[] = tasks.map((task) => {
     const ownerId = task.ownerId ? planMemberIds.get(task.ownerId) ?? null : null;
     const owner = ownerId ? memberById.get(ownerId) : undefined;
     const entry = owner ? lifecycle[owner.name] : undefined;
-    const ended = owner ? acceptedNames.has(owner.name) : false;
+    const ended = Boolean(owner && acceptedNames.has(owner.name) && !runtimeTaskIds.has(task.id));
     const assignments: WorkbenchAssignment[] = [];
     if (owner) {
       assignments.push({
@@ -609,6 +624,13 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
 
   // ── flows[]：邮箱消息（谁→谁）+ 验收报告（成员→lead）────────────────────────
   const flows: WorkbenchFlow[] = [];
+  /**
+   * 成员 → 该成员名下**最后一张**票的 id（tickets 顺序 = plan 顺序 + runtime 追加序）。
+   * 口径固化（D4-7，经 v2 裁定）：邮箱消息与验收记录都不携带票 id，flow 的 ticketId
+   * 只能是「收/发方成员名下某张票」的**近似**——成员多票时后写覆盖，恒指向最后一张。
+   * 消费方（泳道 flow 连线）须把它当「该成员当前工作的票」提示，不是消息的精确归属；
+   * 要精确归属需 pi-team 在消息/验收落盘里记 ticketId（上游契约，桌面侧改不了）。
+   */
   const ticketIdByMember = new Map<string, string>();
   for (const ticket of tickets) {
     if (ticket.ownerId) ticketIdByMember.set(ticket.ownerId, ticket.id);

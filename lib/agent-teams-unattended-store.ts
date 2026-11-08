@@ -175,6 +175,8 @@ export function isUnattendedDisabledByEnv(env: NodeJS.ProcessEnv = process.env):
 interface PlanFileLike {
   planId?: unknown;
   sessionId?: unknown;
+  /** 团队原始名（非 sanitize 目录名）：pi-team teamPlanStore.js:113 落盘时写入。 */
+  teamName?: unknown;
   revision?: unknown;
   state?: unknown;
   updatedAt?: unknown;
@@ -195,6 +197,11 @@ interface TicketFileLike {
   subject?: unknown;
   status?: unknown;
   assignments?: unknown;
+}
+
+/** config.json 的名册（D4-5：失败提醒的模型以 config 为权威）。 */
+interface ConfigFileLike {
+  members?: unknown;
 }
 
 export interface UnattendedInput {
@@ -233,8 +240,20 @@ function readPlanMembers(raw: unknown): AwaitingPlanMember[] {
   return members;
 }
 
-/** 成员名 → 当前模型（用于失败提醒里写明「用哪个模型失败」）。 */
-function memberModel(plan: PlanFileLike | null, member: string): { providerId: string | null; modelId: string | null } {
+/**
+ * 成员名 → 当前模型（用于失败提醒里写明「用哪个模型失败」）。
+ *
+ * 口径与投影层 buildRoster 对齐（D4-5，v2 裁定）：config.json 的 members[].model
+ * 是权威（PATCH /api/teams/[team]/members 只写那里，plan.approvedSnapshot/plan.members
+ * 的 runtime 不随后续改模刷新——B5 是另一条，不在此修），plan.runtime 仅兜底。
+ */
+function memberModel(
+  config: ConfigFileLike | null,
+  plan: PlanFileLike | null,
+  member: string,
+): { providerId: string | null; modelId: string | null } {
+  const fromConfig = configMemberModel(config, member);
+  if (fromConfig) return fromConfig;
   if (!plan || !Array.isArray(plan.members)) return { providerId: null, modelId: null };
   for (const item of plan.members) {
     if (!isRecord(item)) continue;
@@ -246,6 +265,20 @@ function memberModel(plan: PlanFileLike | null, member: string): { providerId: s
     };
   }
   return { providerId: null, modelId: null };
+}
+
+/** config.json 名册条目里该成员的 model/providerId；没有非空值则回 null。 */
+function configMemberModel(config: ConfigFileLike | null, member: string): { providerId: string | null; modelId: string | null } | null {
+  if (!config || !Array.isArray(config.members)) return null;
+  for (const item of config.members) {
+    if (!isRecord(item)) continue;
+    if (asString(item.name) !== member) continue;
+    const providerId = asString(item.providerId);
+    const modelId = asString(item.model);
+    if (providerId === null && modelId === null) continue;
+    return { providerId, modelId };
+  }
+  return null;
 }
 
 /**
@@ -274,11 +307,16 @@ export async function collectUnattendedInput(env: NodeJS.ProcessEnv = process.en
       skippedTeams.push(dirName);
       continue;
     }
+    // config.json 读取失败不阻断 plan/tickets 侧（memberModel 会回退 plan.runtime）。
+    const configRaw = readJson(join(teamDir, "config.json"));
+    const config = isRecord(configRaw) ? (configRaw as ConfigFileLike) : null;
 
     if (plan.state === "review_pending") {
       const updatedAt = asNumber(plan.updatedAt) ?? 0;
       awaitingPlans.push({
-        teamName: dirName,
+        // 展示名：plan.json 记录的原始团队名（D4-4，v2 裁定），中文团队名不再显示成
+        // 「------」；plan 缺该字段才回退 sanitize 目录名。
+        teamName: asString(plan.teamName) ?? dirName,
         planId: asString(plan.planId) ?? "",
         revision: asNumber(plan.revision) ?? 0,
         sessionId,
@@ -310,9 +348,10 @@ export async function collectUnattendedInput(env: NodeJS.ProcessEnv = process.en
         const assignmentId = asString(assignment.id);
         const member = asString(assignment.assignee);
         if (!assignmentId || !member) continue;
-        const { providerId, modelId } = memberModel(plan, member);
+        const { providerId, modelId } = memberModel(config, plan, member);
         failedAssignments.push({
-          teamName: dirName,
+          // 同 D4-4：优先 plan 记录的原始团队名，目录名兜底。
+          teamName: asString(plan.teamName) ?? dirName,
           sessionId,
           ticketId,
           ticketSubject: subject,

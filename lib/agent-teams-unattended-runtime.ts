@@ -175,6 +175,18 @@ async function runUnattendedSweepOnce(deps: SweepDeps): Promise<SweepResult> {
       await deps.notify({ sessionId: action.sessionId, kind: "exhausted", detail: describeAction(action) });
       continue;
     }
+    if (action.kind === "refresh-exhausted") {
+      // D4-6: exhausted 后同票出现新失败派活——刷新人工介入台账（at/reason/次数），
+      // 让「清除条目后永久静默」「台账冻结在首次耗尽」消失；刻意**不重发 push**，
+      // 反轰炸设计（只发一次 notify-exhausted）保持不变。同一 assignmentId 只会
+      // 进决策一次，故每个新失败刷新一次，不随 tick 抖动。
+      manualNeeds[nudgeKey(action)] = {
+        at: deps.now(),
+        reason: `失败已达自动重试上限，之后又出现新的失败派活（累计 ${action.attempts} 次）`,
+      };
+      deps.log(`台账刷新（${nudgeKey(action)}）：新失败 assignment，未重发通知`);
+      continue;
+    }
     const result = await deps.deliver(action.sessionId, action.prompt);
     if (result.ok) {
       nudged += 1;

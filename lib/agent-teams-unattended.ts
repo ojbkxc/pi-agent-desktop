@@ -145,7 +145,26 @@ export interface NotifyExhaustedAction {
   attempts: number;
 }
 
-export type UnattendedAction = NudgeApprovalAction | NudgeFailureAction | NotifyExhaustedAction;
+/**
+ * 已耗尽票的**新**失败派活到达时的台账刷新信号（D4-6，v2 裁定）。
+ *
+ * 只发一次 notify-exhausted 的反轰炸设计不变（:26-27/:242-244）；但此前同票出现
+ * 新 assignmentId 时除更新账本外什么都不发生——用户一旦清掉 manualNeeds 条目，
+ * 这张票的后续失败就永久静默，且旧条目的 at/reason 冻结在首次耗尽时刻。
+ * 本动作只让 runtime 刷新 manualNeeds（at/reason/attempts），**不重发 push**。
+ */
+export interface RefreshExhaustedAction {
+  kind: "refresh-exhausted";
+  teamName: string;
+  sessionId: string;
+  ticketId: string;
+  ticketSubject: string;
+  member: string;
+  /** 累计失败派活数（已超 maxFailureRetries，如实报数）。 */
+  attempts: number;
+}
+
+export type UnattendedAction = NudgeApprovalAction | NudgeFailureAction | NotifyExhaustedAction | RefreshExhaustedAction;
 
 export interface UnattendedDecision {
   actions: UnattendedAction[];
@@ -325,6 +344,20 @@ export function planUnattendedActions(input: PlanUnattendedInput): UnattendedDec
           member: assignment.member,
           attempts: input.config.maxFailureRetries,
         });
+      } else {
+        // D4-6: a genuinely new failed assignment on an exhausted ticket must
+        // not stay silent — refresh the manualNeeds entry (at/reason/attempts)
+        // without re-pushing. Same assignmentId never reaches this branch
+        // (continue above), so this fires once per new failure, not per tick.
+        actions.push({
+          kind: "refresh-exhausted",
+          teamName: assignment.teamName,
+          sessionId: assignment.sessionId,
+          ticketId: assignment.ticketId,
+          ticketSubject: assignment.ticketSubject,
+          member: assignment.member,
+          attempts,
+        });
       }
     }
   }
@@ -341,5 +374,8 @@ export function describeAction(action: UnattendedAction): string {
       return `工单「${action.ticketSubject}」的成员「${action.member}」执行失败，已第 ${action.attempts}/${action.maxRetries} 次自动提醒 lead 换模型重派或接管。`;
     case "notify-exhausted":
       return `工单「${action.ticketSubject}」失败已达自动重试上限（${action.attempts} 次），已停止自动提醒，需要你人工处理。`;
+    case "refresh-exhausted":
+      // 台账刷新信号，不进 push（D4-6）；此文案仅供日志/调试。
+      return `工单「${action.ticketSubject}」出现新的失败派活（累计 ${action.attempts} 次），人工介入台账已刷新。`;
   }
 }
