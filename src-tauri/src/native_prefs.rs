@@ -86,13 +86,20 @@ fn clear_runtime_caches(app: &AppHandle) -> u64 {
             .flatten()
             .flatten()
         {
-            for name in ["Cache", "Code Cache", "GPUCache"] {
+            for name in WEBVIEW2_CACHE_DIRS {
                 freed += remove_counting(&profile.path().join(name));
             }
         }
     }
     freed
 }
+
+/// The WebView2 per-profile cache folders. Shared by the user-triggered clear
+/// (`clear_runtime_caches`) and the post-upgrade clear
+/// (`clear_webview_caches`): clearing only "Cache" on upgrade left the stale
+/// "Code Cache" and "GPUCache" of the previous build behind.
+#[cfg(target_os = "windows")]
+const WEBVIEW2_CACHE_DIRS: [&str; 3] = ["Cache", "Code Cache", "GPUCache"];
 
 /// Directory name under `app_cache_dir` where the packaged server keeps its
 /// Node compile cache (`PI_DESKTOP_COMPILE_CACHE_DIR`, set in lib.rs). It is
@@ -153,7 +160,14 @@ fn write_ui_prefs(app: &AppHandle, prefs: &serde_json::Value) -> Result<(), Stri
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let raw = serde_json::to_string_pretty(prefs).map_err(|error| error.to_string())?;
-    fs::write(path, raw).map_err(|error| error.to_string())
+    // Write-then-rename: a crash mid-write must not leave a half-written JSON
+    // file behind. `read_ui_prefs` silently falls back to `{}` on a parse
+    // error, which would lose the theme, the saved server port and the
+    // last-version marker in one go. (`fs::rename` replaces an existing
+    // target on Windows too, via MOVEFILE_REPLACE_EXISTING.)
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, raw).map_err(|error| error.to_string())?;
+    fs::rename(&tmp, &path).map_err(|error| error.to_string())
 }
 
 /// The build's version (from Cargo.toml), known at compile time.
@@ -207,15 +221,20 @@ fn clear_webview_caches(app: &AppHandle) {
             let _ = fs::remove_dir_all(&webkit_cache);
         }
     }
-    // Windows WebView2: cache partition under the app local data dir.
+    // Windows WebView2: cache partition under the app local data dir. The
+    // same folders as `clear_runtime_caches` (WEBVIEW2_CACHE_DIRS): an
+    // upgrade that cleared only "Cache" left the previous build's "Code
+    // Cache" and "GPUCache" behind.
     #[cfg(target_os = "windows")]
     if let Ok(data_dir) = app.path().app_local_data_dir() {
         let webview2 = data_dir.join("EBWebView");
         if webview2.is_dir() {
             for entry in fs::read_dir(&webview2).into_iter().flatten().flatten() {
-                let cache_dir = entry.path().join("Cache");
-                if cache_dir.is_dir() {
-                    let _ = fs::remove_dir_all(&cache_dir);
+                for name in WEBVIEW2_CACHE_DIRS {
+                    let cache_dir = entry.path().join(name);
+                    if cache_dir.is_dir() {
+                        let _ = fs::remove_dir_all(&cache_dir);
+                    }
                 }
             }
         }
