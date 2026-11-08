@@ -1,5 +1,5 @@
 import type { SettingsManager } from "@earendil-works/pi-coding-agent";
-import { getPiWebSettingsPath, readStored, updatePiWebSettings } from "./artifact-settings";
+import { getPiWebSettingsPath, readStored } from "./artifact-settings";
 
 /**
  * Pi Web's own compaction policy (v0.8.2), stored under `compactionPolicy` in
@@ -107,35 +107,21 @@ export function normalizeCompactionPolicy(raw: unknown): CompactionPolicy {
   };
 }
 
-/** The effective policy. An unreadable or malformed file reads as the defaults. */
+/**
+ * The effective policy. An unreadable or malformed file reads as the defaults.
+ *
+ * Read-only on purpose: this module applies the policy to a session, it never
+ * writes one. The single writer is `writeCompactionPolicy` in
+ * `lib/compaction-settings-api.ts` (used by `app/api/compaction/settings`),
+ * which preserves unknown keys inside `compactionPolicy` — a second writer
+ * here would silently drop them.
+ */
 export function readCompactionPolicy(settingsPath = getPiWebSettingsPath()): CompactionPolicy {
   try {
     return normalizeCompactionPolicy(readStored(settingsPath).compactionPolicy);
   } catch {
     return defaultCompactionPolicy();
   }
-}
-
-/**
- * Merge `patch` into the stored policy and return what is now effective.
- * Unknown keys are dropped and every value is normalized, so the file can
- * never receive a value this module would not read back. Other keys in the
- * settings file are left to `updatePiWebSettings`, which re-reads them itself.
- */
-export function writeCompactionPolicy(
-  patch: Partial<CompactionPolicy>,
-  settingsPath = getPiWebSettingsPath(),
-): CompactionPolicy {
-  const stored = readStored(settingsPath);
-  const current = isRecord(stored.compactionPolicy) ? stored.compactionPolicy : {};
-  // Drop explicit `undefined`s so a partial patch never resets a field to its
-  // default just because the caller spelled the key out.
-  const defined = Object.fromEntries(
-    Object.entries(patch).filter(([, value]) => value !== undefined),
-  );
-  const next = normalizeCompactionPolicy({ ...current, ...defined });
-  updatePiWebSettings({ compactionPolicy: next }, settingsPath);
-  return readCompactionPolicy(settingsPath);
 }
 
 // ---------------------------------------------------------------------------

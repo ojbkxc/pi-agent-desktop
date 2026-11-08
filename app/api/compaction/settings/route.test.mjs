@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -124,4 +124,31 @@ test("PUT applies a partial patch, merges atomically and keeps other keys", asyn
   // The next GET reads the same effective policy back.
   const body = await (await GET()).json();
   assert.deepEqual(body.policy, stored.compactionPolicy);
+});
+
+test("a failed write answers 500 and leaves the file byte-identical with no temp file behind", async () => {
+  const dir = join(testAgentDir, "pi-web");
+  mkdirSync(dir, { recursive: true });
+  const original = JSON.stringify({ other: 1, compactionPolicy: { mode: "long" } });
+  writeFileSync(settingsPath, original);
+  const fileMode = statSync(settingsPath).mode & 0o777;
+  const dirMode = statSync(dir).mode & 0o777;
+  // The atomic write drops a temp file beside the target and renames over it.
+  // Denying the file makes the rename fail on Windows; denying the directory
+  // makes the temp write fail on POSIX, where a read-only file renames fine.
+  chmodSync(settingsPath, 0o444);
+  chmodSync(dir, 0o555);
+  try {
+    const response = await PUT(putRequest({ mode: "native" }));
+    assert.equal(response.status, 500);
+    assert.ok((await response.json()).error);
+  } finally {
+    chmodSync(dir, dirMode);
+    chmodSync(settingsPath, fileMode);
+  }
+  assert.equal(readFileSync(settingsPath, "utf8"), original);
+  assert.deepEqual(readdirSync(dir), ["settings.json"]);
+  // Reading still works after the failure: the policy is the one on disk.
+  const body = await (await GET()).json();
+  assert.equal(body.policy.mode, "long");
 });

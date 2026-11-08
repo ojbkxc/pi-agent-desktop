@@ -47,14 +47,58 @@ const MODEL_LABEL_KEYS: Record<CompactionModelChoice, string> = {
 };
 
 const KEEP_RECENT_FALLBACK = 65_536;
+const KEEP_RECENT_MIN = 16_384;
+const KEEP_RECENT_MAX = 262_144;
 
 const FALLBACK_LIMITS: CompactionSettingsPayload["limits"] = {
-  keepRecentTokens: { min: 16_384, max: 262_144, default: KEEP_RECENT_FALLBACK },
+  keepRecentTokens: { min: KEEP_RECENT_MIN, max: KEEP_RECENT_MAX, default: KEEP_RECENT_FALLBACK },
   preferredModels: { max: 8 },
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The same rule the server applies (`normalizeCompactionPolicy` in
+ * lib/compaction-settings-api.ts): an integer inside the supported range,
+ * otherwise the default. `Number.isFinite` alone would keep 0, negatives and
+ * fractions that the server replaces.
+ */
+function asKeepRecentTokens(raw: unknown): number {
+  return typeof raw === "number" && Number.isInteger(raw) && raw >= KEEP_RECENT_MIN && raw <= KEEP_RECENT_MAX
+    ? raw
+    : KEEP_RECENT_FALLBACK;
+}
+
+const MAX_PREFERRED_MODELS = 8;
+
+/** A `provider/modelId` reference; the model id may itself contain slashes. */
+function isModelRef(value: string): boolean {
+  if (value.length === 0 || value.length > 200) return false;
+  if (/[\s\u0000-\u001f\u007f]/.test(value)) return false;
+  const slash = value.indexOf("/");
+  return slash > 0 && slash < value.length - 1;
+}
+
+/**
+ * The same all-or-nothing rule the server applies to `preferredModels`
+ * (`parsePreferredModels` in lib/compaction-settings-api.ts): keep the list
+ * only when it is an array of at most 8 `provider/modelId` strings, otherwise
+ * empty. Deliberately duplicated instead of imported — the server module pulls
+ * in `node:fs`, which must not enter the browser bundle — and locked equal to
+ * it by `CompactionSettingsSection.test.mjs`.
+ */
+function asPreferredModels(raw: unknown): string[] | null {
+  if (!Array.isArray(raw) || raw.length > MAX_PREFERRED_MODELS) return null;
+  const models: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") return null;
+    const ref = item.trim();
+    if (!isModelRef(ref)) return null;
+    models.push(ref);
+  }
+  return models;
 }
 
 /**
@@ -67,15 +111,11 @@ export function asCompactionPolicy(raw: unknown): CompactionPolicy | null {
   if (!isRecord(raw)) return null;
   return {
     mode: raw.mode === "long" || raw.mode === "native" ? raw.mode : "balanced",
-    keepRecentTokens: typeof raw.keepRecentTokens === "number" && Number.isFinite(raw.keepRecentTokens)
-      ? raw.keepRecentTokens
-      : KEEP_RECENT_FALLBACK,
+    keepRecentTokens: asKeepRecentTokens(raw.keepRecentTokens),
     compactionModel: raw.compactionModel === "current" || raw.compactionModel === "preferred"
       ? raw.compactionModel
       : "auto",
-    preferredModels: Array.isArray(raw.preferredModels)
-      ? raw.preferredModels.filter((model): model is string => typeof model === "string")
-      : [],
+    preferredModels: asPreferredModels(raw.preferredModels) ?? [],
   };
 }
 

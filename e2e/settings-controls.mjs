@@ -119,6 +119,20 @@ try {
         const groups = host.locator('.settings-language-options,.settings-theme-options,.settings-send-mode-options,.settings-choice-group');
         assert.ok(await groups.count()>0);
         for(const group of await groups.all()) await segments(page,group);
+        // Context compaction: the fixture pins mode=balanced and keepRecent 65536,
+        // and this is the only place that covers the save round trip (the fixture
+        // answers every PUT with the same policy, so the request body is the evidence).
+        if(section==='general'&&theme==='light'&&width===1280){
+          const compaction = host.locator('.settings-general-section:has(#settings-compaction-keep-recent)');
+          await compaction.waitFor();
+          assert.equal(await compaction.locator('#settings-compaction-keep-recent').inputValue(),'65536','compaction keep-recent renders the stored value');
+          assert.equal(await compaction.getByRole('radio',{name:'Balanced (50%)'}).getAttribute('aria-checked'),'true','compaction mode reflects the stored policy');
+          const [put] = await Promise.all([
+            page.waitForRequest(r=>r.method()==='PUT'&&new URL(r.url()).pathname==='/api/compaction/settings'),
+            compaction.getByRole('radio',{name:'Long context (80%)'}).click(),
+          ]);
+          assert.deepEqual(JSON.parse(put.postData()),{mode:'long'},'compaction mode change saves a partial patch');
+        }
         // Language choice must keep geometry after label lengths change.
         if(section==='general'){
           await host.getByRole('radio',{name:'简体中文',exact:true}).click();
