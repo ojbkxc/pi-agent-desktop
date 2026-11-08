@@ -535,6 +535,28 @@ function imageToDraftImage(image: AttachedImage): ChatDraftImage {
   return { data: image.data, mimeType: image.mimeType };
 }
 
+/** 在途图片的落点决策（d5-11/d5-10）：压缩完成时用户可能已清空、换会话或卸载。
+ *  纯函数便于回归；processImageFiles 按结果执行副作用——append 追加进当前
+ *  composer；draft 写回来源会话的草稿；discard 只回收 blob URL。
+ *  draftKey 为 undefined（新会话暂无草稿键）与 null 同义。 */
+export type ImageLanding =
+  | { action: "append" }
+  | { action: "draft"; draftKey: string }
+  | { action: "discard" };
+
+export function resolveImageLanding(options: {
+  disposed: boolean;
+  cleared: boolean;
+  startedIn: string | null;
+  currentDraftKey: string | null | undefined;
+}): ImageLanding {
+  if (options.disposed || options.cleared) return { action: "discard" };
+  if (options.startedIn && options.startedIn !== options.currentDraftKey) {
+    return { action: "draft", draftKey: options.startedIn };
+  }
+  return { action: "append" };
+}
+
 function draftImageToAttachedImage(image: ChatDraftImage): AttachedImage {
   return {
     ...image,
@@ -944,6 +966,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   // Explicit clearing invalidates attachment reads already in flight, so a late
   // image conversion/Word import cannot repopulate the cleared draft.
   const attachmentClearVersionRef = useRef(0);
+  // d5-11/d5-10：压缩在途时组件可能已卸载（切走后父级卸载、compact 重挂）——
+  // 卸载后落地的图片只能回收 blob URL，setState 都是空操作。
+  const composerDisposedRef = useRef(false);
   const {
     hashQuery, setHashQuery, hashMenuOpen, setHashMenuOpen, hashActiveIndex, setHashActiveIndex,
     hashMatches, hashItemRefs, sessionIndex, sessionMentionTargetsRef, updateHashQuery, applyHashCompletion,
@@ -1209,6 +1234,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       .filter((f) => f.type.startsWith("image/") && f.size <= MAX_ATTACHED_IMAGE_BYTES)
       .slice(0, remaining);
     if (!imageFiles.length) return;
+    // 与 addTextFiles 同规（d5-11）：图片属于它们被粘贴时的那个会话。
+    const startedIn: string | null = draftKeyRef.current ?? null;
     const clearVersion = attachmentClearVersionRef.current;
     pendingImageCountRef.current += imageFiles.length;
     try {
@@ -1227,8 +1254,26 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         })
       )).filter((image): image is AttachedImage => image !== null);
       if (!newImages.length) return;
-      if (clearVersion !== attachmentClearVersionRef.current) newImages.forEach(revokeImagePreview);
-      else appendAttachedImages(newImages);
+      const landing = resolveImageLanding({
+        disposed: composerDisposedRef.current,
+        cleared: clearVersion !== attachmentClearVersionRef.current,
+        startedIn,
+        currentDraftKey: draftKeyRef.current,
+      });
+      if (landing.action === "append") {
+        appendAttachedImages(newImages);
+        return;
+      }
+      // discard（已清空/已卸载）与 draft（跨会话写回）都不把本挂载的 blob URL 留在
+      // 界面上：草稿只存 base64，回到该会话时经 draftImagesToAttachedImages 重建。
+      newImages.forEach(revokeImagePreview);
+      if (landing.action === "draft") {
+        const stored = getDraft(landing.draftKey) ?? { value: "", images: [] };
+        setDraft(landing.draftKey, {
+          ...stored,
+          images: [...(stored.images ?? []), ...newImages.map(imageToDraftImage)],
+        });
+      }
     } finally {
       pendingImageCountRef.current -= imageFiles.length;
     }
@@ -1264,6 +1309,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, []);
 
   const clearInput = useCallback(() => {
+    // d5-10：发送/清空都视为一次清空——在途压缩完成时不再把图片追加进已清空的
+    // composer（并经草稿 effect 复活）。手动清空按钮的 bump 在此之上，幂等。
+    attachmentClearVersionRef.current += 1;
     valueRef.current = "";
     setValue("");
     setAtQuery(null);
@@ -1361,7 +1409,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, []);
 
   useEffect(() => {
+    composerDisposedRef.current = false;
     return () => {
+      composerDisposedRef.current = true;
       attachedImagesRef.current.forEach(revokeImagePreview);
     };
   }, []);
@@ -1384,7 +1434,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   const handleSend = useCallback(async () => {
     const msg = value.trim();
-    if (!msg && !attachedImages.length && !attachedFilesRef.current.length) return;
+    // d5-10：读 ref 而不是渲染闭包——按下发送时以「已落地」的附件为准，
+    // 不用在依赖里追 attachedImages（闭包快照会漏掉刚落地的图）。
+    if (!msg && !attachedImagesRef.current.length && !attachedFilesRef.current.length) return;
     onAudioUnlock?.();
     const builtinAllowed = !isStreaming || offersBuiltinSlashCommandWhileStreaming(msg);
     if (builtinAllowed && await runBuiltinCommand(msg)) return;
@@ -1398,12 +1450,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     // Agent Team armed（默认开，一次性）：团队指令只对模型可见，落盘的消息体因此带着包装块，
     // 界面渲染时用 stripAgentTeamRequest 剥掉（见 lib/agent-team-request.ts）。
     const messageForModel = agentTeamsEnabled ? withAgentTeamRequest(resolvedMessage) : resolvedMessage;
-    onSend(messageForModel, attachedImages.length ? attachedImages : undefined);
+    onSend(messageForModel, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
     // 发出去即复位（对齐 cc-haha 发送调用之后的 `disarmAgentTeam()`）：团队只作用于这一条，
     // 后续闲聊不再累积建团指令。命令类消息不被包装，也就不消耗这次勾选。
     if (shouldDisarmAgentTeam(agentTeamsEnabled, messageForModel)) disarmAgentTeam();
     clearInput();
-  }, [value, attachedImages, workspaceUnavailable, isStreaming, runBuiltinCommand, onSend, clearInput, onAudioUnlock, sessionMentionTargetsRef, agentTeamsEnabled]);
+  }, [value, workspaceUnavailable, isStreaming, runBuiltinCommand, onSend, clearInput, onAudioUnlock, sessionMentionTargetsRef, agentTeamsEnabled]);
 
   const slashQuery = !compact && value.startsWith("/") && !/\s/.test(value.slice(1))
     ? value.slice(1).toLowerCase()
@@ -1638,9 +1690,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   const sendQueued = useCallback(async (mode: "steer" | "followup") => {
     const msg = value.trim();
-    if (!msg && !attachedImages.length && !attachedFilesRef.current.length) return;
+    // d5-10：与 handleSend 同规——按「已落地」的附件为准（ref），不读渲染闭包。
+    if (!msg && !attachedImagesRef.current.length && !attachedFilesRef.current.length) return;
     onAudioUnlock?.();
-    const images = attachedImages.length ? attachedImages : undefined;
+    const images = attachedImagesRef.current.length ? attachedImagesRef.current : undefined;
     const queue = async () => {
       const resolvedMessage = composeMessageWithAttachedFiles(
         await resolveSessionReferences(msg, sessionMentionTargetsRef.current),
@@ -1659,7 +1712,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         onFollowUp(resolvedMessage, images);
       }
     };
-    if (!attachedImages.length && !attachedFilesRef.current.length && onBuiltinCommand && canRunBuiltinSlashCommandWhileStreaming(msg)) {
+    if (!attachedImagesRef.current.length && !attachedFilesRef.current.length && onBuiltinCommand && canRunBuiltinSlashCommandWhileStreaming(msg)) {
       // The builtin layer may not know the command (handled:false); like the
       // bare /mcp branch below, fall through to queueing instead of dropping it.
       void runBuiltinCommand(msg).then((handled) => {
@@ -1667,7 +1720,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       }, () => void queue());
       return;
     }
-    if (!attachedImages.length && !attachedFilesRef.current.length && onBuiltinCommand && isBareMcpCommand(msg)) {
+    if (!attachedImagesRef.current.length && !attachedFilesRef.current.length && onBuiltinCommand && isBareMcpCommand(msg)) {
       // Settings > MCP opens when pi's built-in MCP extension owns /mcp; another
       // extension's /mcp is queued as before. The composer is disabled meanwhile.
       void runBuiltinCommand(msg).then((handled) => {
@@ -1676,7 +1729,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       return;
     }
     void queue();
-  }, [value, attachedImages, onBuiltinCommand, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, runBuiltinCommand, sessionMentionTargetsRef]);
+  }, [value, onBuiltinCommand, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, runBuiltinCommand, sessionMentionTargetsRef]);
 
   const getNextSlashIndex = useCallback((direction: "up" | "down" | "left" | "right") => {
     const lastIndex = displayedSlashCommands.length - 1;

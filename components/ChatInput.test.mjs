@@ -661,6 +661,8 @@ test("while a run streams, a bare /mcp opens Settings or is queued as before", a
     const sendQueued = chatInputCallback("sendQueued", {
       value,
       attachedFilesRef: { current: [] }, composeMessageWithAttachedFiles,
+      // d5-10：sendQueued 改读 attachedImagesRef；ref 与 state 同值时行为不变。
+      attachedImagesRef: { current: images },
       attachedImages: images,
       onAudioUnlock() {},
       clearInput() { calls.cleared += 1; },
@@ -697,6 +699,8 @@ test("while a run streams, a streamable built-in the builtin layer rejects is qu
     const sendQueued = chatInputCallback("sendQueued", {
       value,
       attachedFilesRef: { current: [] }, composeMessageWithAttachedFiles,
+      // d5-10：ref 形参适配（ref 与 state 同值时行为不变）。
+      attachedImagesRef: { current: [] },
       attachedImages: [],
       onAudioUnlock() {},
       clearInput() { calls.cleared += 1; },
@@ -728,6 +732,8 @@ test("handleSend lets a handled /mcp through while streaming and sends an unowne
     const handleSend = chatInputCallback("handleSend", {
       value,
       attachedFilesRef: { current: [] }, composeMessageWithAttachedFiles,
+      // d5-10：ref 形参适配（ref 与 state 同值时行为不变）。
+      attachedImagesRef: { current: [] },
       attachedImages: [],
       onAudioUnlock() {},
       isStreaming,
@@ -980,6 +986,8 @@ test("handleSend sends exactly once and routes builtin commands through the pend
     const handler = script.runInNewContext({
       value, attachedImages, isStreaming: false, workspaceUnavailable,
       attachedFilesRef: { current: [] }, composeMessageWithAttachedFiles,
+      // d5-10：ref 形参适配（ref 与 state 同值时行为不变）。
+      attachedImagesRef: { current: attachedImages },
       onAudioUnlock() {},
       runBuiltinCommand: async () => {
         builtinCalls += 1;

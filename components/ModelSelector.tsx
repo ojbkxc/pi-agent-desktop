@@ -86,10 +86,20 @@ export function ModelSelector({
     else modelsByProvider.push({ provider: option.provider, options: [option] });
   }
 
+  // d5-33：空态与提示走 i18n（三语键 models.selectModel / models.noModels /
+  // models.noAvailableModels / models.switchingModel / models.changeModel）。
+  // chip 空态与 tooltip 空态历史上是两个字符串（No models / No available models），
+  // 拆两键保持原行为；调用方传的 emptyLabel/selectedLabel 仍优先。
   const currentName = selectedLabel ?? (value
     ? sortedOptions.find((option) => option.modelId === value.modelId && option.provider === value.provider)?.name ?? value.modelId
-    : emptyLabel ?? (sortedOptions.length > 0 ? "Select model" : "No models"));
-  const buttonTitle = busy ? "Switching model" : locked ? currentName : sortedOptions.length > 0 || onClear ? "Change model" : "No available models";
+    : emptyLabel ?? (sortedOptions.length > 0 ? t("models.selectModel") : t("models.noModels")));
+  const buttonTitle = busy
+    ? t("models.switchingModel")
+    : locked
+      ? currentName
+      : sortedOptions.length > 0 || onClear
+        ? t("models.changeModel")
+        : t("models.noAvailableModels");
 
   useEffect(() => {
     const handleOutsideClick = (event: MouseEvent) => {
@@ -306,7 +316,7 @@ export function ModelSelector({
               )}
               {modelsByProvider.length === 0 ? (
                 <div style={{ padding: "8px 12px", color: "var(--text-dim)", fontSize: "var(--fs-caption)", whiteSpace: "nowrap" }}>
-                  {filter.trim() ? t("chat.noMatchingModels") : "No available models"}
+                  {filter.trim() ? t("chat.noMatchingModels") : t("models.noAvailableModels")}
                 </div>
               ) : modelsByProvider.map((group, index) => (
                 <div key={group.provider}>

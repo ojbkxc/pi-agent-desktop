@@ -60,11 +60,8 @@ interface FileData {
 }
 
 const SOURCE_HIGHLIGHT_MAX_LINES = 1_000;
-const DISPLAY_MODE_LABELS: Record<DisplayMode, string> = {
-  source: "Source",
-  preview: "Preview",
-  diff: "Diff",
-};
+// d5-33：Source/Preview/Diff 标签走 i18n（键 i18n.source/preview/diff 早已存在，
+// en.ts:1128-1130），渲染处直接 t(`i18n.${mode}`)——mode 的取值就是键后缀。
 
 const FILE_CODE_STYLE: CSSProperties = {
   fontFamily: "var(--font-mono)",
@@ -1166,6 +1163,9 @@ function TextFileViewer({
     autoDiffAppliedRef.current = false;
     setDisplayMode(requestedInitialDisplayMode);
     setWrapLines(initialWrapLines);
+    // d5-13：「允许执行脚本」是用户对上一个文件的一次性授权，不能泄漏给下一个
+    // 文件——否则切换后 B 的 <script> 会在 allow-scripts srcDoc 里无确认自动执行。
+    setHtmlScriptsEnabled(false);
 
     return () => {
       onStateChangeRef.current?.({ ...viewerStateRef.current });
@@ -1563,7 +1563,7 @@ function TextFileViewer({
                     aria-pressed={active}
                     className="file-viewer-mode-button"
                   >
-                    {DISPLAY_MODE_LABELS[mode]}
+                    {t(`i18n.${mode}`)}
                   </button>
                 );
               })}
