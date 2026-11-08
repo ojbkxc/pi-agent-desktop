@@ -107,6 +107,47 @@ test("省去进度条与徽标：名下无票的成员只显示工作态", () =>
   assert.doesNotMatch(html, /agent-teams-formation-badge/);
 });
 
+// #55（忙闲可见，规格变更说明：无票成员原来「只显示工作态」，忙闲需求要求最闲的
+// 人也可见——无票成员正是最空闲的，故其 meta-row 渲染「无积压」pill；分段条与
+// urgency 徽标仍不渲染。口径变更依据：团队吞吐需求 #55 第一段。）
+// 注意：本文件已有的 assignment(outcome) fixture status 恒为 "ended"（outcome 才是
+// 参数）；忙闲派生只认 status ∈ {running, pending}，这里用 status 正确的本地 helper。
+const liveAssignment = (status) => ({
+  id: `live-${status}`, status, memberId: "w1", assignee: "w1",
+  sessionId: null, startedAt: null, lastActivityAt: null, result: null, outcome: null,
+});
+test("忙闲 pill：无票成员渲染 idle「无积压」，running/pending 计数入 pill，lead 不显示", () => {
+  // 无票成员 → idle pill；无分段条与 urgency 徽标的口径保持。
+  const idleHtml = render(snapshot([LEAD, member("w1")]));
+  assert.match(idleHtml, /data-workload="idle"/);
+  assert.match(idleHtml, /agent-teams-formation-workload--idle/);
+  assert.doesNotMatch(idleHtml, /data-segment=/);
+  assert.doesNotMatch(idleHtml, /agent-teams-formation-badge/);
+
+  // running 优先于 pending：1 running + 2 pending → running pill。
+  const busyHtml = render(snapshot(
+    [LEAD, member("w1", { status: "running" })],
+    [
+      ticket("t1", { assignments: [liveAssignment("running")] }),
+      ticket("t2", { assignments: [liveAssignment("pending")] }),
+      ticket("t3", { assignments: [liveAssignment("pending")] }),
+    ],
+  ));
+  assert.match(busyHtml, /data-workload="running"/);
+  assert.doesNotMatch(busyHtml, /data-workload="pending"/);
+
+  // 只有 pending → pending pill。
+  const queuedHtml = render(snapshot(
+    [LEAD, member("w1")],
+    [ticket("t1", { assignments: [liveAssignment("pending")] })],
+  ));
+  assert.match(queuedHtml, /data-workload="pending"/);
+
+  // lead 卡不显示忙闲 pill（lead 不接票，恒空闲的标是噪音）。
+  const leadOnly = render(snapshot([LEAD]));
+  assert.doesNotMatch(leadOnly, /data-workload=/);
+});
+
 test("成员超过 1 个时给出「按紧急度重排」按钮，单个成员时不出现", () => {
   const many = render(snapshot([LEAD, member("w1"), member("w2")]));
   assert.match(many, /agent-teams-formation-sort/);

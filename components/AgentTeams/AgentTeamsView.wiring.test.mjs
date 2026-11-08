@@ -63,3 +63,22 @@ test("d4-1：进度条 done 与统计头同源（countTaskStates.completed）", 
   assert.match(source, /const done = counts\.completed;/);
   assert.doesNotMatch(source, /filter\(\(ticket\) => ticket\.status === "ended"\)\.length/);
 });
+
+// #55 第一段（忙闲可见，纯读派生）：成员区标题行必须有空闲成员名单与未认领派活
+// 的降级提示；派生来自 ./member-workload（纯函数，边界单测在同目录 member-workload.test.mjs）。
+// 自动化边界（已拍板）：系统只检测与提示，改派/加成员由用户一键确认——本区不得出现动作按钮。
+test("#55：成员区空闲名单与未认领提示已接线（纯读，无动作按钮）", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(source, /import \{ deriveMemberWorkloads, idleMemberIds \} from "\.\/member-workload"/);
+  assert.match(source, /t\("teams\.workload\.idleMembers", \{ names: idleNames\.join\(", "\) \}\)/);
+  assert.match(source, /t\("teams\.workload\.unassigned", \{ count: orphanCount \}\)/);
+  // 空闲名单按名册顺序派生自快照（snapshot 变化即重算）。
+  assert.match(source, /const idleNames = useMemo\(\(\) => \{[\s\S]*?idleMemberIds\(snapshot\)/);
+  const workload = await read("./member-workload.ts");
+  assert.match(workload, /export function deriveMemberWorkloads/);
+  assert.match(workload, /export function idleMemberIds/);
+  assert.match(workload, /export function workloadBadgeKind/);
+  const band = await read("./FormationBand.tsx");
+  assert.match(band, /deriveMemberWorkloads\(snapshot\)\.byMemberId/);
+  assert.match(band, /data-workload=\{badge\.kind\}/);
+});

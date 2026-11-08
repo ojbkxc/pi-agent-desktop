@@ -20,6 +20,8 @@ import {
   type MemberWorkState,
 } from "@/lib/agent-teams-formation-layout";
 import type { TicketUrgency } from "@/lib/agent-teams-task-layout";
+import type { TranslationParams } from "@/lib/i18n/types";
+import { deriveMemberWorkloads, workloadBadgeKind, type MemberWorkload } from "./member-workload";
 
 const ACCENTS = new Set(["blue", "green", "purple", "orange", "teal", "pink", "red", "gray"]);
 
@@ -50,6 +52,29 @@ function ModelChip({ model }: { model: string | null }) {
   return <span className="agent-teams-formation-model" title={model}>{model}</span>;
 }
 
+/** 忙闲徽标文案键与计数（#55 第一段，纯读展示）：running 优先于 pending。 */
+function workloadBadge(entry: MemberWorkload, t: (key: string, params?: TranslationParams) => string): { kind: "idle" | "running" | "pending"; label: string } {
+  const kind = workloadBadgeKind(entry);
+  if (kind === "running") return { kind, label: t("teams.workload.running", { count: entry.runningCount }) };
+  if (kind === "pending") return { kind, label: t("teams.workload.pending", { count: entry.pendingCount }) };
+  return { kind, label: t("teams.workload.idle") };
+}
+
+function WorkloadPill({ workload }: { workload: MemberWorkload }) {
+  const { t } = useI18n();
+  const badge = workloadBadge(workload, t);
+  // #55（忙闲可见，已拍板：自动感知+提示，改派/加人由用户一键确认）：名下派活
+  // 的 running/pending 徽标；空闲者给「无积压」标——最闲的人必须一眼可见。
+  return (
+    <span
+      className={`agent-teams-formation-workload agent-teams-formation-workload--${badge.kind}`}
+      data-workload={badge.kind}
+    >
+      {badge.label}
+    </span>
+  );
+}
+
 function ProgressBar({ node }: { node: FormationMember }) {
   if (node.total === 0) return null;
   return (
@@ -78,7 +103,7 @@ function ProgressBar({ node }: { node: FormationMember }) {
   );
 }
 
-function MemberCard({ node, onSelect }: { node: FormationMember; onSelect: (member: FormationMember) => void }) {
+function MemberCard({ node, workload, onSelect }: { node: FormationMember; workload?: MemberWorkload; onSelect: (member: FormationMember) => void }) {
   const { t } = useI18n();
   const { member, isLead } = node;
   const stateLabel = t(workStateKey(node.workState));
@@ -108,9 +133,14 @@ function MemberCard({ node, onSelect }: { node: FormationMember; onSelect: (memb
           <span className="agent-teams-formation-state-label">{stateLabel}</span>
         </span>
         {!isLead && <ProgressBar node={node} />}
-        {node.urgency && (
-          <span className={`agent-teams-formation-badge agent-teams-formation-badge--${node.urgency}`}>
-            {t(urgencyLabelKey(node.urgency))}
+        {(node.urgency || (!isLead && workload)) && (
+          <span className="agent-teams-formation-meta-row">
+            {!isLead && workload && <WorkloadPill workload={workload} />}
+            {node.urgency && (
+              <span className={`agent-teams-formation-badge agent-teams-formation-badge--${node.urgency}`}>
+                {t(urgencyLabelKey(node.urgency))}
+              </span>
+            )}
           </span>
         )}
       </button>
@@ -135,6 +165,9 @@ export function FormationBand({ snapshot, width, onSelectMember }: Props) {
   const { t } = useI18n();
   const layout = useMemo(() => layoutFormation(snapshot, width), [snapshot, width]);
   const [sortMode, setSortMode] = useState<"joined" | "urgency">("joined");
+  // #55（忙闲可见）：从 tickets[].assignments[] 派生的名册成员忙闲计数（纯客户端，
+  // 不依赖服务端投影改动）。无票成员也在这里得到「空闲」徽标——最闲的人必须可见。
+  const workloads = useMemo(() => deriveMemberWorkloads(snapshot).byMemberId, [snapshot]);
 
   const orderedWorkers = useMemo(() => {
     if (sortMode === "joined") return layout.workers;
@@ -212,7 +245,12 @@ export function FormationBand({ snapshot, width, onSelectMember }: Props) {
 
       {lead && <MemberCard node={lead} onSelect={handleSelect} />}
       {orderedWorkers.map((node) => (
-        <MemberCard key={node.member.id} node={node} onSelect={handleSelect} />
+        <MemberCard
+          key={node.member.id}
+          node={node}
+          workload={workloads.get(node.member.id)}
+          onSelect={handleSelect}
+        />
       ))}
     </div>
   );

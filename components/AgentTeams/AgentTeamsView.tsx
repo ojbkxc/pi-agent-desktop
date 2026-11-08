@@ -18,6 +18,7 @@ import { TeamMemberModelPanel } from "@/components/AgentTeams/TeamMemberModelPan
 import { TeamLifecycleActions } from "@/components/AgentTeams/TeamLifecycleActions";
 import { FallbackSettings } from "@/components/AgentTeams/FallbackSettings";
 import { formationNaturalWidth } from "@/lib/agent-teams-formation-layout";
+import { deriveMemberWorkloads, idleMemberIds } from "./member-workload";
 
 interface Props {
   /** 指定团队名；缺省时自动挑选本机最新创建的团队。 */
@@ -73,6 +74,17 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
 
   // 当前展示的快照：实时跟随时是末条，回放时是 historyIndex 指向的那一格。
   const snapshot = timeline.currentSnapshot;
+  // #55（忙闲可见，纯读派生）：空闲成员名（按名册顺序）与未认领派活数。
+  const idleNames = useMemo(() => {
+    if (!snapshot) return [] as string[];
+    const ids = idleMemberIds(snapshot);
+    return ids.map((id) => snapshot.members.find((member) => member.id === id)?.name ?? id);
+  }, [snapshot]);
+  const orphanCount = useMemo(() => {
+    if (!snapshot) return 0;
+    const { orphan } = deriveMemberWorkloads(snapshot);
+    return orphan.runningCount + orphan.pendingCount;
+  }, [snapshot]);
   const loading = listLoading
     || timeline.loading
     || (selected !== null && timeline.latestIndex < 0 && !timeline.failed);
@@ -268,6 +280,18 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
             <section className="agent-teams-section" aria-label={t("teams.membersHeading")}>
               <div className="agent-teams-section-head">
                 <h3 className="agent-teams-section-title">{t("teams.membersHeading")}</h3>
+                {/* #55（忙闲可见，已拍板：自动感知+提示，调度由用户一键确认）：空闲成员
+                    名单与未认领派活的降级提示——纯读展示，无动作按钮。 */}
+                {idleNames.length > 0 && (
+                  <span className="agent-teams-members-idle-hint" title={idleNames.join(", ")}>
+                    {t("teams.workload.idleMembers", { names: idleNames.join(", ") })}
+                  </span>
+                )}
+                {orphanCount > 0 && (
+                  <span className="agent-teams-members-orphan-hint">
+                    {t("teams.workload.unassigned", { count: orphanCount })}
+                  </span>
+                )}
                 <button
                   type="button"
                   className="agent-teams-batch-model"

@@ -10307,6 +10307,17 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .agent-teams-member-role { color: var(--text-dim); }
 .agent-teams-member-status { color: var(--text-muted); }
 
+/* #55 忙闲可见：成员区标题行的空闲名单与未认领派活提示（纯读展示，无动作）。 */
+.agent-teams-members-idle-hint,
+.agent-teams-members-orphan-hint {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--fs-caption);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.agent-teams-members-orphan-hint { color: var(--warning); }
+
 /* 需求2：成员行信息完整可读——换行发生在 chip 之间（.agent-teams-members 的
    flex-wrap 一直都在）；仅当单个 chip 比容器还宽（极窄视口/超长成员名）时才
    允许 chip 内部换行，而不是把尾部文字溢出裁掉。 */
@@ -11033,6 +11044,27 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .agent-teams-formation-badge--blocked { background: var(--warning); color: var(--bg); }
 .agent-teams-formation-badge--failed { background: var(--danger); color: var(--bg); }
 .agent-teams-formation-badge--available { background: var(--bg-hover); color: var(--text-muted); }
+
+/* #55 忙闲可见：忙闲 pill 与紧急度徽标同排（meta-row），卡高不变。pill 三态——
+   idle 用中性底（有别于可认领的 warning），running/pending 沿用 info/warning 色。 */
+.agent-teams-formation-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.agent-teams-formation-workload {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+}
+.agent-teams-formation-workload--idle { background: var(--bg-hover); color: var(--text-muted); }
+.agent-teams-formation-workload--running { background: var(--info); color: var(--bg); }
+.agent-teams-formation-workload--pending { background: var(--warning); color: var(--bg); }
 
 .agent-teams-formation-accent--blue { --formation-accent: var(--info); }
 .agent-teams-formation-accent--green { --formation-accent: var(--success); }
