@@ -135,10 +135,18 @@ async function writeSidecar(path: string, sidecar: DispatchSidecar): Promise<voi
   await rename(temp, path);
 }
 
-/** 持票锁执行（同 pi-team withTicketLock：wx 占位 + proper-lockfile 同路径锁）。 */
+/**
+ * 持票锁执行（proper-lockfile 同路径锁 `tickets/<id>.json.lock`）。
+ *
+ * **不预写 `{}` 占位**（#54 复核第15项返工）：pi-team 的 withTicketLock 先 wx 落空
+ * 占位是因为它对「不存在的票」要 createTicket；桌面这边锁前已由 readTicketFile 判
+ * 404，预写会让不存在票残留一个 `{}` 文件——既把本应 404 的请求变成 409「不属于
+ * 团队」（{} 无 teamName），又在 tickets 目录留下垃圾。proper-lockfile 的锁文件是
+ * 独立的 `.lock` 路径，不要求目标文件存在，直接锁即可；目标文件存在性交给锁内
+ * readTicketFile 判定（返回 null ⇒ 404）。
+ */
 export async function withTicketLock<T>(teamDir: string, ticketId: string, run: () => Promise<T>): Promise<T> {
   const { ticket, lock } = ticketPaths(teamDir, ticketId);
-  await writeFile(ticket, "{}", { encoding: "utf8", flag: "wx" }).catch(() => undefined);
   const release = await lockfile.lock(ticket, {
     lockfilePath: lock,
     realpath: false,
