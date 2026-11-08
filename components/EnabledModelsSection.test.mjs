@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createJiti } from "jiti";
 
-const jiti = createJiti(import.meta.url, { tsconfigPaths: true });
+const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
 const {
   enabledModelsBulkActions,
   enabledModelsProviderToggle,
@@ -102,8 +102,8 @@ test("the sidebar badge only appears while the selector is narrowed", () => {
 });
 
 test("edits are serialized so two writes cannot race on the settings file", () => {
-  assert.match(source, /if \(pendingRef\.current\) \{\s*\n\s*queuedRef\.current = \{ key, body \};\s*\n\s*return;/);
-  assert.match(source, /pendingRef\.current = key;/);
+  assert.match(source, /queueRef\.current\?\.submit\(key, body, async \(runKey, runBody\) => \{\s*\n\s*await runMutationRef\.current\?\.\(runKey, runBody\);/);
+  assert.match(source, /setPending\(key\);/);
   assert.match(source, /const busy = pending !== null;/);
 });
 
@@ -234,9 +234,53 @@ test("saving models.json resyncs the switches with the pre-save intent", () => {
   assert.match(source, /provider\.enabledCount === provider\.models\.length\)\s*\n\s*\.map\(\(provider\) => provider\.id\)/);
 });
 
-test("a save landing mid-toggle is queued, not dropped", () => {
-  assert.match(source, /queuedRef\.current = \{ key, body \};/);
-  assert.match(source, /if \(queued\) mutateRef\.current\?\.\(queued\.key, queued\.body\);/);
+test("a save landing mid-toggle is queued, not dropped — and a third mutation cannot overwrite the queued second (d5-17)", async () => {
+  // 哨兵：接线仍走队列，且补跑取最新的 runMutation（与旧 mutateRef 补跑口径一致）。
+  assert.match(source, /queueRef\.current\?\.submit\(key, body, async \(runKey, runBody\) => \{/);
+  // 行为回归：FIFO——第三个 mutate 不得顶掉排队的第二个（旧单槽实现在此丢写）。
+  const { createMutationQueue } = await jiti.import("./EnabledModelsSection.tsx");
+  const ran = [];
+  let releaseA;
+  const queue = createMutationQueue();
+  const run = (key) => new Promise((resolve) => {
+    ran.push(key);
+    if (key === "a") releaseA = () => resolve();
+    else resolve();
+  });
+  queue.submit("a", {}, run);
+  queue.submit("b", {}, run);
+  queue.submit("c", {}, run);
+  await Promise.resolve();
+  assert.deepEqual(ran, ["a"], "在飞期间后续提交只入队");
+  releaseA();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(ran, ["a", "b", "c"], "排队的 b 必须先于 c 补跑，一个都不丢");
+});
+
+test("a failing queued run does not block the ones behind it (d5-17)", async () => {
+  const { createMutationQueue } = await jiti.import("./EnabledModelsSection.tsx");
+  const ran = [];
+  let releaseA;
+  const queue = createMutationQueue();
+  const run = (key) => {
+    ran.push(key);
+    if (key === "a") return new Promise((_, reject) => { releaseA = () => reject(new Error("boom")); });
+    return Promise.resolve();
+  };
+  queue.submit("a", {}, run);
+  queue.submit("b", {}, run);
+  releaseA();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(ran, ["a", "b"], "前一个失败（如一次被拒的写）不阻断排队的补跑");
+});
+
+test("an idle queue starts the next submit immediately (d5-17)", async () => {
+  const { createMutationQueue } = await jiti.import("./EnabledModelsSection.tsx");
+  const ran = [];
+  const queue = createMutationQueue();
+  queue.submit("only", {}, async (key) => { ran.push(key); });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(ran, ["only"]);
 });
 
 test("provider rows carry the scope badge", () => {

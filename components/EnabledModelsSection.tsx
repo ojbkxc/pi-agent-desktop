@@ -73,14 +73,48 @@ const FAILURE_KEYS: Record<string, string> = {
   "project-scope": "models.enabledProjectScope",
 };
 
+/**
+ * d5-17：mutation 的单飞 + FIFO 排队调度（纯逻辑，可单测）。
+ *
+ * 旧实现是单槽：在飞期间到达的第二个 mutation 排队、第三个会**静默顶掉**排队的
+ * 第二个——其变更丢失，响应刷新后对应开关静默回弹。队列语义：同一时刻至多一个
+ * 在飞；在飞期间到达的按序入队，在飞结束（无论成败）逐个补跑，一个都不丢。
+ */
+export interface MutationQueue<K, B> {
+  submit(key: K, body: B, run: (key: K, body: B) => Promise<void>): void;
+}
+
+export function createMutationQueue<K, B>(): MutationQueue<K, B> {
+  let pending = false;
+  const queue: { key: K; body: B }[] = [];
+  const pump = (run: (key: K, body: B) => Promise<void>) => {
+    if (pending) return;
+    const next = queue.shift();
+    if (!next) return;
+    pending = true;
+    // run 的 rejection 已由调用方（runMutation 的 try/catch）消费；这里再兜一层，
+    // 防止 finally 链把拒绝漏成 unhandledRejection。失败不得阻断排队的补跑。
+    void run(next.key, next.body).catch(() => {}).finally(() => {
+      pending = false;
+      pump(run);
+    });
+  };
+  return {
+    submit(key, body, run) {
+      queue.push({ key, body });
+      pump(run);
+    },
+  };
+}
+
 export function useEnabledModels(cwd?: string | null): EnabledModelsController {
   const [view, setView] = useState<EnabledModelsView | null>(null);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<string | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
-  const pendingRef = useRef<string | null>(null);
-  const queuedRef = useRef<{ key: string; body: MutationBody } | null>(null);
-  const mutateRef = useRef<((key: string, body: MutationBody) => void) | null>(null);
+  const queueRef = useRef<MutationQueue<string, MutationBody> | null>(null);
+  queueRef.current ??= createMutationQueue();
+  const runMutationRef = useRef<((key: string, body: MutationBody) => Promise<void>) | null>(null);
 
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -105,43 +139,40 @@ export function useEnabledModels(cwd?: string | null): EnabledModelsController {
     return () => controller.abort();
   }, [cwd, reloadKey]);
 
+  const runMutation = useCallback(async (key: string, body: MutationBody) => {
+    setPending(key);
+    setFailure(null);
+    try {
+      const res = await fetch("/api/models/enabled", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, ...(cwd ? { cwd } : {}) }),
+      });
+      const data = await res.json() as EnabledModelsView & { error?: string; reason?: string };
+      if (!res.ok || data.error) {
+        const messageKey = data.reason ? FAILURE_KEYS[data.reason] : undefined;
+        setFailure(messageKey ? { messageKey } : { message: data.error ?? `HTTP ${res.status}` });
+        return;
+      }
+      setView(data);
+    } catch (error) {
+      setFailure({ message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setPending(null);
+    }
+  }, [cwd]);
+
+  runMutationRef.current = runMutation;
+
   const mutate = useCallback((key: string, body: MutationBody) => {
     // A save can land while a switch is still in flight; queue it rather than
     // dropping it, or the panel keeps describing the previous models.json.
-    if (pendingRef.current) {
-      queuedRef.current = { key, body };
-      return;
-    }
-    pendingRef.current = key;
-    setPending(key);
-    setFailure(null);
-    void (async () => {
-      try {
-        const res = await fetch("/api/models/enabled", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...body, ...(cwd ? { cwd } : {}) }),
-        });
-        const data = await res.json() as EnabledModelsView & { error?: string; reason?: string };
-        if (!res.ok || data.error) {
-          const messageKey = data.reason ? FAILURE_KEYS[data.reason] : undefined;
-          setFailure(messageKey ? { messageKey } : { message: data.error ?? `HTTP ${res.status}` });
-          return;
-        }
-        setView(data);
-      } catch (error) {
-        setFailure({ message: error instanceof Error ? error.message : String(error) });
-      } finally {
-        pendingRef.current = null;
-        setPending(null);
-        const queued = queuedRef.current;
-        queuedRef.current = null;
-        if (queued) mutateRef.current?.(queued.key, queued.body);
-      }
-    })();
-  }, [cwd]);
-
-  mutateRef.current = mutate;
+    // d5-17：FIFO——在飞时到达的按序入队、结束后逐个补跑，绝不顶掉已排队的。
+    // 补跑走最新的 runMutation，与旧 mutateRef 补跑口径一致。
+    queueRef.current?.submit(key, body, async (runKey, runBody) => {
+      await runMutationRef.current?.(runKey, runBody);
+    });
+  }, []);
 
   const setModels = useCallback((key: string, refs: string[], enabled: boolean) => {
     mutate(key, { op: "models", refs, enabled });
