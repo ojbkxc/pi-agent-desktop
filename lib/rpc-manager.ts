@@ -65,6 +65,10 @@ import { additionalCcHahaSkillPaths } from "./cc-haha-skills";
 import { createExactSystemPromptExtension } from "./exact-system-prompt";
 import { createArtifactGuideExtension } from "./artifact-guide-extension";
 import { createAgentGuideExtension } from "./agent-guide-extension";
+// v0.8.2 压缩策略：会话级阈值包装（SettingsManager Proxy）与 session_before_compact 执行扩展。
+// 两处必须与 lib/subagent-runtime.ts 的成员新建路径装配同一套，见 lib/compaction-wiring.test.mjs。
+import { createCompactionSettingsManager } from "./compaction-policy";
+import { createCompactionModelExtension } from "./compaction-extension";
 import { createPiWebBuiltinExtensions, createSubagentBuiltinExtensions, snapshotWantsSubagentExtensions } from "./builtin-extensions";
 import type { McpHost } from "./mcp-host";
 import { mcpPromptPreparation, type McpCommandCandidate } from "./mcp-command";
@@ -3024,6 +3028,13 @@ export async function startRpcSession(
   // 全局极简档只管普通项目会话：chat 有自己的策略扩展，chat-only 本来就什么都不加载，
   // 子会话由 lib/subagent-runtime.ts 按 profile / 请求自己决定。
   const lean = !chatWorkspace && !chatOnly && !subagentResources && isLeanMode();
+  // 恢复成员会话时，极简档标志来自快照（`request.lean` 当初写进 resourceSnapshot.lean）；
+  // 老快照没有该字段，读取端按非极简处理。见 lib/subagents.ts readSubagentSessionResources。
+  const leanMember = subagentResources?.lean === true;
+  // v0.8.2 上下文压缩策略：与扩展同进同退。lean 按「不加载扩展」的语义整体收窄，
+  // chatOnly 同理（它只保留 exact-prompt 一个内联扩展），两者都不装配压缩扩展与阈值包装。
+  // 普通会话、chat workspace、非 lean 的成员恢复（subagentResources）都装配。
+  const compactionEnabled = !chatOnly && !lean && !leanMember;
   const finishStartingSession = trackStartingSession(sessionCwd);
   const starting = (async () => {
     // Some extensions access the SDK's global theme even outside the terminal UI.
@@ -3069,7 +3080,13 @@ export async function startRpcSession(
     const chatSessionRef: {
       current?: { resourceLoader: { getSkills(): { skills: { filePath: string; baseDir: string }[] } } };
     } = {};
-    const settingsManager = SettingsManager.create(sessionCwd, agentDir);
+    const baseSettingsManager = SettingsManager.create(sessionCwd, agentDir);
+    // v0.8.2：只包 getCompactionSettings，按模型的真实 contextWindow 套 balanced/long 档位；
+    // native 档返回 base 本身（同一对象），其余方法与属性全部透传。压缩扩展在
+    // session_before_compact 里另行读取同一份 compactionPolicy（每次压缩重读，改设置免重启）。
+    const settingsManager = compactionEnabled
+      ? createCompactionSettingsManager(baseSettingsManager)
+      : baseSettingsManager;
     // Chat-only sessions and subagents that replace Pi's prompt send an exact
     // system prompt. The prompt is resolved at prompt time through this inline
     // extension: it may read the session's context files, which exist only
@@ -3119,12 +3136,14 @@ export async function startRpcSession(
             appendSystemPrompt: subagentResources.appendSystemPrompt,
             // 与 lib/subagent-runtime.ts 的新建路径装配同一批（成员内置扩展里已经含只读
             // MCP 策略）。builtins 为 undefined 时（chat-only 子会话、或早于成员扩展的
-            // 老快照）保持原样。
-            ...(builtins || usesExactSystemPrompt
+            // 老快照）保持原样；压缩策略是隐藏扩展、不注册工具，老快照为此单独放宽守卫
+            // （lean 快照除外，它按「不加载扩展」整体收窄）。
+            ...(builtins || usesExactSystemPrompt || compactionEnabled
               ? {
                   extensionFactories: [
                     ...(builtins?.extensions ?? []),
                     ...(usesExactSystemPrompt ? [exactSystemPromptExtension] : []),
+                    ...(compactionEnabled ? [createCompactionModelExtension()] : []),
                   ],
                 }
               : {}),
@@ -3141,6 +3160,7 @@ export async function startRpcSession(
                 ...(builtins?.extensions ?? []),
                 createArtifactGuideExtension(),
                 createAgentGuideExtension(),
+                createCompactionModelExtension(),
                 // A chat with a folder saves into it; only a legacy chat still saves to Downloads.
                 ...(chatGrants && !chatFolder
                   ? [createChatDownloadsExtension({ grants: chatGrants })]
@@ -3173,6 +3193,8 @@ export async function startRpcSession(
               createReadOnlyMcpPolicyExtension(),
               createArtifactGuideExtension(),
               createAgentGuideExtension(),
+              // v0.8.2：只接管本次摘要请求的模型路由；全部候选失败时返回 undefined 交回 SDK。
+              createCompactionModelExtension(),
               createProjectCommandBashExtension({
                 cwd: sessionCwd,
                 settings: settingsManager,

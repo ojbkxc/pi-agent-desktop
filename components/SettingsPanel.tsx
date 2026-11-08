@@ -44,6 +44,7 @@ import { RemoteAccessSection } from "./RemoteAccessSection";
 import { ServerSection } from "./ServerSection";
 import { RelaySection } from "./RelaySection";
 import { ChatsSettingsSection } from "./ChatsSettingsSection";
+import { CompactionSettingsSection } from "./CompactionSettingsSection";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { TerminalSettingsSection } from "./TerminalSettingsSection";
 
@@ -328,6 +329,7 @@ function GeneralSettings({
               </div>
             </div>
           </section>
+          <CompactionSettingsSection />
           <ChatsSettingsSection />
         </div>
 

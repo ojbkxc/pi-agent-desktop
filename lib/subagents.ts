@@ -86,6 +86,13 @@ export interface SubagentResourceSnapshot {
   loadSkills: boolean;
   loadExtensions: boolean;
   exactSystemPrompt?: string;
+  /**
+   * 极简档成员（`request.lean`）。快照必须记下来：恢复路径只有工具集，而 lean 的
+   * `LEAN_TOOL_NAMES` 与普通 general-purpose 成员的默认工具集完全相同，无法反推。
+   * 缺省（早于 v0.8.2 压缩策略的快照）视为非极简 —— 那些会话当初可能不是 lean，
+   * 且压缩策略是隐藏扩展、不改变工具面，按非极简恢复与它们原有的能力一致。
+   */
+  lean?: boolean;
 }
 
 export interface SubagentSessionResources {
@@ -94,6 +101,8 @@ export interface SubagentSessionResources {
   loadSkills: boolean;
   loadExtensions: boolean;
   exactSystemPrompt?: string;
+  /** 快照是否来自极简档成员；老快照无此字段时为 false。 */
+  lean: boolean;
 }
 
 export interface SubagentResultMetadata {
@@ -561,6 +570,9 @@ export function readSubagentSessionResources(
   const snapshot = data.resourceSnapshot;
   const loadSkills = isRecord(snapshot) && snapshot.loadSkills === true;
   const loadExtensions = isRecord(snapshot) && snapshot.loadExtensions === true;
+  // A snapshot written before the v0.8.2 compaction policy has no `lean`; read it as
+  // not lean, so those sessions keep the capability they had when they were created.
+  const lean = isRecord(snapshot) && snapshot.lean === true;
   if (
     isRecord(snapshot)
     && snapshot.version === 1
@@ -582,6 +594,7 @@ export function readSubagentSessionResources(
       tools: [...new Set(snapshot.tools)].filter((name) => !TEAM_LIFECYCLE_TOOLS.has(name)),
       loadSkills,
       loadExtensions,
+      lean,
       ...(typeof snapshot.exactSystemPrompt === "string" ? { exactSystemPrompt: snapshot.exactSystemPrompt } : {}),
     };
   }

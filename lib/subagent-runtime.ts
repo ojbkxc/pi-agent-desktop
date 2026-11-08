@@ -33,6 +33,9 @@ import {
 import type { SessionEntry } from "./types";
 import { buildSubagentPromptPlan } from "./subagent-prompt";
 import { createExactSystemPromptExtension } from "./exact-system-prompt";
+// v0.8.2 压缩策略：与 lib/rpc-manager.ts 的普通会话/成员恢复路径装配同一套。
+import { createCompactionSettingsManager } from "./compaction-policy";
+import { createCompactionModelExtension } from "./compaction-extension";
 import { appendSubagentInputFiles, loadSubagentInputFiles } from "./subagent-input";
 import { projectTrustReloadOptions } from "./project-trust";
 import { resolveShellTools } from "./powershell-settings";
@@ -262,7 +265,6 @@ export function createSubagentController(
 
       const agentDir = getAgentDir();
       const parentModelRuntime = (parent.inner as unknown as { modelRuntime: ModelRuntime }).modelRuntime;
-      const settingsManager = SettingsManager.create(childCwd, agentDir);
       const inheritedParentContext = inheritContext
         ? `The following is the active conversation context from the parent session. Use it only as background for the delegated task:\n${parentContextText(parent)}`
         : undefined;
@@ -289,6 +291,14 @@ export function createSubagentController(
           ? { teamIdentity: { agentName: request.agentName, teamName: request.teamName } }
           : {}),
       });
+      // v0.8.2 压缩策略：极简档按「不加载扩展」整体收窄，chat-only 子会话与 rpc-manager
+      // 的 chatOnly 分支一致地不装配；其余成员（含 loadExtensions=false 的普通子代理）都装配。
+      // 与恢复路径 lib/rpc-manager.ts 的 compactionEnabled 必须同规则。
+      const compactionEnabled = request.lean !== true && !chatOnly;
+      const baseSettingsManager = SettingsManager.create(childCwd, agentDir);
+      const settingsManager = compactionEnabled
+        ? createCompactionSettingsManager(baseSettingsManager)
+        : baseSettingsManager;
       const services = await createAgentSessionServices({
         cwd: childCwd,
         agentDir,
@@ -310,7 +320,7 @@ export function createSubagentController(
               }
             : {}),
           appendSystemPrompt,
-          ...(memberBuiltins.extensions.length > 0 || promptPlan.exactSystemPrompt !== undefined
+          ...(memberBuiltins.extensions.length > 0 || promptPlan.exactSystemPrompt !== undefined || compactionEnabled
             ? {
                 extensionFactories: [
                   ...memberBuiltins.extensions,
@@ -318,6 +328,8 @@ export function createSubagentController(
                   ...(promptPlan.exactSystemPrompt !== undefined
                     ? [createExactSystemPromptExtension(() => promptPlan.exactSystemPrompt)]
                     : []),
+                  // v0.8.2：只路由本次摘要请求；全部候选失败返回 undefined 交回 SDK。
+                  ...(compactionEnabled ? [createCompactionModelExtension()] : []),
                 ],
               }
             : {}),
@@ -366,7 +378,10 @@ export function createSubagentController(
           tools: [...activeTools],
           loadSkills: profile.loadSkills,
           loadExtensions: profile.loadExtensions,
-        ...(promptPlan.exactSystemPrompt !== undefined ? { exactSystemPrompt: promptPlan.exactSystemPrompt } : {}),
+          // v0.8.2：恢复路径据此与新建路径同规则决定是否装配压缩策略（lean 的工具集
+          // 与普通成员相同，只有这个标志能区分）。
+          lean: request.lean === true,
+          ...(promptPlan.exactSystemPrompt !== undefined ? { exactSystemPrompt: promptPlan.exactSystemPrompt } : {}),
         },
         ...(isolatedWorktree ? { worktreePath: isolatedWorktree.path, worktreeBranch: isolatedWorktree.branch } : {}),
       };

@@ -11782,3 +11782,53 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .team-fallback-manual-key { font-family: var(--font-mono); font-size: var(--fs-micro); color: var(--text-muted); }
 .team-fallback-manual-reason { color: var(--text); font-size: var(--fs-small); }
 .team-fallback-manual-time { color: var(--text-dim); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
+
+/* Settings › General › Chat › Context compaction: the chosen preferred models
+   under the picker, each removable. */
+.settings-compaction-selected {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-compaction-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-size: var(--fs-caption);
+}
+
+.settings-compaction-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-compaction-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.settings-compaction-chip-remove:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
