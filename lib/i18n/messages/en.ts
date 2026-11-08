@@ -509,6 +509,7 @@ export const enLocale: LocalePlugin = {
     "i18n.close": "Close",
     "i18n.copy": "Copy",
     "i18n.copied": "Copied",
+    "i18n.copyFailed": "Copy failed",
     "chat.codeWrap": "Wrap",
     "chat.codeNoWrap": "No wrap",
     "chat.codeExpand": "Show all {count} lines",

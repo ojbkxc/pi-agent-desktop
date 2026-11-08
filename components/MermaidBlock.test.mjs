@@ -197,3 +197,18 @@ test("fit mode stays off unless asked for", () => {
   const plain = renderMermaid({ code: mermaidSrc, defaultPreview: true });
   assert.doesNotMatch(plain, /mermaid-fit/);
 });
+
+test("code-block copy failure is caught and surfaced, never an unhandled rejection (d5-27)", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("./MermaidBlock.tsx", import.meta.url), "utf8");
+  // copyText 的 then 必须带 onRejected；失败走 copyFailed 状态与成功同节奏复位。
+  assert.match(source, /setCopyFailed\(true\);\s*setTimeout\(\(\) => setCopyFailed\(false\), 1500\);/);
+  assert.match(source, /copyFailed \? t\("i18n\.copyFailed"\) : copied \? t\("i18n\.copied"\) : t\("i18n\.copy"\)/);
+  // 三语键必须齐（本仓 i18n 动态键纪律）。
+  const { enLocale } = await jiti.import("@/lib/i18n/messages/en");
+  const { zhCNLocale } = await jiti.import("@/lib/i18n/messages/zh-CN");
+  const { zhTWLocale } = await jiti.import("@/lib/i18n/messages/zh-TW");
+  for (const [name, locale] of [["en", enLocale], ["zh-CN", zhCNLocale], ["zh-TW", zhTWLocale]]) {
+    assert.equal(typeof locale.messages["i18n.copyFailed"], "string", `${name} is missing i18n.copyFailed`);
+  }
+});

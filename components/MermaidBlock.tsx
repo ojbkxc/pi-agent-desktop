@@ -349,6 +349,7 @@ interface CodeBlockProps {
 export const CodeBlock = memo(function CodeBlock({ code, lang, headerAction, isStreaming }: CodeBlockProps) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
   const [wrap, setWrap] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const lineCount = codeLineCount(code);
@@ -357,10 +358,17 @@ export const CodeBlock = memo(function CodeBlock({ code, lang, headerAction, isS
   const folded = foldable && !expanded;
   const showLineNumbers = lineCount >= CODE_LINE_NUMBER_MIN_LINES;
 
+  // d5-27：copyText 可 reject（HTTP 明文部署下 clipboard API 不可用、窗口失焦
+  // 等），无 .catch 会变成 unhandled rejection 且按钮零反馈。失败也给出短暂
+  // 状态，与成功同节奏复位。
   const copy = () => {
     copyText(code).then(() => {
       setCopied(true);
+      setCopyFailed(false);
       setTimeout(() => setCopied(false), 1500);
+    }, () => {
+      setCopyFailed(true);
+      setTimeout(() => setCopyFailed(false), 1500);
     });
   };
 
@@ -381,7 +389,7 @@ export const CodeBlock = memo(function CodeBlock({ code, lang, headerAction, isS
             onClick={copy}
             className="markdown-code-action"
           >
-            {copied ? t("i18n.copied") : t("i18n.copy")}
+            {copyFailed ? t("i18n.copyFailed") : copied ? t("i18n.copied") : t("i18n.copy")}
           </button>
         </div>
       </div>

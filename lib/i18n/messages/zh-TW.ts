@@ -509,6 +509,7 @@ export const zhTWLocale: LocalePlugin = {
     "i18n.close": "關閉",
     "i18n.copy": "複製",
     "i18n.copied": "已複製",
+    "i18n.copyFailed": "複製失敗",
     "chat.codeWrap": "自動換行",
     "chat.codeNoWrap": "不換行",
     "chat.codeExpand": "展開全部 {count} 行",
