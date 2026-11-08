@@ -30,10 +30,14 @@ function request(body, contentType = "application/json") {
   });
 }
 
-test("settings route defaults off and persists both switch states", async () => {
+test("settings route defaults on and persists both switch states", async () => {
+  // Delegation is the shipped behavior the UI guide promises; a fresh install
+  // has no settings file, and #25 flipped the default to on. The round trips
+  // below stay intact: an explicit PUT decides, the default only fills the
+  // empty file.
   let response = await GET();
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { enabled: false, maxConcurrent: 10 });
+  assert.deepEqual(await response.json(), { enabled: true, maxConcurrent: 10 });
 
   response = await PUT(request({ enabled: true }));
   assert.equal(response.status, 200);
@@ -58,6 +62,9 @@ test("settings route validates mutations", async () => {
 });
 
 test("settings route validates and persists concurrency", async () => {
+  // This file-level agent dir carries over from the round-trip test above,
+  // which ended with an explicit `PUT {enabled:false}`: the `false` below is
+  // that explicit value persisting, NOT the shipped default (which is on).
   let response = await PUT(request({ maxConcurrent: 2 }));
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { enabled: false, maxConcurrent: 2 });

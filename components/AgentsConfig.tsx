@@ -177,7 +177,12 @@ export function AgentsConfig({
   const [savedOk, setSavedOk] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [builtInEnabled, setBuiltInEnabled] = useState(false);
+  // Optimistic default matches the shipped behavior: built-in delegation is
+  // on unless the server says otherwise (isBuiltInSubagentsEnabled defaults
+  // to true). Starting at false would flash "off" before the fetch lands and
+  // — if the fetch fails — leave the switch permanently showing the opposite
+  // of the actual state.
+  const [builtInEnabled, setBuiltInEnabled] = useState(true);
   const [maxConcurrent, setMaxConcurrent] = useState(10);
   // The raw input text, kept separately so an empty/out-of-range edit is an
   // editing state instead of Number("") === 0 being committed on blur.
