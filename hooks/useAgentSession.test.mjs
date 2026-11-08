@@ -135,9 +135,14 @@ test("fresh sessions use the preference while persisted and live sessions restor
     source.indexOf("  const scrollUserMsgToTop"),
   );
 
+  // Updated for 需求3 (#21): the layout effect must still (1) force chats to
+  // "none" and return, (2) keep the guard that never rewrites persisted or
+  // already-open sessions, (3) let an explicit pick — configured included —
+  // win verbatim, and (4) fall back to DEFAULT_NEW_SESSION_TOOL_PRESET only
+  // when the user never chose (hasExplicitToolPresetChoice() gate).
   assert.match(
     preferenceSource,
-    /const existingSessionId = session\?\.id;[\s\S]*?useLayoutEffect\(\(\) => \{\s*if \(chatWorkspace\) \{\s*setToolPresetState\("none"\);\s*return;\s*\}\s*if \(!existingSessionId && \(!isNew \|\| sessionIdRef\.current\)\) return;\s*setToolPresetState\(getPreferredToolPreset\(\)\)/,
+    /const existingSessionId = session\?\.id;[\s\S]*?useLayoutEffect\(\(\) => \{\s*if \(chatWorkspace\) \{\s*setToolPresetState\("none"\);\s*return;\s*\}\s*if \(!existingSessionId && \(!isNew \|\| sessionIdRef\.current\)\) return;[\s\S]*?const preferred = getPreferredToolPreset\(\);[\s\S]*?preferred === CONFIGURED_TOOL_PRESET && !hasExplicitToolPresetChoice\(\)[\s\S]*?\? DEFAULT_NEW_SESSION_TOOL_PRESET[\s\S]*?: preferred,/,
   );
   assert.match(source, /if \(agentState\?\.running\) \{\s*loadTools\(session\.id\)/);
   assert.match(
