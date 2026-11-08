@@ -11,7 +11,7 @@ const jiti = createJiti(import.meta.url, {
 });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
-const { ChatInput, ModelErrorBanner, ModelScopeWarningBanner, canClearBuiltinCommandInput, canRestoreUserMessage, canRunBuiltinSlashCommandWhileStreaming, compressImageFile, cycleListIndex, filterModelOptions, getTopbarBoundary, getUpwardMenuMaxHeight, getUserMessageText, getUserMessageDraftImages, isExactSlashCommand, modelSupportsImageInput, replaceLinksWithMarkdown, shouldCompressImageFile, offersBuiltinSlashCommandWhileStreaming, submitsSlashCommandOnEnter} = await jiti.import("./ChatInput.tsx");
+const { ChatInput, ModelErrorBanner, ModelScopeWarningBanner, canClearBuiltinCommandInput, canRestoreUserMessage, canRunBuiltinSlashCommandWhileStreaming, compressImageFile, cycleListIndex, filterModelOptions, getTopbarBoundary, getUpwardMenuMaxHeight, getUserMessageText, getUserMessageDraftImages, isExactSlashCommand, modelSupportsImageInput, replaceLinksWithMarkdown, resolveImageLanding, shouldCompressImageFile, offersBuiltinSlashCommandWhileStreaming, submitsSlashCommandOnEnter} = await jiti.import("./ChatInput.tsx");
 
 const { isBareMcpCommand } = await jiti.import("@/lib/mcp-command.ts");
 const { composeMessageWithAttachedFiles } = await jiti.import("@/lib/chat-attachments.ts");
@@ -1129,4 +1129,62 @@ test("selector rows expose a plain default star separate from the selected optio
   assert.match(active, /data-selected="true"/);
   assert.doesNotMatch(active, /polyline/);
   assert.doesNotMatch(active, /border-left/);
+});
+
+// ── d5-11/d5-10（28f03fc 的 commit message 声称的测试当时未落地，本次补齐）──────────
+// resolveImageLanding 是在途图片的落点决策纯函数：压缩完成时用户可能已卸载、已清空
+// 或已切到另一个会话。三分支各有明确的副作用语义（见 ChatInput.processImageFiles）。
+test("resolveImageLanding：已卸载或在途清空都只回收，不落任何状态", () => {
+  // 已卸载（组件 unmount 后压缩才完成）：只回收 blob，绝不能写草稿或 state。
+  assert.deepEqual(
+    resolveImageLanding({ disposed: true, cleared: false, startedIn: "s1", currentDraftKey: "s1" }),
+    { action: "discard" },
+  );
+  // 已清空（clearInput bump 了 clearVersion）：同上——发送后在途图不许复活进已清空的输入框。
+  assert.deepEqual(
+    resolveImageLanding({ disposed: false, cleared: true, startedIn: "s1", currentDraftKey: "s1" }),
+    { action: "discard" },
+  );
+});
+
+test("resolveImageLanding：跨会话落地写回来源会话草稿", () => {
+  // 粘贴在 s1、压缩完成时已切到 s2：图片属于 s1，回 s1 时经 draft 重建（base64）。
+  assert.deepEqual(
+    resolveImageLanding({ disposed: false, cleared: false, startedIn: "s1", currentDraftKey: "s2" }),
+    { action: "draft", draftKey: "s1" },
+  );
+  // startedIn 为 null（来源会话无草稿键）且未切换：正常追加。
+  assert.deepEqual(
+    resolveImageLanding({ disposed: false, cleared: false, startedIn: null, currentDraftKey: null }),
+    { action: "append" },
+  );
+  // 同会话（startedIn === currentDraftKey）：正常追加。
+  assert.deepEqual(
+    resolveImageLanding({ disposed: false, cleared: false, startedIn: "s1", currentDraftKey: "s1" }),
+    { action: "append" },
+  );
+});
+
+test("resolveImageLanding：清空优先于跨会话（先切会话再清空时只回收）", () => {
+  // 粘贴在 s1 → 清空（bump）→ 压缩完成时又切到 s2：清空意图覆盖一切，只回收。
+  assert.deepEqual(
+    resolveImageLanding({ disposed: false, cleared: true, startedIn: "s1", currentDraftKey: "s2" }),
+    { action: "discard" },
+  );
+});
+
+// clearInput 的 bump（d5-10）：发送/清空必须使在途压缩的 clearVersion 快照失效——
+// 守卫为源码正则（clearInput 在 forwardRef 闭包内，无法直接抽测），断言两处协同：
+// ① clearInput 第一行 bump；② processImageFiles 读取快照后与最新值比对。
+test("clearInput 使在途图片快照失效（bump attachmentClearVersionRef）", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  const clearInputStart = source.indexOf("const clearInput = useCallback(() => {");
+  assert.ok(clearInputStart !== -1, "clearInput 定义存在");
+  const clearInputBody = source.slice(clearInputStart, clearInputStart + 400);
+  assert.match(clearInputBody, /attachmentClearVersionRef\.current \+= 1;/, "clearInput 必须 bump clearVersion");
+  const processStart = source.indexOf("const startedIn: string | null = draftKeyRef.current ?? null;");
+  assert.ok(processStart !== -1, "processImageFiles 必须捕获 startedIn 快照");
+  const processBody = source.slice(processStart, processStart + 1200);
+  assert.match(processBody, /clearVersion !== attachmentClearVersionRef\.current/, "processImageFiles 必须比对 clearVersion");
 });

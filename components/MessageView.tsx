@@ -1996,7 +1996,7 @@ function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessag
               textAlign: "left",
             }}
           >
-             {text ? previewText(text) : t("i18n.showExtensionMessage")}
+             {text && normalizedPreviewText(text) ? previewText(text) : t("i18n.showExtensionMessage")}
           </button>
         )}
 
@@ -2124,9 +2124,15 @@ function formatCustomType(type: string): string {
   return type || "extension";
 }
 
+/** 空白折叠后的预览文本；全空白返回空串（调用方据此显示 i18n 的「查看扩展消息」，
+ *  d5-33 残余：原先该分支返回硬编码英文）。 */
+function normalizedPreviewText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
 function previewText(text: string): string {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  if (!normalized) return "Show extension message";
+  const normalized = normalizedPreviewText(text);
+  if (!normalized) return "";
   return normalized.length > 140 ? `${normalized.slice(0, 140)}...` : normalized;
 }
 
@@ -2149,6 +2155,7 @@ function getToolPreview(block: ToolCallContent): string {
 }
 
 function BashExecutionView({ message, sessionId }: { message: BashExecutionMessage; sessionId?: string }) {
+  const { t } = useI18n();
   const [fullOutput, setFullOutput] = useState<string | null>(null);
   const [loadingFull, setLoadingFull] = useState(false);
   const [fullError, setFullError] = useState<string | null>(null);
@@ -2215,7 +2222,7 @@ function BashExecutionView({ message, sessionId }: { message: BashExecutionMessa
               disabled={loadingFull}
               style={{ background: "none", border: "none", color: "var(--accent)", cursor: loadingFull ? "default" : "pointer", fontSize: "var(--fs-micro)", padding: 0, textDecoration: "underline" }}
             >
-              {loadingFull ? "loading…" : "view full output"}
+              {loadingFull ? t("i18n.loading") : t("i18n.viewFullOutput")}
             </button>
           )}
           <button
@@ -2236,7 +2243,7 @@ function BashExecutionView({ message, sessionId }: { message: BashExecutionMessa
               cursor: "pointer",
             }}
           >
-            download full output
+            {t("i18n.downloadFullOutput")}
           </button>
           {fullError && <span style={{ marginLeft: 6, color: "var(--text-dim)", fontSize: "var(--fs-micro)" }}>({fullError})</span>}
         </div>

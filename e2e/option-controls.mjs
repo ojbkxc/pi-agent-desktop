@@ -128,7 +128,9 @@ try{
   await page.getByRole('listbox').screenshot({path:`test-results/ui-send/selection-reasoning-${theme}-${width}.png`});
   await page.keyboard.press('Escape');
   await page.locator('textarea').click();
-  await page.getByRole('button',{name:'Change model',exact:true}).click();await assertRowGaps(page.getByRole('listbox').locator('.app-option-row'),'actual model choices');
+  // ModelSelector 的按钮文案已接 i18n（#13/d5-33）；本文件 pinLocale('zh-CN')，
+  // 定位器用正则同时覆盖两语，不随语言钉扎漂移。
+  await page.getByRole('button',{name:/更换模型|Change model/}).click();await assertRowGaps(page.getByRole('listbox').locator('.app-option-row'),'actual model choices');
   await assertChoiceGeometry(page.getByRole('listbox'),page.getByRole('listbox').locator('.app-option-row'),'actual models');await page.keyboard.press('Escape');
   const input=page.locator('textarea');await input.fill('');await input.press('ArrowUp');
   const history=page.locator('.app-suggestion-menu');await history.waitFor();await assertRowGaps(history.locator('button'),'actual input history');await input.press('Escape');

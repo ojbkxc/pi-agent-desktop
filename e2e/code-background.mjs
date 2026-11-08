@@ -9,7 +9,9 @@ export async function checkCodeBackground(page) {
     }
   };
   page.on("console", onConsole);
-  const source = page.getByRole("button", { name: "Source", exact: true });
+  // FileViewer 视图模式按钮文案已接 i18n（#13/d5-33）。本文件经 run.mjs 的
+  // pinLocale() 默认钉 en；正则同时覆盖两语，不随上游 run.mjs 的语言选择漂移。
+  const source = page.getByRole("button", { name: /源代码|原始碼|Source/, exact: true });
   await source.click();
   const blocks = page.locator(".markdown-code-block pre");
   await blocks.nth(1).waitFor();

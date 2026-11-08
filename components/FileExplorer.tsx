@@ -586,7 +586,7 @@ export function TreeNode({
           ))}
           {children.length === 0 && loaded && !loadError && (
             <div style={{ paddingLeft: 8 + (depth + 1) * 14, fontSize: "var(--fs-micro)", color: "var(--text-dim)", height: 22, display: "flex", alignItems: "center" }}>
-              empty
+              {t("files.emptyFolder")}
             </div>
           )}
           {loadError && (
