@@ -329,6 +329,10 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
     && prev.onEditContent === next.onEditContent
     && prev.onCancelEdit === next.onCancelEdit
     && prev.isEditing === next.isEditing
+    // d5-4：editDisabled（=sessionBusy）在运行开始/结束间翻转，而被比较的其余
+    // prop 对历史消息全部稳定——漏掉它会让「从此处编辑」在运行中保持可点样式，
+    // 点进去会走被服务端拒绝的 navigate_tree。
+    && prev.editDisabled === next.editDisabled
     && prev.showTimestamp === next.showTimestamp
     && prev.prevTimestamp === next.prevTimestamp
     && prev.writtenFiles === next.writtenFiles

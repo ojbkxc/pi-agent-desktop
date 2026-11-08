@@ -83,3 +83,25 @@ test("a link that encloses the project or home folder warns before allowing", ()
   assert.match(source, /setConfirmEnclosingLink\(true\)/);
   assert.match(source, /\{confirmEnclosingLink && \(\s*<span>\{t\("files\.allowEnclosingLinkConfirm"/);
 });
+
+// ── d5-12/d5-18（frontend #46）────────────────────────────────────────────
+test("d5-12：折叠目录在父级重取后对齐 props（重展开必重取，不再展示旧列表）", () => {
+  const start = fileExplorerSource.indexOf("  // d5-12：父级全树重取");
+  assert.ok(start !== -1, "TreeNode 的 props 对齐 effect 存在");
+  const body = fileExplorerSource.slice(start, fileExplorerSource.indexOf("const loadChildren", start));
+  // 条件：折叠 + 本地已加载 + 父级明确报告未加载（fetchEntries 对目录一律 loaded:false）。
+  assert.match(body, /if \(!open && loaded && node\.loaded === false\) \{/);
+  assert.match(body, /setChildren\(node\.children \?\? \[\]\);/);
+  assert.match(body, /setLoaded\(false\);/);
+});
+
+test("d5-18：上传结果落地前比对发起时 cwd，切走则不写新项目视图", () => {
+  const start = fileExplorerSource.indexOf("const applyUploadResult = useCallback((data: UploadResponse, startedCwd: string) => {");
+  assert.ok(start !== -1, "applyUploadResult 必须携带发起时 cwd");
+  const body = fileExplorerSource.slice(start, fileExplorerSource.indexOf("const performUpload", start));
+  assert.match(body, /if \(cwdRef\.current !== startedCwd\) return;/, "cwd 已变时不得写摘要/高亮/刷新");
+  assert.match(body, /joinFilePath\(startedCwd, name\)/, "高亮路径用发起时 cwd（不用渲染闭包）");
+  // cwdRef 渲染期同步 + performUpload 传参。
+  assert.match(fileExplorerSource, /cwdRef\.current = cwd;/);
+  assert.match(fileExplorerSource, /applyUploadResult\(data, cwd\);/);
+});

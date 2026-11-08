@@ -702,3 +702,14 @@ test("clears thinking-block start times at stream end so a retry restarts timing
   assert.match(messageViewSource, /const starts = blockStartTimesRef\.current;/);
   assert.match(messageViewSource, /blockStartTimesRef\.current = new Map\(\);/);
 });
+
+// d5-4：memo 比较器漏掉 editDisabled——sessionBusy 翻转时历史用户气泡不重渲，
+// 运行中「从此处编辑」保持可点（点进去走被服务端拒绝的 navigate_tree）。
+test("memo 比较器必须比较 editDisabled（运行中编辑按钮即时失效/恢复）", () => {
+  const start = messageViewSource.indexOf("}, (prev, next) => {");
+  assert.ok(start !== -1, "memo 比较器存在");
+  const comparator = messageViewSource.slice(start, messageViewSource.indexOf("});", start));
+  assert.match(comparator, /prev\.editDisabled === next\.editDisabled/, "比较器必须包含 editDisabled");
+  // 传入点仍在（ChatWindow 的 editDisabled={sessionBusy} 语义在消费侧保持）。
+  assert.match(messageViewSource, /editBlocked = canEdit && editDisabled;/);
+});

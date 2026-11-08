@@ -284,6 +284,18 @@ export function TreeNode({
     setConfirmEnclosingLink(false);
   }, [node.outsideLinkTarget]);
 
+  // d5-12：父级全树重取（refreshKey/上传成功）传下的新 node 对目录一律
+  // loaded:false、children:[]。展开中的目录由下面的 refresh effect force 重取；
+  // 折叠目录的本地 state（loaded=true + 旧 children）不参与那次刷新，重新展开
+  // 时 handleClick 看到 loaded=true 就跳过 loadChildren，展示过期列表。这里在
+  // 「折叠 + 父级明确报告未加载」时把本地 state 对齐到 props（重展开必重取）。
+  useEffect(() => {
+    if (!open && loaded && node.loaded === false) {
+      setChildren(node.children ?? []);
+      setLoaded(false);
+    }
+  }, [open, loaded, node.loaded, node.children]);
+
   const loadChildren = useCallback(async (force = false) => {
     if (loaded && !force) return;
     setLoading(true);
@@ -856,17 +868,25 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     });
   }, []);
 
-  const applyUploadResult = useCallback((data: UploadResponse) => {
+  // d5-18：上传在途时用户可能已切到别的项目——落地时的视图状态写入必须归属
+  // 上传发起时的 cwd（渲染期镜像用于比对当前视图）。
+  const cwdRef = useRef(cwd);
+  cwdRef.current = cwd;
+
+  const applyUploadResult = useCallback((data: UploadResponse, startedCwd: string) => {
+    // d5-18：文件已按发起时的 cwd 落到那个项目；若视图已切走，摘要/高亮/树刷新
+    // 不再写进新项目视图（上传结果留在原项目，重新切回即可见）。
+    if (cwdRef.current !== startedCwd) return;
     const uploaded = data.uploaded ?? [];
     const skipped = data.skipped ?? [];
     const errors = data.errors ?? [];
     setUploadSummary({ uploaded, skipped, errors });
 
     if (uploaded.length > 0) {
-      setHighlightedPaths(new Set(uploaded.map((name) => joinFilePath(cwd, name))));
+      setHighlightedPaths(new Set(uploaded.map((name) => joinFilePath(startedCwd, name))));
       setTreeRefreshKey((key) => key + 1);
     }
-  }, [cwd]);
+  }, []);
 
   const performUpload = useCallback(async (
     files: File[],
@@ -891,7 +911,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
         throw new Error(data.error ?? `Upload failed (HTTP ${status})`);
       }
       setUploadProgress(100);
-      applyUploadResult(data);
+      applyUploadResult(data, cwd);
     } catch (uploadFailure) {
       setUploadError(uploadFailure instanceof Error ? uploadFailure.message : String(uploadFailure));
     } finally {
