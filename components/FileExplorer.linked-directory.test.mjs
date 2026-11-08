@@ -12,6 +12,8 @@ const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { TreeNode } = await jiti.import("./FileExplorer.tsx");
 const { englishMessages } = await jiti.import("@/lib/i18n/locale-plugins.ts");
 const { translateMessage } = await jiti.import("@/lib/i18n/format.ts");
+// d5-12/d5-18 守卫用的源码文本（CRLF 归一，供 indexOf/正则切片）。
+const fileExplorerSource = (await readFile(new URL("./FileExplorer.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 
 const source = await readFile(new URL("./FileExplorer.tsx", import.meta.url), "utf8");
 const t = (key, params) => translateMessage("en", key, { en: englishMessages }, params);
