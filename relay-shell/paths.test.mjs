@@ -75,9 +75,21 @@ test("URL-normalization escapes are refused, not normalized", () => {
     assert.equal(safeAppPath(bad), "/", JSON.stringify(bad));
   }
   // Next decodes the pathname before routing, so %61pi arrives as /api.
-  // Only query values legitimately carry %XX — a leafId query stays allowed.
-  for (const bad of ["/%61pi/...", "/%41pi/x", "/%2f", "/sessions/%2e%2e/x"]) {
+  for (const bad of ["/%61pi/...", "/%41pi/x", "/sessions/%2e%2e/x"]) {
+    assert.equal(safeAppPath(bad), "/", JSON.stringify(bad));
+  }
+  // The decode-once step also catches these: %2f becomes a real separator,
+  // %0a becomes a control character after decoding.
+  for (const bad of ["/api%2fx", "/%2f%2fevil.example/", "/ap%0ai", "/%61pi%3fq=1"]) {
     assert.equal(safeAppPath(bad), "/", JSON.stringify(bad));
   }
   assert.equal(safeAppPath("/sessions/abc?leafId=xyz%20a"), "/sessions/abc?leafId=xyz%20a");
+});
+
+test("file deep links keep their percent-encoding end to end", () => {
+  // File names legitimately encode spaces, CJK and "%": the check runs on the
+  // decoded form (Next routes decoded), the frame loads the original encoding.
+  for (const ok of ["/files/My%20Doc.md", "/files/%E6%8A%A5%E5%91%8A.md", "/files/50%25off.txt"]) {
+    assert.equal(safeAppPath(ok), ok, String(ok));
+  }
 });

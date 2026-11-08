@@ -8,8 +8,13 @@
  * /api/sessions/<id>/export would bypass its user-initiated guard), the
  * login route, and the shell's own files (framing /__shell/ would recurse
  * into the shell itself). Anything that is not a plain root-relative path —
- * protocol-relative, backslashes, encoded or literal traversal — falls back
+ * protocol-relative, backslashes, control characters, traversal — falls back
  * to "/", and so does a first segment that names a file rather than a route.
+ *
+ * Percent-encoding is judged canonicalize-then-validate: file deep links
+ * legitimately carry %XX (spaces, CJK, "#" and "%" in names), so the check
+ * runs on the decoded path — the same form Next routes on — and the return
+ * value keeps the original encoding.
  */
 const FORBIDDEN_FIRST_SEGMENTS = new Set(["api", "login", "__shell"]);
 
@@ -23,18 +28,31 @@ export function safeAppPath(path: unknown): string {
   // that guesses what the browser will request eventually guesses wrong.
   if (/[\u0000-\u001f\u007f]/.test(path)) return "/";
   if (!path.startsWith("/") || path.startsWith("//")) return "/";
-  // Encoded bytes in the path portion never name an app route — routes and
-  // session ids are plain text, and Next decodes the pathname before matching,
-  // so "%61pi" would arrive as "/api". Only query values (a leafId, a search
-  // term) legitimately carry %XX, so the check stops at the first "?".
-  // Encoded separators, encoded dots, and traversal never name an app page
-  // either; normalizing them away would only make the check lie about what
-  // gets framed.
+  // Decode once, exactly like the server's router does, then judge the decoded
+  // form. The query (everything from the first literal "?") is returned as-is
+  // and never judged — a leafId or a search term may encode freely.
   const queryStart = path.indexOf("?");
-  const pathPart = queryStart === -1 ? path : path.slice(0, queryStart);
-  if (/%[0-9a-f]{2}/i.test(pathPart)) return "/";
-  if (/(^|\/)\.\.?(\/|$)/.test(pathPart)) return "/";
-  const first = pathPart.slice(1).split("/", 1)[0] ?? "";
+  const rawPathPart = queryStart === -1 ? path : path.slice(0, queryStart);
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(rawPathPart);
+  } catch {
+    // Malformed escapes: nothing honest decodes from it.
+    return "/";
+  }
+  // Decoding can smuggle a new "?" (/%61pi%3fx → /api?x); the server splits
+  // the decoded path the same way, so re-split here before judging.
+  const decodedQueryStart = decoded.indexOf("?");
+  const effective = decodedQueryStart === -1 ? decoded : decoded.slice(0, decodedQueryStart);
+  // Every judgement re-runs on the decoded, query-stripped form: literal C0
+  // (from %0a and friends), backslashes, protocol-relative, traversal
+  // segments, and the first-segment file/forbidden checks. Bytes that are
+  // double-encoded survive one decode as "%xx" — no route segment contains
+  // one, and the server's single decode agrees, so nothing is smuggled.
+  if (/[\u0000-\u001f\u007f]/.test(effective) || effective.includes("\\")) return "/";
+  if (!effective.startsWith("/") || effective.startsWith("//")) return "/";
+  if (/(^|\/)\.\.?(\/|$)/.test(effective)) return "/";
+  const first = effective.slice(1).split("/", 1)[0] ?? "";
   if (first.includes(".") || FORBIDDEN_FIRST_SEGMENTS.has(first.toLowerCase())) return "/";
   return path;
 }
