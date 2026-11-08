@@ -366,7 +366,9 @@ test("built-in clone switches to the independent child session", () => {
   assert.match(builtinSource, /case "clone"/);
   assert.match(builtinSource, /type: "clone",\s+leafId: activeLeafId/);
   assert.match(builtinSource, /agentRunningRef\.current \|\| bashRunningRef\.current/);
-  assert.match(builtinSource, /onSessionForked\?\.\(result\.newSessionId\)/);
+  // #52：d5-7 有意加宽签名——fork/clone 落地必须携带来源会话 id（宿主据此判断
+  // 用户是否已切走）。期望值改钉新形态（含 `, sid`），强度不低于原断言、非放宽。
+  assert.match(builtinSource, /onSessionForked\?\.\(result\.newSessionId, sid\)/);
 });
 
 test("post-accept prompt errors do not duplicate the user submission", () => {
