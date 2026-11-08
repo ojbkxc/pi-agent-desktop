@@ -41,8 +41,9 @@ test("switching a group off leaves an enabled filtered package on and says so", 
 test("a group switch sends one request for its scope's packages", () => {
   assert.match(source, /packages: targets\.map\(\(\{ source \}\) => \(\{ source, scope \}\)\)/);
   assert.match(source, /setBusyKey\(`bulk:\$\{scope\}`\)/);
-  // The open package's controls wait for the bulk run like for their own action.
-  assert.match(source, /const busy = \(busyKey\?\.endsWith\(key\) \|\| busyKey\?\.startsWith\("bulk:"\)\) \?\? false;/);
+  // The open package's controls wait for the bulk run like for their own
+  // action — and for a check-all/update-all sweep too (d5-30: bulkRunning).
+  assert.match(source, /const busy = \(\(busyKey\?\.endsWith\(key\) \|\| busyKey\?\.startsWith\("bulk:"\)\) \?\? false\) \|\| bulkRunning;/);
   assert.match(source, /disabled=\{footerBusy\}\s+loading=\{busyKey === `bulk:\$\{group\.scope\}`\}/);
 });
 
@@ -152,4 +153,17 @@ test("every marketplace string exists in all three locales", async () => {
       assert.ok(plugin.messages[key], `${plugin.id} is missing ${key}`);
     }
   }
+});
+
+test("row actions stand down while a bulk sweep runs (d5-30)", () => {
+  // PackageDetail 的 busy/reloadBusy 必须并入 bulkRunning（updatingAll ||
+  // checkingAll），否则「全部更新」期间点单包 Update/Remove 会与批量 POST
+  // 并发互写 setData。
+  assert.match(
+    source,
+    /const busy = \(\(busyKey\?\.endsWith\(key\) \|\| busyKey\?\.startsWith\("bulk:"\)\) \?\? false\) \|\| bulkRunning;/,
+  );
+  assert.match(source, /const reloadBusy = busyKey === "reload" \|\| bulkRunning;/);
+  // 调用方必须传 bulkRunning，且取的是两个批量 in-flight 标志的并。
+  assert.match(source, /bulkRunning=\{updatingAll \|\| checkingAll\}/);
 });

@@ -560,13 +560,20 @@ export function SkillsConfig({
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [projectResourcesLoaded, setProjectResourcesLoaded] = useState(true);
 
+  // 代际守卫：cwd effect、trustKey effect 与安装回讲（onInstalled）三路都会触发
+  // loadSkills，Settings 分区保持挂载时两路并发是常态。旧请求后落地会把刚装好的
+  // skill 从列表里抹掉（完成者赢），所以每次调用领一个号，落地时不再是最新的就
+  // 丢弃——已发出的 fetch 无法撤回，只能挡写。
+  const loadSkillsSeqRef = useRef(0);
   const loadSkills = useCallback(async () => {
+    const generation = ++loadSkillsSeqRef.current;
     setLoading(true);
     setError(null);
     try {
       const res = await fetch(`/api/skills?cwd=${encodeURIComponent(cwd)}`);
       const d = (await res.json()) as Partial<SkillsResponse> & { error?: string };
       if (!res.ok || d.error) throw new Error(d.error ?? `HTTP ${res.status}`);
+      if (generation !== loadSkillsSeqRef.current) return [];
       const list = d.skills ?? [];
       setSkills(list);
       setProjectResourcesLoaded(d.projectResourcesLoaded ?? true);
@@ -577,10 +584,12 @@ export function SkillsConfig({
       });
       return list;
     } catch (e) {
+      // 过代际的失败同样不能盖掉新一轮加载的错误/列表状态。
+      if (generation !== loadSkillsSeqRef.current) return [];
       setError(String(e));
       return [];
     } finally {
-      setLoading(false);
+      if (generation === loadSkillsSeqRef.current) setLoading(false);
     }
   }, [cwd]);
 

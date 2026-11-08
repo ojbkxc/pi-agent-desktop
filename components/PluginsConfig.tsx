@@ -561,14 +561,18 @@ function PackageDetail({
   updateStatus?: PluginUpdateResult;
   checkingUpdate: boolean;
   updateError: string | null;
+  /** A "check all / update all" sweep is running: every row action must stand down. */
+  bulkRunning: boolean;
   onAction: (action: PluginAction, pkg: PluginPackageInfo) => void;
   onCheckUpdate: () => void;
   onReloadSession: () => void;
 }) {
   const { t } = useI18n();
   const key = packageKey(pkg);
-  const busy = (busyKey?.endsWith(key) || busyKey?.startsWith("bulk:")) ?? false;
-  const reloadBusy = busyKey === "reload";
+  // d5-30：bulk 期间（updatingAll / checkingAll / bulk: 组开关）行内按钮必须一起
+  // 禁用——它们与批量操作并发会互写 setData，列表/消息跟实际不符。
+  const busy = ((busyKey?.endsWith(key) || busyKey?.startsWith("bulk:")) ?? false) || bulkRunning;
+  const reloadBusy = busyKey === "reload" || bulkRunning;
   const enabled = !pkg.disabled;
   const canCheckForUpdates = pkg.canCheckForUpdates;
   const updateAvailable = updateStatus?.state === "update-available";
@@ -1384,6 +1388,7 @@ export function PluginsConfig({
                 updateStatus={updateStatuses[packageKey(selectedPackage)]}
                 checkingUpdate={checkingUpdates.has(packageKey(selectedPackage))}
                 updateError={updateError}
+                bulkRunning={updatingAll || checkingAll}
                 onAction={runAction}
                 onCheckUpdate={() => void checkForUpdates(selectedPackage)}
                 onReloadSession={reloadSession}
