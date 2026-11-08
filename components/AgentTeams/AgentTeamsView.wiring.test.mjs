@@ -82,3 +82,19 @@ test("#55：成员区空闲名单与未认领提示已接线（纯读，无动�
   assert.match(band, /deriveMemberWorkloads\(snapshot\)\.byMemberId/);
   assert.match(band, /data-workload=\{badge\.kind\}/);
 });
+
+// #58 一键调度动作面板挂载（v5 契约）：建议只展示、执行两段式确认、workload 失败
+// 只降级面板不阻断画布；票标题由既有快照映射（缺票回退 ticketId）。
+test("#58：DispatchPanel 已挂载并传快照票标题映射（建议只展示，失败不阻断画布）", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(source, /import \{ DispatchPanel \} from "@\/components\/AgentTeams\/DispatchPanel"/);
+  assert.match(source, /<DispatchPanel\s/);
+  assert.match(source, /team=\{selected\}/);
+  assert.match(source, /snapshotStamp=\{snapshot\?\.generatedAt \?\? null\}/);
+  assert.match(source, /ticketSubjects=\{ticketSubjects\}/);
+  assert.match(source, /for \(const ticket of snapshot\?\.tickets \?\? \[\]\) map\[ticket\.id\] = ticket\.subject;/);
+  const panel = await read("./DispatchPanel.tsx");
+  // 执行端点与请求体走 v5 契约字段。
+  assert.match(panel, /\/assignments`, \{/);
+  assert.match(panel, /action: "add", members: \[member\]/);
+});

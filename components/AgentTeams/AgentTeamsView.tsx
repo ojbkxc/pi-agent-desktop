@@ -15,6 +15,7 @@ import { AppSelect } from "@/components/AppSelect";
 import { TaskBoardCanvas, countTaskStates } from "@/components/AgentTeams/TaskBoardCanvas";
 import { FormationBand } from "@/components/AgentTeams/FormationBand";
 import { TeamMemberModelPanel } from "@/components/AgentTeams/TeamMemberModelPanel";
+import { DispatchPanel } from "@/components/AgentTeams/DispatchPanel";
 import { TeamLifecycleActions } from "@/components/AgentTeams/TeamLifecycleActions";
 import { FallbackSettings } from "@/components/AgentTeams/FallbackSettings";
 import { formationNaturalWidth } from "@/lib/agent-teams-formation-layout";
@@ -84,6 +85,12 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
     if (!snapshot) return 0;
     const { orphan } = deriveMemberWorkloads(snapshot);
     return orphan.runningCount + orphan.pendingCount;
+  }, [snapshot]);
+  // #58：ticketId → subject（调度建议行的票标题展示；纯映射，缺票回退 ticketId）。
+  const ticketSubjects = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const ticket of snapshot?.tickets ?? []) map[ticket.id] = ticket.subject;
+    return map;
   }, [snapshot]);
   const loading = listLoading
     || timeline.loading
@@ -385,6 +392,15 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
 
             <section className="agent-teams-section" aria-label={t("teams.ticketsHeading")}>
               <h3 className="agent-teams-section-title">{t("teams.ticketsHeading")}</h3>
+              {/* #58 一键调度：建议只展示，执行需用户两段式确认；workload 拉取失败
+                  只降级面板本身，不阻断泳道/编队带/统计头。 */}
+              {selected && (
+                <DispatchPanel
+                  team={selected}
+                  snapshotStamp={snapshot?.generatedAt ?? null}
+                  ticketSubjects={ticketSubjects}
+                />
+              )}
               <TaskBoardCanvas
                 snapshot={snapshot}
                 requestedWidth={boardWidth}

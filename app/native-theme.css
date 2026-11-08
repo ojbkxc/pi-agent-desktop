@@ -11066,6 +11066,157 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .agent-teams-formation-workload--running { background: var(--info); color: var(--bg); }
 .agent-teams-formation-workload--pending { background: var(--warning); color: var(--bg); }
 
+/* ==========================================================================
+   #58 一键调度动作面板（components/AgentTeams/DispatchPanel.tsx）。
+   全部走既有 token；按钮/输入/提示与 agent-teams 既有形态一致。
+   ========================================================================== */
+.agent-teams-dispatch {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  font-size: var(--fs-small);
+}
+
+.agent-teams-dispatch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.agent-teams-dispatch-title {
+  flex: 1;
+  color: var(--text);
+  font-weight: var(--fw-semibold);
+}
+
+.agent-teams-dispatch-refresh,
+.agent-teams-dispatch-execute,
+.agent-teams-dispatch-inline {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  font-size: var(--fs-caption);
+}
+.agent-teams-dispatch-execute { font-weight: var(--fw-semibold); }
+.agent-teams-dispatch-inline {
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  text-decoration: underline;
+}
+.agent-teams-dispatch-refresh:disabled,
+.agent-teams-dispatch-execute:disabled,
+.agent-teams-dispatch-inline:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.agent-teams-dispatch-empty,
+.agent-teams-dispatch-running-note {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+}
+
+.agent-teams-dispatch-error {
+  margin: 6px 0 0;
+  color: var(--danger);
+  font-size: var(--fs-caption);
+}
+
+.agent-teams-dispatch-list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-teams-dispatch-row {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-teams-dispatch-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.agent-teams-dispatch-desc { color: var(--text); overflow-wrap: anywhere; }
+.agent-teams-dispatch-reason { color: var(--text-dim); font-size: var(--fs-micro); overflow-wrap: anywhere; }
+
+.agent-teams-dispatch-result {
+  color: var(--text-muted);
+  font-size: var(--fs-micro);
+  overflow-wrap: anywhere;
+}
+.agent-teams-dispatch-result--ok,
+.agent-teams-dispatch-result--delivered { color: var(--success); }
+.agent-teams-dispatch-result--skipped { color: var(--text-muted); }
+.agent-teams-dispatch-result--conflict { color: var(--warning); }
+.agent-teams-dispatch-result--failed { color: var(--danger); }
+
+.agent-teams-dispatch-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.agent-teams-dispatch-confirm-label { color: var(--text-muted); font-size: var(--fs-caption); }
+.agent-teams-dispatch-confirm-note { color: var(--warning); font-size: var(--fs-micro); }
+.agent-teams-dispatch-select { min-width: 160px; }
+
+.agent-teams-dispatch-member-form {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.agent-teams-dispatch-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  font-size: var(--fs-caption);
+  color: var(--text-muted);
+}
+.agent-teams-dispatch-field > span { flex: none; }
+
+.agent-teams-dispatch-input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-caption);
+}
+.agent-teams-dispatch-input:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.agent-teams-dispatch-field-error { color: var(--danger); font-size: var(--fs-micro); }
+.agent-teams-dispatch-quota { color: var(--text-dim); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
+
 .agent-teams-formation-accent--blue { --formation-accent: var(--info); }
 .agent-teams-formation-accent--green { --formation-accent: var(--success); }
 .agent-teams-formation-accent--purple { --formation-accent: var(--accent); }
