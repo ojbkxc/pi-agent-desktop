@@ -198,6 +198,9 @@ const TOOL_PRESET_MAP: Record<ToolPresetLabel, ToolPreset> = {
   full: "full",
 };
 const COMPOSITION_END_ENTER_GRACE_MS = 100;
+/** d5-19：内置命令 POST 的超时上限——agent-client 裸 fetch 无 signal，挂起会让
+ *  fieldset 冻结整个 composer。超时后解冻、输入保留，用户可重试。 */
+const BUILTIN_COMMAND_TIMEOUT_MS = 15_000;
 const TEXT_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 const ANCHORED_MENU_GAP = 8;
 
@@ -529,6 +532,16 @@ export async function compressImageFile(file: File): Promise<{ data: string; mim
   } finally {
     bitmap.close();
   }
+}
+
+/** d5-9：发送 await 窗口内新增键入的恢复后缀。用户按发送后，#提及解析要打两次
+ *  fetch；期间继续键入的文字落在 valueRef 里，尾部 clearInput 会把它们清掉。
+ *  仅当窗口内用户只在基线尾部追加（前缀匹配）时恢复后缀——中间删改无法安全
+ *  归位，保守丢弃（消息本体用的仍是发送快照，不受影响）。 */
+export function pendingTypedSuffix(baseline: string, current: string): string {
+  return current.length > baseline.length && current.startsWith(baseline)
+    ? current.slice(baseline.length)
+    : "";
 }
 
 function imageToDraftImage(image: AttachedImage): ChatDraftImage {
@@ -1422,8 +1435,14 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     builtinCommandPendingRef.current = true;
     setBuiltinCommandPending(true);
     try {
-      const result = await onBuiltinCommand(msg);
-      if (!result.handled) return false;
+      // d5-19：onBuiltinCommand 底层是 agent-client 的裸 fetch（无 signal）——挂起时
+      // fieldset 全 composer 冻结且 Esc 不可达。15s 上限兜底：超时按未处理返回，
+      // pending 在 finally 复位解冻，输入保留（不 clearInput），用户可重试。
+      const result = await Promise.race([
+        onBuiltinCommand(msg),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), BUILTIN_COMMAND_TIMEOUT_MS)),
+      ]);
+      if (!result || !result.handled) return false;
       if (!result.error && canClearBuiltinCommandInput(valueRef.current, attachedImagesRef.current.length, msg)) clearInput();
       return true;
     } finally {
@@ -1434,6 +1453,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   const handleSend = useCallback(async () => {
     const msg = value.trim();
+    // d5-9：发送基线快照——await 窗口（#提及解析）内新增键入靠它找回。
+    const sendBaseline = valueRef.current;
     // d5-10：读 ref 而不是渲染闭包——按下发送时以「已落地」的附件为准，
     // 不用在依赖里追 attachedImages（闭包快照会漏掉刚落地的图）。
     if (!msg && !attachedImagesRef.current.length && !attachedFilesRef.current.length) return;
@@ -1454,7 +1475,20 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     // 发出去即复位（对齐 cc-haha 发送调用之后的 `disarmAgentTeam()`）：团队只作用于这一条，
     // 后续闲聊不再累积建团指令。命令类消息不被包装，也就不消耗这次勾选。
     if (shouldDisarmAgentTeam(agentTeamsEnabled, messageForModel)) disarmAgentTeam();
+    // d5-9：clearInput 前捕获 await 窗口内的新增键入——#提及解析期间用户继续
+    // 打字的文字不能随发送一起蒸发（仅尾部追加可安全归位，中间删改保守丢弃）。
+    const typedDuringSend = pendingTypedSuffix(sendBaseline, valueRef.current);
     clearInput();
+    if (typedDuringSend) {
+      valueRef.current = typedDuringSend;
+      setValue(typedDuringSend);
+      const ta = textareaRef.current;
+      if (ta) requestAnimationFrame(() => {
+        ta.style.height = "auto";
+        ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+        ta.setSelectionRange(typedDuringSend.length, typedDuringSend.length);
+      });
+    }
   }, [value, workspaceUnavailable, isStreaming, runBuiltinCommand, onSend, clearInput, onAudioUnlock, sessionMentionTargetsRef, agentTeamsEnabled]);
 
   const slashQuery = !compact && value.startsWith("/") && !/\s/.test(value.slice(1))
@@ -1690,6 +1724,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   const sendQueued = useCallback(async (mode: "steer" | "followup") => {
     const msg = value.trim();
+    // d5-9：发送基线快照（与 handleSend 同规）。
+    const sendBaseline = valueRef.current;
     // d5-10：与 handleSend 同规——按「已落地」的附件为准（ref），不读渲染闭包。
     if (!msg && !attachedImagesRef.current.length && !attachedFilesRef.current.length) return;
     onAudioUnlock?.();
@@ -1699,13 +1735,28 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         await resolveSessionReferences(msg, sessionMentionTargetsRef.current),
         attachedFilesRef.current,
       );
+      // d5-9：与 handleSend 同规——clearInput 前捕获窗口内新增键入并恢复。
+      const typedDuringSend = pendingTypedSuffix(sendBaseline, valueRef.current);
+      const restoreTypedDuringSend = () => {
+        if (!typedDuringSend) return;
+        valueRef.current = typedDuringSend;
+        setValue(typedDuringSend);
+        const ta = textareaRef.current;
+        if (ta) requestAnimationFrame(() => {
+          ta.style.height = "auto";
+          ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+          ta.setSelectionRange(typedDuringSend.length, typedDuringSend.length);
+        });
+      };
       const streamingBehavior = mode === "steer" ? "steer" : "followUp";
       if (mode === "steer" && msg.startsWith("/") && !attachedFilesRef.current.length && onPromptWithStreamingBehavior) {
         clearInput();
+        restoreTypedDuringSend();
         onPromptWithStreamingBehavior(resolvedMessage, streamingBehavior, images);
         return;
       }
       clearInput();
+      restoreTypedDuringSend();
       if (mode === "steer" && onSteer) {
         onSteer(resolvedMessage, images);
       } else if (mode === "followup" && onFollowUp) {

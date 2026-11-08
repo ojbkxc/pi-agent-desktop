@@ -11,7 +11,7 @@ const jiti = createJiti(import.meta.url, {
 });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
-const { ChatInput, ModelErrorBanner, ModelScopeWarningBanner, canClearBuiltinCommandInput, canRestoreUserMessage, canRunBuiltinSlashCommandWhileStreaming, compressImageFile, cycleListIndex, filterModelOptions, getTopbarBoundary, getUpwardMenuMaxHeight, getUserMessageText, getUserMessageDraftImages, isExactSlashCommand, modelSupportsImageInput, replaceLinksWithMarkdown, resolveImageLanding, shouldCompressImageFile, offersBuiltinSlashCommandWhileStreaming, submitsSlashCommandOnEnter} = await jiti.import("./ChatInput.tsx");
+const { ChatInput, ModelErrorBanner, ModelScopeWarningBanner, canClearBuiltinCommandInput, canRestoreUserMessage, canRunBuiltinSlashCommandWhileStreaming, compressImageFile, cycleListIndex, filterModelOptions, getTopbarBoundary, getUpwardMenuMaxHeight, getUserMessageText, getUserMessageDraftImages, isExactSlashCommand, modelSupportsImageInput, pendingTypedSuffix, replaceLinksWithMarkdown, resolveImageLanding, shouldCompressImageFile, offersBuiltinSlashCommandWhileStreaming, submitsSlashCommandOnEnter} = await jiti.import("./ChatInput.tsx");
 
 const { isBareMcpCommand } = await jiti.import("@/lib/mcp-command.ts");
 const { composeMessageWithAttachedFiles } = await jiti.import("@/lib/chat-attachments.ts");
@@ -588,6 +588,9 @@ test("locks built-in command submission until it settles", async () => {
     onBuiltinCommand: async () => new Promise((resolve) => { callback.resolve = resolve; }),
     setBuiltinCommandPending(value) { callback.pendingStates.push(value); },
     valueRef: { current: "/reload" },
+    // d5-19：runBuiltinCommand 的 15s 超时竞速需要 setTimeout（node 全局传入沙盒）。
+    setTimeout,
+    BUILTIN_COMMAND_TIMEOUT_MS: 15_000,
   });
   callback.pendingStates = [];
 
@@ -664,6 +667,10 @@ test("while a run streams, a bare /mcp opens Settings or is queued as before", a
       // d5-10：sendQueued 改读 attachedImagesRef；ref 与 state 同值时行为不变。
       attachedImagesRef: { current: images },
       attachedImages: images,
+      // d5-9：窗口增量恢复纯函数。
+      pendingTypedSuffix,
+      // d5-9：发送基线快照读 valueRef（与 value 同值喂入，行为不变）。
+      valueRef: { current: value },
       onAudioUnlock() {},
       clearInput() { calls.cleared += 1; },
       onBuiltinCommand: async () => ({ handled }),
@@ -702,6 +709,10 @@ test("while a run streams, a streamable built-in the builtin layer rejects is qu
       // d5-10：ref 形参适配（ref 与 state 同值时行为不变）。
       attachedImagesRef: { current: [] },
       attachedImages: [],
+      // d5-9：handleSend/sendQueued 恢复窗口增量的纯函数（与实现在同文件，导入传入）。
+      pendingTypedSuffix,
+      // d5-9：发送基线快照读 valueRef（与 value 同值喂入，行为不变）。
+      valueRef: { current: value },
       onAudioUnlock() {},
       clearInput() { calls.cleared += 1; },
       onBuiltinCommand: async () => ({ handled }),
@@ -735,6 +746,10 @@ test("handleSend lets a handled /mcp through while streaming and sends an unowne
       // d5-10：ref 形参适配（ref 与 state 同值时行为不变）。
       attachedImagesRef: { current: [] },
       attachedImages: [],
+      // d5-9：handleSend/sendQueued 恢复窗口增量的纯函数（与实现在同文件，导入传入）。
+      pendingTypedSuffix,
+      // d5-9：发送基线快照读 valueRef（与 value 同值喂入，行为不变）。
+      valueRef: { current: value },
       onAudioUnlock() {},
       isStreaming,
       workspaceUnavailable: null,
@@ -988,6 +1003,9 @@ test("handleSend sends exactly once and routes builtin commands through the pend
       attachedFilesRef: { current: [] }, composeMessageWithAttachedFiles,
       // d5-10：ref 形参适配（ref 与 state 同值时行为不变）。
       attachedImagesRef: { current: attachedImages },
+      pendingTypedSuffix,
+      // d5-9：发送基线快照读 valueRef（与 value 同值喂入，行为不变）。
+      valueRef: { current: value },
       onAudioUnlock() {},
       runBuiltinCommand: async () => {
         builtinCalls += 1;
@@ -1187,4 +1205,48 @@ test("clearInput 使在途图片快照失效（bump attachmentClearVersionRef）
   assert.ok(processStart !== -1, "processImageFiles 必须捕获 startedIn 快照");
   const processBody = source.slice(processStart, processStart + 1200);
   assert.match(processBody, /clearVersion !== attachmentClearVersionRef\.current/, "processImageFiles 必须比对 clearVersion");
+});
+
+// ── d5-9：发送 await 窗口内新增键入不蒸发 ─────────────────────────────────
+test("pendingTypedSuffix：仅尾部追加可归位，中间删改保守丢弃", async () => {
+  const { pendingTypedSuffix } = await jiti.import("./ChatInput.tsx");
+  // await 窗口内只在基线尾部追加：恢复后缀。
+  assert.equal(pendingTypedSuffix("hello", "hello world"), " world");
+  // 窗口内没打字：空。
+  assert.equal(pendingTypedSuffix("hello", "hello"), "");
+  // 窗口内删改了已发送部分（前缀失配）：无法安全归位，丢弃。
+  assert.equal(pendingTypedSuffix("hello", "help world"), "");
+  // 窗口内把文本删短：丢弃。
+  assert.equal(pendingTypedSuffix("hello world", "hello"), "");
+  // 空基线（/mcp 之类清空发送后继续键入）：全部属于新增，整体恢复。
+  assert.equal(pendingTypedSuffix("", "next"), "next");
+});
+
+test("handleSend/sendQueued 接线：捕获基线 + clearInput 前比对恢复", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  const handleStart = source.indexOf("const handleSend = useCallback(async () => {");
+  const handleBody = source.slice(handleStart, source.indexOf("const slashQuery", handleStart));
+  assert.match(handleBody, /const sendBaseline = valueRef\.current;/, "handleSend 必须捕获发送基线");
+  assert.match(handleBody, /pendingTypedSuffix\(sendBaseline, valueRef\.current\)/, "clearInput 前必须比对窗口增量");
+  const queuedStart = source.indexOf("const sendQueued = useCallback(async (mode: \"steer\" | \"followup\") => {");
+  const queuedBody = source.slice(queuedStart, queuedStart + 2200);
+  assert.match(queuedBody, /const sendBaseline = valueRef\.current;/, "sendQueued 必须捕获发送基线");
+  assert.match(queuedBody, /pendingTypedSuffix\(sendBaseline, valueRef\.current\)/);
+});
+
+// ── d5-19：内置命令挂起不再永久冻结 composer ─────────────────────────────
+test("runBuiltinCommand 有超时上限：超时按未处理返回且不 clearInput", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  const start = source.indexOf("const runBuiltinCommand = useCallback(async (msg: string): Promise<boolean> => {");
+  assert.ok(start !== -1, "runBuiltinCommand 存在");
+  const body = source.slice(start, source.indexOf("const handleSend", start));
+  assert.match(body, /Promise\.race\(\[\s*onBuiltinCommand\(msg\),/, "必须对 onBuiltinCommand 加超时竞速");
+  assert.match(body, /BUILTIN_COMMAND_TIMEOUT_MS/);
+  assert.match(source, /const BUILTIN_COMMAND_TIMEOUT_MS = 15_000;/, "超时常量 15s");
+  // 超时分支：race 返回 null → 与 {handled:false} 同走 return false，不触发 clearInput。
+  assert.match(body, /if \(!result \|\| !result\.handled\) return false;/);
+  const raceToClear = body.slice(body.indexOf("if (!result || !result.handled) return false;"), body.indexOf("if (!result || !result.handled) return false;") + 260);
+  assert.ok(!/clearInput\(\)/.test(raceToClear.slice(0, raceToClear.indexOf("if (!result.error"))), "超时路径不得清空输入");
 });
