@@ -64,6 +64,7 @@ import { isLeanMode, LEAN_RESOURCE_LOADER_OPTIONS, LEAN_TOOL_NAMES } from "./lea
 import { additionalCcHahaSkillPaths } from "./cc-haha-skills";
 import { createExactSystemPromptExtension } from "./exact-system-prompt";
 import { createArtifactGuideExtension } from "./artifact-guide-extension";
+import { createAgentGuideExtension } from "./agent-guide-extension";
 import { createPiWebBuiltinExtensions, createSubagentBuiltinExtensions, snapshotWantsSubagentExtensions } from "./builtin-extensions";
 import type { McpHost } from "./mcp-host";
 import { mcpPromptPreparation, type McpCommandCandidate } from "./mcp-command";
@@ -3118,6 +3119,7 @@ export async function startRpcSession(
               extensionFactories: [
                 ...(builtins?.extensions ?? []),
                 createArtifactGuideExtension(),
+                createAgentGuideExtension(),
                 // A chat with a folder saves into it; only a legacy chat still saves to Downloads.
                 ...(chatGrants && !chatFolder
                   ? [createChatDownloadsExtension({ grants: chatGrants })]
@@ -3149,6 +3151,7 @@ export async function startRpcSession(
               ...(builtins?.extensions ?? []),
               createReadOnlyMcpPolicyExtension(),
               createArtifactGuideExtension(),
+              createAgentGuideExtension(),
               createProjectCommandBashExtension({
                 cwd: sessionCwd,
                 settings: settingsManager,

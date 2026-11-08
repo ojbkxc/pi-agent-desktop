@@ -6,7 +6,10 @@ import { writePrivateFileAtomicSync } from "./atomic-file";
 // Pi Web's own preferences, kept out of pi's settings.json because the pi CLI
 // and other hosts read that file and have no artifacts panel.
 
-type StoredSettings = Record<string, unknown> & { artifactsPrompt?: unknown };
+export type StoredSettings = Record<string, unknown> & {
+  artifactsPrompt?: unknown;
+  agentGuidePrompt?: unknown;
+};
 
 export function getPiWebSettingsPath(agentDir = getAgentDir()): string {
   return join(agentDir, "pi-web", "settings.json");

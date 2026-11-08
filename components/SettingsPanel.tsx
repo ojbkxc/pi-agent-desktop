@@ -37,7 +37,7 @@ import { AppUpdatesSection } from "./AppUpdatesSection";
 import { DesktopAppSection } from "./desktop";
 import { McpConfig } from "./McpConfig";
 import { ConfigButton, ConfigSwitch } from "./SettingsUi";
-import { ArtifactsSettingRow, AutoTitleSettingRow } from "./ArtifactsSettingRow";
+import { AgentGuideSettingRow, ArtifactsSettingRow, AutoTitleSettingRow } from "./ArtifactsSettingRow";
 import { AgentTeamsSettingRow } from "./AgentTeamsSettingRow";
 import { LeanModeSettingRow } from "./LeanModeSettingRow";
 import { RemoteAccessSection } from "./RemoteAccessSection";
@@ -274,6 +274,7 @@ function GeneralSettings({
               <AgentTeamsSettingRow />
               <LeanModeSettingRow />
               <ArtifactsSettingRow />
+              <AgentGuideSettingRow />
               <AutoTitleSettingRow />
               <div className="settings-chat-option settings-chat-switch-option" role="radiogroup" aria-label={t("settings.enterSendMode")}>
                 <span>{t("settings.enterSendMode")}</span>

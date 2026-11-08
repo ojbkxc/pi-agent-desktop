@@ -21,6 +21,24 @@ export function ArtifactsSettingRow() {
 }
 
 /**
+ * Settings › General › Chat: whether sessions get the behavior-guide section
+ * (concise-first replies, coding discipline, safety). See
+ * lib/agent-guide-extension.ts; the text is English on purpose (server-side).
+ */
+export function AgentGuideSettingRow() {
+  const { t } = useI18n();
+  return (
+    <ServerSwitchSettingRow
+      endpoint="/api/agent-guide/settings"
+      label={t("settings.agentGuide")}
+      hint={t("settings.agentGuideHint")}
+      failedHint={t("settings.agentGuideFailed")}
+      defaultEnabled
+    />
+  );
+}
+
+/**
  * Settings › General › Chat: name a session automatically after its first
  * completed turn (#201). The server does it; see `autoTitleAfterRun()`.
  */
