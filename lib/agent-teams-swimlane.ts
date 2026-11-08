@@ -501,25 +501,36 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
   // 同 id 时运行时的 assignments / status 覆盖派生值。没有运行时票时结果与改动前等价。
   const tasks = plan?.tasks ?? [];
   /**
+   * 成员级 accept 信号的适用边界（D4-2 返工，verifier-b 探针实锤后由 lead 裁定 B'）。
+   *
    * accepted.jsonl 只有成员名、没有票 id（teamTools.js appendAccepted 落盘形态：
-   * member/sessionId/summary/result/at），「成员被验收过」对 plan 派生票只能是成员
-   * 粒度信号——成员一次验收会把名下全部 plan 派生票标 ended（D4-2，v2 裁定：
-   * running 派生同为成员粒度，两口径一致，禁止大改派生口径）。
-   * 唯一被认可可收窄的失真是「从未派发 runtime 票的 plan-only 票」：带 runtime 票的
-   * 任务其真实状态由下方同 id 覆盖兜底，accepted 信号对它们只是占位。因此 ended
-   * 只对**没有任何 runtime 票认领**的任务生效；runtime 票覆盖后，此处的 ended
-   * 对这类票恒被替换为真实状态，原语义保留。
+   * member/sessionId/summary/result/at），所以「成员被验收过」对 plan 派生票只能是
+   * **成员粒度近似**：成员一次 team_accept 会把名下全部 plan 派生票标 ended。
+   * 这个近似何时可信？——**该成员没有任何更细的 runtime 证据时**。只要成员名下存在
+   * 任何 runtime assignment（tickets/<id>.json 的 assignments[].assignee 按成员名
+   * 匹配），票的真相就走下方同 id merge 的 per-ticket 路径，成员级 accept 不得越权
+   * 去标 ended；只有成员**完全没有** runtime 证据时（全 plan-only 团队的常态）才
+   * 回落近似——否则这类团队会显示 0% 完成，比近似更糟。
+   *
+   * ⚠️ 本项是**展示层近似**：不写任何数据、不改 pi-team 落盘。此前两版收窄
+   * （runtimeTaskIds 按**票 id** 排除）被 verifier-b 判假修——有 runtime 认领的票
+   * 本就被同 id merge 覆盖，条件等价于改动前；真实失真面（plan-only 票）恒不受该
+   * 条件影响。按**成员名**判定才是把失真面真正关掉的口径。
    */
-  const runtimeTaskIds = new Set(
-    runtimeTickets
-      .map((runtime) => (typeof runtime?.id === "string" ? runtime.id : ""))
+  const runtimeClaimedNames = new Set(
+    runtimeTickets.flatMap((runtime) => (runtime?.assignments ?? []))
+      .map((assignment) => (typeof assignment?.assignee === "string" ? assignment.assignee : ""))
       .filter(Boolean),
   );
   const baseTickets: WorkbenchTicket[] = tasks.map((task) => {
     const ownerId = task.ownerId ? planMemberIds.get(task.ownerId) ?? null : null;
     const owner = ownerId ? memberById.get(ownerId) : undefined;
     const entry = owner ? lifecycle[owner.name] : undefined;
-    const ended = Boolean(owner && acceptedNames.has(owner.name) && !runtimeTaskIds.has(task.id));
+    const ended = Boolean(
+      owner
+      && acceptedNames.has(owner.name)
+      && !runtimeClaimedNames.has(owner.name),
+    );
     const assignments: WorkbenchAssignment[] = [];
     if (owner) {
       assignments.push({
