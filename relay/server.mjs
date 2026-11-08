@@ -118,6 +118,12 @@ export function createRelay(options) {
 
   const addressOf = (request) => {
     // Behind a proxy that appends to X-Forwarded-For, only the last hop is its own.
+    // RELAY_TRUST_PROXY=1 is only safe behind a proxy that *rewrites* (not appends
+    // to) X-Forwarded-For: a client can forge any value in the list, so behind an
+    // appending proxy every forged value mints its own connections-per-minute
+    // budget and defeats the connection rate limit below. Authentication is not
+    // affected — the desktop hello is signature-verified and the phone caps do
+    // not depend on the address being real.
     const forwarded = trustProxy ? request.headers["x-forwarded-for"]?.split(",").at(-1)?.trim() : "";
     return forwarded || request.socket.remoteAddress || "unknown";
   };
@@ -219,7 +225,12 @@ export function createRelay(options) {
       const id = data.subarray(1, 1 + CLIENT_ID_BYTES).toString("hex");
       const client = entry.clients.get(id);
       if (!client) return;
-      if (kind === KIND.data) client.send(data.subarray(1 + CLIENT_ID_BYTES), { binary: true });
+      if (kind === KIND.data) {
+        // The phone is not keeping up: drop it rather than queue without bound.
+        // Mirrors the phone→desktop guard, which checks the desktop's socket.
+        if (client.bufferedAmount > maxQueuedBytes) return client.close(CLOSE.slowDown, "phone busy");
+        client.send(data.subarray(1 + CLIENT_ID_BYTES), { binary: true });
+      }
       else if (kind === KIND.auth) client.authenticated = true;
       else if (kind === KIND.close) {
         const notPaired = data[1 + CLIENT_ID_BYTES] === 1;

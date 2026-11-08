@@ -113,11 +113,19 @@ const waitingForTunnel: (() => void)[] = [];
 function tunnelReady(timeoutMs: number): Promise<PhoneTunnel | null> {
   if (tunnel?.state === "open") return Promise.resolve(tunnel);
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(null), timeoutMs);
-    waitingForTunnel.push(() => {
+    const wake = () => {
       clearTimeout(timer);
       resolve(tunnel?.state === "open" ? tunnel : null);
-    });
+    };
+    const timer = setTimeout(() => {
+      // Timed out without a tunnel: drop the wake, or a long offline stretch
+      // accumulates one closure per queued request, all to be resolved to
+      // nothing the next time the tunnel opens.
+      const index = waitingForTunnel.indexOf(wake);
+      if (index !== -1) waitingForTunnel.splice(index, 1);
+      resolve(null);
+    }, timeoutMs);
+    waitingForTunnel.push(wake);
   });
 }
 
