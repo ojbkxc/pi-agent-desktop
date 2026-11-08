@@ -72,6 +72,24 @@ pub fn append_desktop_log(dir: &Path, message: &str) {
     }
 }
 
+/// Size cap for `server.log` before a launch rotates it. The server log has
+/// no writer in the Rust process — it only ever grows from the Node child's
+/// stdout/stderr — so rotating before a launch is enough to bound it, and it
+/// is the only safe moment: on Windows a rename over a file another process
+/// holds open fails, while at launch time the previous server is already gone.
+pub const SERVER_LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Rotates `path` to `path.1` (replacing the previous one) when it exceeds
+/// `cap`. Best effort: a failed rotation keeps appending, same as
+/// `append_desktop_log`'s rotation.
+pub fn rotate_log_on_start(path: &Path, cap: u64) {
+    if fs::metadata(path).is_ok_and(|meta| meta.len() > cap) {
+        let mut rotated = path.as_os_str().to_os_string();
+        rotated.push(".1");
+        let _ = fs::rename(path, PathBuf::from(rotated));
+    }
+}
+
 /// Appends a line to `desktop.log` in the app log directory. The log exists so
 /// a hang during a popup, a panic, or an unexpected exit leaves its last step
 /// on disk.

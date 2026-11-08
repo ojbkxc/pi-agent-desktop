@@ -21,7 +21,10 @@ mod logging;
 mod native_prefs;
 mod shell;
 
-use logging::{desktop_log, install_panic_hook, mark_process_start, since_process_start_ms};
+use logging::{
+    desktop_log, install_panic_hook, mark_process_start, rotate_log_on_start,
+    since_process_start_ms,
+};
 use native_prefs::{
     clear_app_cache, reconcile_webview_cache_for_version, set_ui_theme, write_last_version,
     NODE_COMPILE_CACHE_DIR,
@@ -795,6 +798,40 @@ fn start_packaged_server(
     desktop_api_token: &str,
     desktop_instance_id: &str,
 ) -> Result<(Url, DesktopServer), Box<dyn std::error::Error>> {
+    // `choose_port` proves a port is free by binding it, then drops the
+    // listener so the server can bind it — another process can claim the port
+    // in between, and the server then dies with EADDRINUSE. Retry once with a
+    // fresh `choose_port` draw in that case; any other failure is final.
+    match start_packaged_server_attempt(app, desktop_api_token, desktop_instance_id) {
+        Ok(started) => Ok(started),
+        Err(error) => {
+            if server_log_says_eaddrinuse(app) {
+                desktop_log(
+                    app,
+                    "server port raced with another process after the probe; retrying once",
+                );
+                start_packaged_server_attempt(app, desktop_api_token, desktop_instance_id)
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
+#[cfg(feature = "custom-protocol")]
+fn server_log_says_eaddrinuse(app: &tauri::AppHandle) -> bool {
+    app.path()
+        .app_log_dir()
+        .map(|dir| server_log_tail(&dir.join("server.log")).contains("EADDRINUSE"))
+        .unwrap_or(false)
+}
+
+#[cfg(feature = "custom-protocol")]
+fn start_packaged_server_attempt(
+    app: &tauri::AppHandle,
+    desktop_api_token: &str,
+    desktop_instance_id: &str,
+) -> Result<(Url, DesktopServer), Box<dyn std::error::Error>> {
     let resource_dir = child_process_compatible_path(&app.path().resource_dir()?);
     let node_path = bundled_node_path(&resource_dir);
     if !node_path.is_file() {
@@ -824,6 +861,10 @@ fn start_packaged_server(
     let log_dir = app.path().app_log_dir()?;
     fs::create_dir_all(&log_dir)?;
     let log_path = log_dir.join("server.log");
+    // The server's own log grows without bound otherwise (it only ever gets
+    // appended to by the Node child); rotate before this launch takes the
+    // file, while the previous holder is gone.
+    rotate_log_on_start(&log_path, logging::SERVER_LOG_MAX_BYTES);
     let stdout = OpenOptions::new()
         .create(true)
         .append(true)
@@ -1151,10 +1192,15 @@ fn instance_lock_path() -> Option<PathBuf> {
 
 #[cfg(target_os = "linux")]
 fn process_is_our_app(pid: i32) -> bool {
-    fs::read_to_string(format!("/proc/{pid}/cmdline"))
-        .map(|content| {
-            let lowered = content.to_lowercase();
-            lowered.contains("pi-agent") || lowered.contains("pi agent")
+    // The lock file records a PID that outlives its owner; that PID can then
+    // be reused by any process. `/proc/<pid>/exe` names the real binary, so
+    // an editor or grep whose *arguments* mention "pi-agent" (a cmdline match
+    // did) no longer passes for the running app and hijacks a new launch.
+    fs::read_link(format!("/proc/{pid}/exe"))
+        .ok()
+        .and_then(|exe| {
+            exe.file_name()
+                .map(|name| name.to_string_lossy().to_lowercase().contains("pi-agent"))
         })
         .unwrap_or(false)
 }
