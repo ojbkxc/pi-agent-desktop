@@ -79,3 +79,15 @@ test("FallbackSettings starts in its loading state (no fetch during SSR)", () =>
   assert.match(html, /scheduled-hint/);
   assert.doesNotMatch(html, /data-testid="fallback-settings"/);
 });
+
+test("the initial load effect does not depend on the locale (d5-22)", async () => {
+  // deps 含 t 时切语言会重取并用服务端值 setDraft，覆盖未保存的草稿；改口径后
+  // 拉取 effect 必须无依赖（mount-only），错误文案延迟到渲染处取。
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("./FallbackSettings.tsx", import.meta.url), "utf8");
+  const loadEffect = source.slice(source.indexOf('fetch("/api/teams/fallback"'));
+  assert.match(loadEffect, /\} catch \(err\) \{[\s\S]*?setLoadError\([\s\S]*?\} finally[\s\S]*?\}, \[\]\);/, "the fetch effect must be mount-only");
+  assert.doesNotMatch(loadEffect, /\}, \[t\]\);/, "a [t] dependency would clobber unsaved drafts on locale switch");
+  // 渲染处取翻译：错误显示经 displayError（loadError → 翻译键）。
+  assert.match(source, /const displayError = loadError !== null \? t\("teams\.fallback\.loadFailed"\) : error;/);
+});

@@ -135,6 +135,10 @@ export function FallbackSettings() {
     });
   };
 
+  // 只拉一次数据（组件挂载 / FallbackSettings 出现时）：deps 若含 t，切语言会
+  // 重取并用服务端值 setDraft，覆盖用户未保存的草稿（d5-22）。错误文案的翻译
+  // 改在渲染处取（error 存原始消息，displayError 才走 t()），拉取本身与语言无关。
+  const [loadError, setLoadError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -144,15 +148,17 @@ export function FallbackSettings() {
         const payload = await response.json() as FallbackView;
         if (cancelled) return;
         applyView(payload);
-        setError(null);
+        setLoadError(null);
       } catch (err) {
-        if (!cancelled) setError(t("teams.fallback.loadFailed"));
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err));
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [t]);
+  }, []);
+
+  const displayError = loadError !== null ? t("teams.fallback.loadFailed") : error;
 
   const items = useMemo(() => manualNeedEntries(view?.manualNeeds), [view]);
 
@@ -198,7 +204,7 @@ export function FallbackSettings() {
   };
 
   if (loading) return <p className="scheduled-hint">{t("teams.fallback.loading")}</p>;
-  if (!view || !draft) return <p className="scheduled-error" role="alert">{error ?? t("teams.fallback.loadFailed")}</p>;
+  if (!view || !draft) return <p className="scheduled-error" role="alert">{displayError ?? t("teams.fallback.loadFailed")}</p>;
 
   const controlsDisabled = view.envDisabled;
 
