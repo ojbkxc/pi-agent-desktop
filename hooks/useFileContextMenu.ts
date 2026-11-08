@@ -23,22 +23,47 @@ const APP_LIST_TTL_MS = 5 * 60_000;
 const APP_LIST_WAIT_MS = 800;
 
 const appListCache = new Map<string, { apps: FileOpenApp[]; at: number }>();
+/** d5-36：在途去重——同一文件的并发右键只发一次 IPC，后到者共用同一 Promise。 */
+const appListInFlight = new Map<string, Promise<FileOpenApp[]>>();
 
-async function loadApps(filePath: string): Promise<FileOpenApp[]> {
+/** d5-36：淘汰过期条目——此前 Map 只在命中时判 TTL、从不 delete，长会话无界增长。 */
+export function pruneAppListCache(now: number = Date.now(), cache: Map<string, { apps: FileOpenApp[]; at: number }> = appListCache): void {
+  for (const [key, entry] of cache) {
+    if (now - entry.at >= APP_LIST_TTL_MS) cache.delete(key);
+  }
+}
+
+export function loadApps(filePath: string, now: number = Date.now()): Promise<FileOpenApp[]> {
   const key = appListCacheKey(filePath);
   const cached = appListCache.get(key);
-  if (cached && Date.now() - cached.at < APP_LIST_TTL_MS) return cached.apps;
-  const apps = await listAppsForFileNative(filePath);
-  appListCache.set(key, { apps, at: Date.now() });
-  return apps;
+  if (cached && now - cached.at < APP_LIST_TTL_MS) return Promise.resolve(cached.apps);
+  const inFlight = appListInFlight.get(key);
+  if (inFlight) return inFlight;
+  const promise = listAppsForFileNative(filePath)
+    .then((apps) => {
+      // d5-36：写入前先淘汰过期项，缓存有界（同刻的 now 保证读写判定一致）。
+      pruneAppListCache(now);
+      appListCache.set(key, { apps, at: now });
+      return apps;
+    })
+    .finally(() => {
+      appListInFlight.delete(key);
+    });
+  appListInFlight.set(key, promise);
+  return promise;
 }
 
 async function loadAppsWithinDeadline(filePath: string): Promise<FileOpenApp[]> {
-  const slow = new Promise<FileOpenApp[]>((resolve) => setTimeout(() => resolve([]), APP_LIST_WAIT_MS));
+  // d5-36：slow 的定时器在主请求先到时必须清理——此前每次快路径都遗留一个
+  // 最长 800ms 的挂起定时器。
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const slow = new Promise<FileOpenApp[]>((resolve) => { timer = setTimeout(() => resolve([]), APP_LIST_WAIT_MS); });
   try {
     return await Promise.race([loadApps(filePath), slow]);
   } catch {
     return [];
+  } finally {
+    clearTimeout(timer);
   }
 }
 
