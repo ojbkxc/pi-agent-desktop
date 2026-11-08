@@ -23,6 +23,7 @@ import {
 } from "@/lib/enabled-models-runtime";
 import type { EnabledModelsInput } from "@/lib/enabled-models";
 import { createModelRuntimeWithExtensions } from "@/lib/model-runtime";
+import { filterProvidersWithoutStoredCredential } from "@/lib/model-scope";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { invalidateModelsCache } from "@/lib/models-cache";
 
@@ -41,7 +42,12 @@ async function loadContext(cwd: string): Promise<RequestContext> {
   const agentDir = getAgentDir();
   return {
     modelRuntime,
-    models: await modelRuntime.getAvailable(),
+    // Same listing cut as the chat selector: built-in providers on the
+    // stored-credential list stay out until auth.json has one for them.
+    models: await filterProvidersWithoutStoredCredential(
+      await modelRuntime.getAvailable(),
+      modelRuntime,
+    ),
     settingsManager: SettingsManager.create(cwd, agentDir),
     paths: { cwd, agentDir },
   };

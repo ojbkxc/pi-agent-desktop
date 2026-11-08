@@ -147,6 +147,55 @@ function assertNoAmbiguousExactPatterns(
 }
 
 /**
+ * Providers whose models stay out of pi-web's listings until the user has a
+ * *stored* credential for them.
+ *
+ * pi treats environment variables as credentials (`ANTHROPIC_AUTH_TOKEN` in the
+ * server's env alone marks the built-in anthropic provider authenticated), so a
+ * machine set up for other tools ships pi-web with all 17 built-in Claude
+ * models in every selector even though the user never signed in to Anthropic
+ * and cannot use them. For these providers the listings require a credential
+ * from `auth.json` (`listCredentials()`): signing in from the panel brings the
+ * models back, deleting the credential hides them again. The filter is a
+ * listing-surface cut only — `enabledModels` in the user's settings.json is
+ * never written, and entries that point at hidden models keep resolving as
+ * stale (preserved) patterns.
+ */
+export const STORED_CREDENTIAL_REQUIRED_PROVIDERS: readonly string[] = ["anthropic"];
+
+/**
+ * Drop the models of `STORED_CREDENTIAL_REQUIRED_PROVIDERS` unless a stored
+ * credential exists for the provider.
+ *
+ * Environment-based auth does not count. A runtime that cannot report its
+ * credentials (an older mock, a damaged auth store) is passed through
+ * unfiltered: hiding models the user can actually use is worse than showing
+ * one they cannot.
+ */
+export async function filterProvidersWithoutStoredCredential<T extends { provider: string }>(
+  models: readonly T[],
+  modelRuntime: Pick<ModelRuntime, "listCredentials">,
+): Promise<readonly T[]> {
+  if (STORED_CREDENTIAL_REQUIRED_PROVIDERS.length === 0) return [...models];
+  const required = new Set(STORED_CREDENTIAL_REQUIRED_PROVIDERS);
+  let credentials: Iterable<{ providerId?: unknown }>;
+  try {
+    if (typeof modelRuntime?.listCredentials !== "function") return [...models];
+    credentials = await modelRuntime.listCredentials();
+  } catch {
+    return [...models];
+  }
+  const storedProviders = new Set(
+    [...credentials]
+      .map((credential) => (typeof credential?.providerId === "string" ? credential.providerId : ""))
+      .filter(Boolean),
+  );
+  return models.filter(
+    (model) => !required.has(model.provider) || storedProviders.has(model.provider),
+  );
+}
+
+/**
  * Resolve the visible model list for `patterns`.
  *
  * Falls back to every available model when no patterns are configured or when
@@ -157,17 +206,20 @@ export async function resolveVisibleModels(
   modelRuntime: ModelRuntime,
   patterns: string[] | undefined,
 ): Promise<ModelScopeResult> {
+  const available = await filterProvidersWithoutStoredCredential(
+    await modelRuntime.getAvailable(),
+    modelRuntime,
+  );
   const cleaned = (patterns ?? []).map((pattern) => pattern.trim()).filter(Boolean);
   if (cleaned.length === 0) {
     return {
-      visible: await modelRuntime.getAvailable(),
+      visible: available,
       scopedModels: [],
       thinkingLevelPins: {},
       warnings: [],
     };
   }
 
-  const available = await modelRuntime.getAvailable();
   assertNoAmbiguousExactPatterns(cleaned, available);
   const snapshotRuntime = {
     getAvailable: async () => available,
