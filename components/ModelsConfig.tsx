@@ -19,6 +19,7 @@ import {
   setCompatBool,
   trackAddedModels,
   collectModelRenames,
+  createGenerationGuard,
   listModelOverrides,
   modelOverrideSpecs,
   renameProviderEntry,
@@ -955,7 +956,12 @@ function ModelDetail({
      return [t("i18n.failed"), ...meta, testState.message].filter(Boolean).join(" · ");
   })();
 
+  const testGuardRef = useRef<ReturnType<typeof createGenerationGuard> | null>(null);
+  testGuardRef.current ??= createGenerationGuard();
+
   useEffect(() => {
+    // d5-16：配置一变即作废在途的 Test——迟到响应不得把旧配置的徽章盖到新配置旁。
+    testGuardRef.current?.invalidate();
     setTestState({ phase: "idle" });
   }, [providerName, provider.baseUrl, provider.api, provider.apiKey, model.id, model.api]);
 
@@ -967,6 +973,8 @@ function ModelDetail({
 
   const handleTest = useCallback(async () => {
     if (!model.id.trim() || testState.phase === "testing") return;
+    const guard = testGuardRef.current;
+    const token = guard?.next() ?? -1;
     setTestState({ phase: "testing" });
     try {
       const res = await fetch("/api/models-config/test", {
@@ -981,6 +989,9 @@ function ModelDetail({
         status?: number;
         responseText?: string;
       };
+      // d5-16：代际守卫（响应期间配置/输入可能已变）——过期的测试结果整体丢弃，
+      // 与同文件 handleCatalogFill 的 catalogRequestIdRef 同一模式。
+      if (!guard?.isCurrent(token)) return;
       if (!res.ok || !d.ok) {
         setTestState({
           phase: "error",
@@ -997,6 +1008,7 @@ function ModelDetail({
         responseText: d.responseText,
       });
     } catch (e) {
+      if (!guard?.isCurrent(token)) return;
       setTestState({ phase: "error", message: e instanceof Error ? e.message : String(e) });
     }
   }, [model, provider, providerName, testState.phase]);

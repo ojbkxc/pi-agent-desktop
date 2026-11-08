@@ -335,3 +335,18 @@ test("spec inputs never use a bare number as placeholder (#131)", () => {
   assert.doesNotMatch(source, /placeholder="128000"|placeholder="16384"/);
   assert.match(source, /t\("models\.specNotSet"\)/);
 });
+
+test("a late Test response cannot stamp its badge onto edited config (d5-16)", async () => {
+  const { createGenerationGuard } = await jiti.import("./models-config-helpers.ts");
+  // 行为回归：invalidate 使在途令牌过期；更新一代也使旧令牌过期。
+  const guard = createGenerationGuard();
+  const inFlight = guard.next();
+  guard.invalidate();
+  assert.equal(guard.isCurrent(inFlight), false, "配置变化即作废在途 Test");
+  assert.equal(guard.isCurrent(guard.next()), true, "新请求的令牌有效");
+  assert.equal(guard.isCurrent(0), false, "未领取的令牌永不过有效");
+  // 哨兵：handleTest 走代际守卫，且配置变化时先作废再清显示。
+  assert.match(source, /testGuardRef\.current\?\.\invalidate\(\);/);
+  assert.match(source, /const token = guard\?\.next\(\) \?\? -1;/);
+  assert.match(source, /if \(!guard\?\.isCurrent\(token\)\) return;/);
+});

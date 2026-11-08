@@ -238,3 +238,28 @@ export function resolveModelSpecHint(
   if (draftValue === undefined) return { kind: "fallback", value: MODEL_SPEC_FALLBACKS[field] };
   return { kind: "own" };
 }
+
+/**
+ * d5-16：代际守卫（纯逻辑，可单测）。
+ *
+ * `next()` 领取新令牌（新请求开始）；`invalidate()` 作废全部在途令牌（配置/输入变化时）；
+ * `isCurrent()` 判定响应落地时请求是否仍然有效。用于 ModelsConfig 的 Test：
+ * 迟到的旧配置响应不得把成功/失败徽章盖到新配置旁。
+ */
+export function createGenerationGuard() {
+  let generation = 0;
+  return {
+    /** 领取一个新令牌；此前发放的令牌全部过期。 */
+    next(): number {
+      return ++generation;
+    },
+    /** 该令牌是否仍有效（未被 invalidate 或更新的 next 作废）。 */
+    isCurrent(token: number): boolean {
+      return token === generation && generation > 0;
+    },
+    /** 作废全部在途令牌。 */
+    invalidate(): void {
+      generation += 1;
+    },
+  };
+}
