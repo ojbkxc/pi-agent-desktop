@@ -89,3 +89,21 @@ export function fromLocalInputValue(value: string): string | null {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
+
+/**
+ * d5-29：分页合并按 runId 去重——同一页绝不能追加两次。
+ *
+ * loadMore 双击（无 in-flight 守卫前的旧实现）会让两次请求共用同一 `last.runId`
+ * 游标，重复 run 落进列表后 `key={run.runId}` 撞 React 重复键、条目重复显示。
+ * 去重是最后一道防线；列表自身也换 key 之前先保证不重复。
+ */
+export function mergeRunPages(existing: ScheduledRun[], incoming: ScheduledRun[]): ScheduledRun[] {
+  const seen = new Set(existing.map((run) => run.runId));
+  const merged = [...existing];
+  for (const run of incoming) {
+    if (seen.has(run.runId)) continue;
+    seen.add(run.runId);
+    merged.push(run);
+  }
+  return merged;
+}

@@ -5,7 +5,7 @@ import { useI18n } from "@/hooks/useI18n";
 import { scheduledApi } from "@/lib/scheduled-tasks/client";
 import type { ScheduledRun, ScheduledTaskView } from "@/lib/scheduled-tasks/types";
 import { describeRunError } from "@/lib/scheduled-tasks/run-error";
-import { formatDateTime, formatDuration, isUnread, runDuration, runTime } from "./scheduled-helpers";
+import { formatDateTime, formatDuration, isUnread, mergeRunPages, runDuration, runTime } from "./scheduled-helpers";
 
 interface Props {
   task: ScheduledTaskView;
@@ -21,6 +21,9 @@ export function ScheduledRunHistory({ task, onOpenSession }: Props) {
   const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestId = useRef(0);
+  // d5-29：loadMore 的 in-flight 守卫——双击共享同一游标会重复拉同一页。
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadingMoreRef = useRef(false);
 
   const latest = task.lastRun;
   const refreshKey = `${task.id}|${latest?.runId ?? ""}|${latest?.status ?? ""}|${latest?.seenAt ?? ""}|${task.unreadRuns}`;
@@ -43,13 +46,18 @@ export function ScheduledRunHistory({ task, onOpenSession }: Props) {
 
   const loadMore = useCallback(async () => {
     const last = runs?.[runs.length - 1];
-    if (!last) return;
+    if (!last || loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
     try {
       const page = await scheduledApi.runs(task.id, { before: last.runId, limit: PAGE });
-      setRuns((current) => [...(current ?? []), ...page.runs]);
+      setRuns((current) => mergeRunPages(current ?? [], page.runs));
       setHasMore(page.hasMore);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
     }
   }, [runs, task.id]);
 
@@ -87,7 +95,7 @@ export function ScheduledRunHistory({ task, onOpenSession }: Props) {
           );
         })}
       </ul>
-      {hasMore && <button type="button" className="scheduled-button" onClick={() => void loadMore()}>{t("scheduled.history.more")}</button>}
+      {hasMore && <button type="button" className="scheduled-button" disabled={loadingMore} onClick={() => void loadMore()}>{t("scheduled.history.more")}</button>}
     </section>
   );
 }
