@@ -11217,6 +11217,33 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .agent-teams-dispatch-field-error { color: var(--danger); font-size: var(--fs-micro); }
 .agent-teams-dispatch-quota { color: var(--text-dim); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
 
+/* ==========================================================================
+   #63 团队占用行（AgentTeamsView 团队选择区）：GET /api/teams 平铺字段的
+   如实展示——缺字段不渲染不编造；ended 且闲置 ≥7 天仅提示。
+   ========================================================================== */
+.agent-teams-usage {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 4px 0 0;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+}
+
+.agent-teams-usage-item { font-variant-numeric: tabular-nums; }
+
+.agent-teams-usage-truncated { color: var(--warning); }
+
+.agent-teams-usage-error { color: var(--warning); }
+
+.agent-teams-usage-idle {
+  padding: 1px 8px;
+  border: 1px solid var(--warning);
+  border-radius: 999px;
+  color: var(--text-muted);
+}
+
 .agent-teams-formation-accent--blue { --formation-accent: var(--info); }
 .agent-teams-formation-accent--green { --formation-accent: var(--success); }
 .agent-teams-formation-accent--purple { --formation-accent: var(--accent); }

@@ -20,6 +20,7 @@ import { TeamLifecycleActions } from "@/components/AgentTeams/TeamLifecycleActio
 import { FallbackSettings } from "@/components/AgentTeams/FallbackSettings";
 import { formationNaturalWidth } from "@/lib/agent-teams-formation-layout";
 import { deriveMemberWorkloads, idleMemberIds } from "./member-workload";
+import { formatTeamActivityDate, formatTeamBytes, hasDisplayableUsage, shouldNoticeIdleTeam } from "./team-usage-display";
 
 interface Props {
   /** 指定团队名；缺省时自动挑选本机最新创建的团队。 */
@@ -36,6 +37,15 @@ interface TeamSummary {
   description: string;
   memberCount: number;
   createdAt: string;
+  // #63：GET /api/teams 平铺占用字段（v8 契约 @ 9b7c083）。全部可选+可空——
+  // 缺失/null 一律不渲染对应片段，绝不编造占用。
+  bytes?: number | null;
+  files?: number;
+  truncated?: boolean;
+  lastActivityAt?: number | null;
+  ended?: boolean | null;
+  idleDays?: number | null;
+  usageError?: string;
 }
 
 /** 成员状态 / 事件类型 → 中文标签键（动态键，usage 门禁自动跳过静态校验）。 */
@@ -55,7 +65,7 @@ function roleLabelKey(role: string): string {
  * 跨泳道流向，上方是任务依赖。数据来自 GET /api/teams/[team]/workbench。
  */
 export function AgentTeamsView({ teamName, onOpenSession }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [teams, setTeams] = useState<TeamSummary[]>([]);
   const [selected, setSelected] = useState<string | null>(teamName ?? null);
   const [listFailed, setListFailed] = useState(false);
@@ -270,6 +280,44 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
               onValueChange={setSelected}
               options={teams.map((team) => ({ value: team.name, label: team.displayName }))}
             />
+          </div>
+        )}
+
+        {/* #63 占用行（如实展示，缺字段不渲染不编造）：大小/文件数/截断标记/最近活动；
+            usageError 存在才显示失败原因（bytes:null 时不显示大小行——「未知」是噪音，
+            失败原因已如实带出）；ended 且闲置 ≥7 天仅提示（动作只来自生命周期区的
+            用户显式点击）。先收窄 currentTeam 再判可展示性，字段缺失整块跳过。 */}
+        {currentTeam && hasDisplayableUsage(currentTeam) && (
+          <div className="agent-teams-usage" data-testid="agent-teams-usage">
+            {currentTeam.usageError && (
+              <span className="agent-teams-usage-error" role="status">
+                {t("teams.usage.usageError", { error: currentTeam.usageError })}
+              </span>
+            )}
+            {typeof currentTeam.bytes === "number" && (
+              <span className="agent-teams-usage-item">
+                {t("teams.usage.bytes", { size: formatTeamBytes(currentTeam.bytes) ?? t("teams.usage.unknown") })}
+              </span>
+            )}
+            {typeof currentTeam.files === "number" && (
+              <span className="agent-teams-usage-item">
+                {t("teams.usage.files", { count: currentTeam.files })}
+                {currentTeam.truncated === true && (
+                  <span className="agent-teams-usage-truncated"> · {t("teams.usage.truncated")}</span>
+                )}
+              </span>
+            )}
+            {(() => {
+              const activityDate = formatTeamActivityDate(currentTeam.lastActivityAt, locale);
+              return activityDate ? (
+                <span className="agent-teams-usage-item">{t("teams.usage.lastActivity", { date: activityDate })}</span>
+              ) : null;
+            })()}
+            {shouldNoticeIdleTeam(currentTeam) && (
+              <span className="agent-teams-usage-idle" data-testid="agent-teams-usage-idle">
+                {t("teams.usage.idleNotice", { days: currentTeam.idleDays ?? 0 })}
+              </span>
+            )}
           </div>
         )}
 

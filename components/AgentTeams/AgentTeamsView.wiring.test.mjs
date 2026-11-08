@@ -98,3 +98,26 @@ test("#58：DispatchPanel 已挂载并传快照票标题映射（建议只展示
   assert.match(panel, /\/assignments`, \{/);
   assert.match(panel, /action: "add", members: \[member\]/);
 });
+
+// #63 占用行（v8 平铺契约 @ 9b7c083）：字段缺失不渲染不编造——bytes:null 不显示
+// 大小（失败原因由 usageError 行如实带出）、usageError 不存在不出空文案、
+// ended 严格 true 且 idleDays>=7 才提示（仅提示，无自动清理动作）。
+test("#63：占用行如实展示接线（缺字段不编造、ended+闲置仅提示）", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(source, /import \{ formatTeamActivityDate, formatTeamBytes, hasDisplayableUsage, shouldNoticeIdleTeam \} from "\.\/team-usage-display"/);
+  // 先收窄 currentTeam 再判可展示性（避免 possibly-undefined 绕过）。
+  assert.match(source, /\{currentTeam && hasDisplayableUsage\(currentTeam\) && \(/);
+  // usageError 行有错误才渲染（无错误不出空文案）。
+  assert.match(source, /\{currentTeam\.usageError && \(/);
+  // bytes 是 number 才显示大小行；bytes:null 不渲染大小（不显示「未知」噪音）。
+  assert.match(source, /\{typeof currentTeam\.bytes === "number" && \(/);
+  // ended+闲置提示走纯函数判定（严格 true + 阈值）。
+  assert.match(source, /\{shouldNoticeIdleTeam\(currentTeam\) && \(/);
+  // reclaim 确认文案（TeamLifecycleActions 渲染 confirmReclaim；三语值必须写明
+  // 删除清单与「保留成员会话」——防退化回笼统的「删除团队数据」）。
+  const lifecycle = await read("./TeamLifecycleActions.tsx");
+  assert.match(lifecycle, /teams\.lifecycle\.confirmReclaim/);
+  const localePlugins = await read("../../lib/i18n/locale-plugins.ts");
+  assert.match(localePlugins, /删除团队记录：计划、工单、成员邮箱与回执；成员会话记录（\.jsonl）与产物保留/);
+  assert.match(localePlugins, /permanently deletes the team records: plan, tickets, member mailboxes and receipts\. Member session transcripts \(\.jsonl\) and artifacts are kept/);
+});
