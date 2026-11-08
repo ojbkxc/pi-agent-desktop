@@ -1934,6 +1934,10 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
   // apply immediately instead of waiting for this panel's Save button.
   const enabledModels = useEnabledModels(cwd);
   const [config, setConfig] = useState<ModelsJson>({ providers: {} });
+  // d5-32：handler 把 selection 决策移出 setConfig updater 后，需要一个始终最新的
+  // config 快照供 handler 同步读取（渲染期赋值 = 本帧渲染所用的同一值）。
+  const configRef = useRef<ModelsJson>({ providers: {} });
+  configRef.current = config;
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -2042,29 +2046,28 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
   const deleteProvider = useCallback((name: string) => {
     savedModelIdsRef.current.delete(name);
     setProviderNameDraft((prev) => prev?.provider === name ? null : prev);
+    // d5-32：selection 的落地移出 setConfig updater——updater 必须纯（StrictMode 会
+    // 重放 updater，副作用在其中双跳）。批内没有其他 config 写入，selection 按
+    // 当前快照（pre-update）计算与 updater 内计算等价。
+    const remaining = Object.keys(configRef.current?.providers ?? {}).filter((key) => key !== name);
+    setSelection(remaining.length > 0 ? { type: "provider", name: remaining[0] } : null);
     setConfig((prev) => {
       const providers = { ...(prev.providers ?? {}) };
       delete providers[name];
       return { ...prev, providers };
     });
-    setConfig((prev) => {
-      const remaining = Object.keys(prev.providers ?? {});
-      setSelection(remaining.length > 0 ? { type: "provider", name: remaining[0] } : null);
-      return prev;
-    });
   }, []);
 
   const addModel = useCallback((providerName: string) => {
     trackAddedModels(savedModelIdsRef.current, providerName, 1);
+    // d5-32：同 deleteProvider——selection 移出 updater，按当前快照取新模型下标
+    //（push 后下标 = push 前长度，等价于旧 updater 里的 (length+1)-1）。
+    const newIndex = configRef.current?.providers?.[providerName]?.models?.length ?? 0;
+    setSelection({ type: "model", providerName, index: newIndex });
     setConfig((prev) => {
       const provider = prev.providers?.[providerName] ?? {};
       const models = [...(provider.models ?? []), { id: "" }];
       return { ...prev, providers: { ...(prev.providers ?? {}), [providerName]: { ...provider, models } } };
-    });
-    setConfig((prev) => {
-      const idx = (prev.providers?.[providerName]?.models?.length ?? 1) - 1;
-      setSelection({ type: "model", providerName, index: idx });
-      return prev;
     });
   }, []);
 
@@ -2295,6 +2298,11 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
                     </ConfigSidebarItem>
 
                     {/* Model rows */}
+                    {/* d5-31（口径固化，有意用 index 作 key）：模型行的 id 在编辑期无唯一性
+                        保证（用户可把两行 id 改成相同值，纯 id key 会撞 React 重复键），且行
+                        是无本地状态的展示件、选中态走父级 selection.index（removeModel 后
+                        立即回到 provider 视图，不存在陈旧下标）。改 key 前先给行引入稳定
+                        身份，不要顺手换。 */}
                     {models.map((m, i) => {
                       const isModelSelected = selection?.type === "model" && selection.providerName === pName && selection.index === i;
                       return (
