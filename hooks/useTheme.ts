@@ -19,6 +19,7 @@ const SERVER_SNAPSHOT: ThemeState = { preference: "auto", theme: "light" };
 const listeners = new Set<() => void>();
 let state: ThemeState | null = null;
 let systemListening = false;
+let systemThemeQuery: MediaQueryList | null = null;
 
 function emit(): void {
   listeners.forEach((cb) => cb());
@@ -95,6 +96,10 @@ function syncAutoThemeFromSystem(): void {
   setThemeState("auto", theme, false);
 }
 
+function handleVisibilityChange(): void {
+  if (typeof document !== "undefined" && document.visibilityState === "visible") syncAutoThemeFromSystem();
+}
+
 function ensureSystemListener(): void {
   if (systemListening || typeof window === "undefined" || !window.matchMedia) return;
 
@@ -102,10 +107,24 @@ function ensureSystemListener(): void {
   mql.addEventListener("change", syncAutoThemeFromSystem);
   // Some browsers delay or miss scheme events while backgrounded.
   window.addEventListener("focus", syncAutoThemeFromSystem);
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") syncAutoThemeFromSystem();
-  });
+  document.addEventListener("visibilitychange", handleVisibilityChange);
+  systemThemeQuery = mql;
   systemListening = true;
+}
+
+/**
+ * d5-34：与 ensureSystemListener 配对的拆卸口。此前 visibilitychange 用匿名监听
+ * 结构上不可 remove——任何收紧生命周期/避免 HMR 叠加的重构都无从下手。当前生命
+ * 周期仍是进程单例（订阅者计数为 0 也不拆，拆了再装回会丢事件）；本函数是唯一
+ * 的显式拆卸缝，供测试与未来的生命周期收口使用。
+ */
+export function releaseSystemListeners(): void {
+  if (!systemListening) return;
+  systemThemeQuery?.removeEventListener("change", syncAutoThemeFromSystem);
+  if (typeof window !== "undefined") window.removeEventListener("focus", syncAutoThemeFromSystem);
+  if (typeof document !== "undefined") document.removeEventListener("visibilitychange", handleVisibilityChange);
+  systemThemeQuery = null;
+  systemListening = false;
 }
 
 function subscribe(cb: () => void): () => void {
