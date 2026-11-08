@@ -4,8 +4,9 @@
  * 动作只来自用户在生命周期区的显式点击（无定时器、无自动清理）。
  */
 
-/** 与 lib/agent-teams-team-usage.ts 的阈值同源（该常量属 #60 后端文件，只 import 不改）。 */
-import { TEAM_USAGE_IDLE_NOTICE_DAYS } from "@/lib/agent-teams-team-usage";
+/** 与后端同源的闲置阈值（#66 复核返工：从零 Node 依赖的共用常量模块引——
+ *  lib/agent-teams-team-usage.ts 顶层 node:fs 不能进 "use client" 图）。 */
+import { TEAM_USAGE_IDLE_NOTICE_DAYS } from "@/lib/agent-teams-usage-constants";
 
 /** GET /api/teams 平铺占用字段（真实契约，app/api/teams/route.ts @ 9b7c083）。 */
 export interface TeamUsageFields {

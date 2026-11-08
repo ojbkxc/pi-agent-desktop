@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createJiti } from "jiti";
 
@@ -57,4 +58,40 @@ test("hasDisplayableUsage：字段缺失/空对象不渲染（不编造）；usa
   assert.equal(hasDisplayableUsage({ usageError: "du failed" }), true);
   assert.equal(hasDisplayableUsage({ bytes: 1024, files: 3 }), true);
   assert.equal(hasDisplayableUsage({ truncated: true }), true);
+});
+
+// ── #66 复核返工判别回归：客户端模块图不得带入 Node 依赖 ──────────────────
+// REJECT 机制：team-usage-display.ts 曾 import lib/agent-teams-team-usage.ts，
+// 其顶层 node:fs/promises、node:path 随 @/ 别名进入 "use client" 图，esbuild
+// browser 与 Next webpack 双证据报不可解析。以下两条分别用「真 bundle」与
+// 「静态 import 图」钉死，旧写法（回引 team-usage.ts）两条都必红。
+
+test("esbuild browser 真判别：本模块可独立 bundle（旧实现引 node:fs 链必红）", async () => {
+  const esbuild = await import("esbuild");
+  const result = await esbuild.build({
+    entryPoints: [new URL("./team-usage-display.ts", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")],
+    bundle: true,
+    platform: "browser",
+    format: "esm",
+    write: false,
+    tsconfig: new URL("../../tsconfig.json", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
+    logLevel: "silent",
+  });
+  const bundled = result.outputFiles[0].text;
+  assert.match(bundled, /TEAM_USAGE_IDLE_NOTICE_DAYS/, "阈值必须真实进入客户端产物（同源成立）");
+  assert.doesNotMatch(bundled, /node:fs|node:path/, "客户端产物不得含 Node 内置引用");
+});
+
+test("import 图静态判别：本模块只允许引零 Node 依赖的共用常量模块，禁止回引 team-usage.ts", () => {
+  const display = readFileSync(new URL("./team-usage-display.ts", import.meta.url), "utf8");
+  // 不许再引 node-only 的 usage 实现（顶层 node:fs 会进客户端图）。
+  assert.doesNotMatch(display, /from "@\/lib\/agent-teams-team-usage"/);
+  // 本文件全部 import 都不得含 node: 内置。
+  for (const match of display.matchAll(/from "([^"]+)"/g)) {
+    assert.doesNotMatch(match[1], /^node:/, `客户端模块不得直接引 Node 内置：${match[1]}`);
+  }
+  // 共用常量模块必须零 import（保持客户端图安全的不变量）。
+  const constants = readFileSync(new URL("../../lib/agent-teams-usage-constants.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(constants, /^import\b/m, "常量模块必须保持零 import");
+  assert.match(constants, /TEAM_USAGE_IDLE_NOTICE_DAYS = 7/);
 });

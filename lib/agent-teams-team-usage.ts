@@ -15,8 +15,10 @@ import { join } from "node:path";
 
 /** 单团队 du 的条目预算：超出即 truncated（不全局放大）。 */
 export const TEAM_USAGE_ENTRY_BUDGET = 5000;
-/** 闲置提示阈值（天）：≥7 由 UI 仅提示。本模块只给 idleDays，不做任何动作。 */
-export const TEAM_USAGE_IDLE_NOTICE_DAYS = 7;
+// 闲置提示阈值（天）移入 lib/agent-teams-usage-constants.ts（零 Node 依赖的共用
+// 常量模块，#66 复核返工）：本文件顶层 node:fs 不能进 "use client" 图，客户端
+// 与后端都必须从常量模块引用，阈值同源不变。这里 re-export 保持既有消费方稳定。
+export { TEAM_USAGE_IDLE_NOTICE_DAYS } from "./agent-teams-usage-constants";
 
 export interface TeamUsage {
   /** 团队目录总字节数；目录不可读等故障时为 null（usageError 带原因）。 */
