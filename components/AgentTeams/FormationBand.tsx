@@ -53,20 +53,27 @@ function ModelChip({ model }: { model: string | null }) {
 function ProgressBar({ node }: { node: FormationMember }) {
   if (node.total === 0) return null;
   return (
-    <span
-      className="agent-teams-formation-progress"
-      role="img"
-      aria-label={`${node.completed}/${node.total}`}
-    >
-      {node.segments.map((segment) => (
-        <span
-          key={segment.urgency}
-          className={`agent-teams-formation-seg agent-teams-formation-seg--${segment.urgency}`}
-          style={{ flexGrow: segment.count }}
-          data-segment={segment.urgency}
-          data-count={segment.count}
-        />
-      ))}
+    <span className="agent-teams-formation-progress-row">
+      <span
+        className="agent-teams-formation-progress"
+        role="img"
+        aria-label={`${node.completed}/${node.total}`}
+      >
+        {node.segments.map((segment) => (
+          <span
+            key={segment.urgency}
+            className={`agent-teams-formation-seg agent-teams-formation-seg--${segment.urgency}`}
+            style={{ flexGrow: segment.count }}
+            data-segment={segment.urgency}
+            data-count={segment.count}
+          />
+        ))}
+      </span>
+      {/* 需求2（信息展示全）：分段色条之外把「完成/总数」直接可见——数据本就
+          在 FormationMember（completed/total），aria-label 只对读屏可见。 */}
+      <span className="agent-teams-formation-progress-count" aria-hidden="true">
+        {node.completed}/{node.total}
+      </span>
     </span>
   );
 }

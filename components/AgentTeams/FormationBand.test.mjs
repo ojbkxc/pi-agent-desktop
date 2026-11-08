@@ -125,3 +125,20 @@ test("parked 成员显示为独立态（不并入 idle/stopped）", () => {
   assert.match(html, /data-member-state="parked"/);
   assert.match(html, /agent-teams-formation-state--parked/);
 });
+
+// 需求2（信息展示全）：分段色条只有颜色，视觉用户读不出比例；completed/total
+// 必须以文字直接可见（数据本就存在于 FormationMember）。
+test("进度条旁直接可见完成计数 n/m", () => {
+  const html = render(snapshot(
+    [LEAD, member("w1", { status: "running" })],
+    [
+      ticket("t1", { status: "ended", assignments: [assignment("completed")] }),
+      ticket("t2", { status: "ended", assignments: [assignment("failed")] }),
+    ],
+  ));
+  assert.match(html, /agent-teams-formation-progress-row/);
+  assert.match(html, /agent-teams-formation-progress-count/);
+  assert.match(html, />1\/2</, "1 张 completed / 共 2 张票");
+  // 读屏语义仍由进度条的 aria-label 承担，可见计数不重复朗读。
+  assert.match(html, /aria-hidden="true">1\/2</);
+});

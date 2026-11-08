@@ -34,3 +34,32 @@ test("无人值守兜底设置面被挂上（含 manualNeeds 清除入口）", a
   assert.match(source, /import \{ FallbackSettings \}/);
   assert.match(source, /<FallbackSettings \/>/);
 });
+
+// d5-2（v2 判真·高危）：批量→单个切换时面板原地复用，useState(memberIds) 只在挂载时
+// 取值——提交会把整批成员打到 PATCH 上。守卫：面板必须按 mode+成员集重挂载，且切换
+// 团队时面板关闭（跨团队残留同理）。
+test("d5-2：换模型面板按 mode+成员集重挂载，切团队时关闭", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(source, /key=\{`\$\{modelPanel\.mode\}-\$\{modelPanel\.memberIds\.join\(","\)\}`\}/);
+  assert.match(source, /setModelPanel\(null\);\s*\n\s*\}, \[selected\]\);/, "selected 变化时关闭面板");
+});
+
+// d5-3（v2 判真·高危）：生命周期组件无 key——A 团队开着回收确认框切到 B，确认会 POST
+// 到 B（不可逆）。onDone 也从未接线，回收成功后名册与时间线不刷新。守卫：key 随团队
+// 重挂载 + onDone 已接（携带团队名与动作）。
+test("d5-3：生命周期组件按团队重挂载，onDone 已接线", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(source, /<TeamLifecycleActions\b[\s\S]*?key=\{selected\}/);
+  assert.match(source, /onDone=\{handleLifecycleDone\}/);
+  assert.match(source, /const handleLifecycleDone = useCallback\(\(doneTeam: string, action: string\)/);
+  const lifecycle = await read("./TeamLifecycleActions.tsx");
+  assert.match(lifecycle, /onDone\?\.\(team, action\)/, "onDone 必须携带操作团队名与动作");
+});
+
+// d4-1（队长转达的一行级规格）：完成度只认 countTaskStates 的 completed，
+// 不得自数 status === "ended"（失败票已 ended，会被错误计成完成）。
+test("d4-1：进度条 done 与统计头同源（countTaskStates.completed）", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(source, /const done = counts\.completed;/);
+  assert.doesNotMatch(source, /filter\(\(ticket\) => ticket\.status === "ended"\)\.length/);
+});

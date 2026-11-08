@@ -145,7 +145,10 @@ export interface TeamLifecycleActionsProps {
   /** 展示名（config.json 的 team.name）。 */
   displayName: string;
   memberCount: number;
-  onDone?: () => void;
+  /** 操作成功（response.ok 且 ok===true）后回调：携带操作目录名与动作。
+   *  回收（reclaim）后团队目录已删除，父级据此刷新名册并回落选中；停止（stop）
+   *  团队仍在，父级只需刷新名册。 */
+  onDone?: (team: string, action: LifecycleAction) => void;
 }
 
 /**
@@ -179,7 +182,7 @@ export function TeamLifecycleActions({ team, displayName, memberCount, onDone }:
         return;
       }
       setOutcome(interpretLifecycleOutcome(action, payload));
-      if (response.ok && payload!.ok === true) onDone?.();
+      if (response.ok && payload!.ok === true) onDone?.(team, action);
     } catch (err) {
       setFailure(t("teams.lifecycle.requestFailed", {
         message: err instanceof Error ? err.message : String(err),

@@ -10307,6 +10307,12 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .agent-teams-member-role { color: var(--text-dim); }
 .agent-teams-member-status { color: var(--text-muted); }
 
+/* 需求2：成员行信息完整可读——换行发生在 chip 之间（.agent-teams-members 的
+   flex-wrap 一直都在）；仅当单个 chip 比容器还宽（极窄视口/超长成员名）时才
+   允许 chip 内部换行，而不是把尾部文字溢出裁掉。 */
+.agent-teams-member-chip { min-width: 0; }
+.agent-teams-member-name { overflow-wrap: break-word; }
+
 .agent-teams-dot {
   width: 8px;
   height: 8px;
@@ -10386,6 +10392,11 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   background: var(--bg);
   font-size: var(--fs-small);
   overflow: hidden;
+  /* 需求2：内联 height:44（lib/agent-teams-swimlane.ts 的 EVENT_HEIGHT，他域文件）装不下
+     「类型 + 详情」两行（内高 30px < 两行 ~35px），详情行被裁成半行。这里放开高度让内容
+     完整显示，min-height 保持 44 的几何基线（泳道高 76，卡片下探仍在泳道内）。 */
+  height: auto !important;
+  min-height: 44px;
 }
 
 .agent-teams-event-type { color: var(--text-muted); font-weight: var(--fw-semibold); }
@@ -10980,11 +10991,28 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 
 .agent-teams-formation-progress {
   display: flex;
-  width: 130px;
+  flex: 1;
+  min-width: 60px;
+  max-width: 130px;
   height: 5px;
   overflow: hidden;
   border-radius: 999px;
   background: var(--bg-hover);
+}
+
+/* 需求2：进度条与可见计数（n/m）同行；条在行内弹性伸缩，上限维持原 130px 观感。 */
+.agent-teams-formation-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.agent-teams-formation-progress-count {
+  flex: none;
+  color: var(--text-muted);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
 }
 
 .agent-teams-formation-seg { display: block; height: 100%; }

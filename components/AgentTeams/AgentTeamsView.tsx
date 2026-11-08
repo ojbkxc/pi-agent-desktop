@@ -58,6 +58,8 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
   const [selected, setSelected] = useState<string | null>(teamName ?? null);
   const [listFailed, setListFailed] = useState(false);
   const [listLoading, setListLoading] = useState(!teamName);
+  // 生命周期操作（停止/回收）成功后重拉团队名册的触发键（见 handleLifecycleDone）。
+  const [teamsReloadKey, setTeamsReloadKey] = useState(0);
   const [modelPanel, setModelPanel] = useState<{ mode: "single" | "batch"; memberIds: string[] } | null>(null);
   const timeline = useTeamTimeline(selected);
   const rootRef = useRef<HTMLElement>(null);
@@ -97,18 +99,38 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
       }
     })();
     return () => { cancelled = true; };
-  }, [teamName]);
+  }, [teamName, teamsReloadKey]);
+
+  // d5-3：生命周期操作成功后的收尾（TeamLifecycleActions.onDone）。回收删除了团队
+  // 目录——重拉名册，且若删的正是当前选中团队则放开选中，让它回落到名册里其余
+  // 团队（teams effect 的 `current ?? 最新` 会接管）；停止不删目录，只重拉名册。
+  const handleLifecycleDone = useCallback((doneTeam: string, action: string) => {
+    setTeamsReloadKey((key) => key + 1);
+    if (action === "reclaim") {
+      setSelected((current) => (current === doneTeam ? null : current));
+    }
+  }, []);
+
+  // d5-2：切换团队时关闭成员换模型面板——面板若带着上一团队选中的 memberIds
+  // 存活，提交会把那批成员打到新团队的 PATCH 上（批量→单个切换同理，由
+  // 渲染处的 key 兜底，这里只管跨团队残留）。
+  useEffect(() => {
+    setModelPanel(null);
+  }, [selected]);
 
   const layout = useMemo(() => (snapshot ? layoutSwimlanes(snapshot) : null), [snapshot]);
-  const progress = useMemo(() => {
-    if (!snapshot) return { done: 0, total: 0, percent: 0 };
-    const total = snapshot.tickets.length;
-    const done = snapshot.tickets.filter((ticket) => ticket.status === "ended").length;
-    return { done, total, percent: total > 0 ? Math.round((done / total) * 100) : 0 };
-  }, [snapshot]);
 
   // 五态紧急度计数：与任务画布同源（lib/agent-teams-task-layout.ts）。
   const counts = useMemo(() => countTaskStates(snapshot?.tickets ?? []), [snapshot]);
+  // d4-1：完成度只认 countTaskStates 的 completed，不再自数 `status === "ended"`——
+  // 那是绕开真源的第三种口径：失败票同样 ended，却会被算进「已完成」，与统计头、
+  // 画布配色（taskToneClass）分叉。
+  const progress = useMemo(() => {
+    if (!snapshot) return { done: 0, total: 0, percent: 0 };
+    const total = snapshot.tickets.length;
+    const done = counts.completed;
+    return { done, total, percent: total > 0 ? Math.round((done / total) * 100) : 0 };
+  }, [snapshot, counts]);
   // 画布宽度：编队带需要按成员数撑开，任务泳道共用同一宽度才不会错位。
   const boardWidth = useMemo(
     () => (snapshot ? formationNaturalWidth(snapshot.members.length) : 0),
@@ -282,6 +304,7 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
               </ul>
               {modelPanel && selected && (
                 <TeamMemberModelPanel
+                  key={`${modelPanel.mode}-${modelPanel.memberIds.join(",")}`}
                   team={selected}
                   members={snapshot.members.map((member) => ({ id: member.id, name: member.name }))}
                   memberIds={modelPanel.memberIds}
@@ -350,9 +373,11 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
                 <h3 className="agent-teams-section-title">{t("teams.lifecycle.heading")}</h3>
                 <p className="scheduled-hint">{t("teams.lifecycle.memberCount", { count: currentMemberCount })}</p>
                 <TeamLifecycleActions
+                  key={selected}
                   team={selected}
                   displayName={currentDisplayName}
                   memberCount={currentMemberCount}
+                  onDone={handleLifecycleDone}
                 />
               </section>
             )}
