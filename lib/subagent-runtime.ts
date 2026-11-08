@@ -38,7 +38,7 @@ import { projectTrustReloadOptions } from "./project-trust";
 import { resolveShellTools } from "./powershell-settings";
 import { isBuiltInSubagentsEnabled, readSubagentSettings } from "./subagent-settings";
 import { additionalCcHahaSkillPaths } from "./cc-haha-skills";
-import { SubagentQueue } from "./subagent-queue";
+import { SubagentQueue, type EnqueuedSubagent } from "./subagent-queue";
 import { createSubagentBuiltinExtensions } from "./builtin-extensions";
 import { LEAN_TOOL_NAMES } from "./lean-mode";
 import type { McpHost } from "./mcp-host";
@@ -80,7 +80,13 @@ type StoredSubagentExecution = {
   run: SubagentRunInfo;
   completion: Promise<SubagentRunInfo>;
   abortRequested: boolean;
-  cancelQueued?: () => boolean;
+  /**
+   * D3-1：true 表示生命周期代码（排队/执行）仍在管理该条目。execute 与
+   * finishQueuedAbort 的兜底 finally 在任何退出路径上都置 false 并删表；get() 把
+   * 「active=false 却仍在表里」的条目当僵尸、按孤儿结算——否则
+   * get_subagent_result({wait:true}) 会对僵尸 running 条目永远轮询（#D3-1）。
+   */
+  active: boolean;
 };
 
 declare global {
@@ -419,10 +425,17 @@ export function createSubagentController(
         run: initialRun,
         completion,
         abortRequested: false,
+        active: true,
       };
       getSubagentRuns().set(initialRun.sessionId, stored);
-      request.onUpdate?.(initialRun);
-      dependencies.invalidateSessionList();
+      try {
+        request.onUpdate?.(initialRun);
+        dependencies.invalidateSessionList();
+      } catch (error) {
+        // D3-1：入表后的同步失败（onUpdate/列表缓存失效）必须删表，否则条目僵尸化。
+        getSubagentRuns().delete(initialRun.sessionId);
+        throw error;
+      }
 
       const handleParentAbort = () => {
         stored.abortRequested = true;
@@ -431,7 +444,7 @@ export function createSubagentController(
       };
       if (!runInBackground) request.signal?.addEventListener("abort", handleParentAbort, { once: true });
 
-      const execute = async (): Promise<SubagentRunInfo> => {
+      const executeOnce = async (): Promise<SubagentRunInfo> => {
         if (stored.abortRequested) {
           const result: SubagentRunInfo = { ...initialRun, status: "aborted", completedAt: new Date().toISOString() };
           sessionManager.appendCustomEntry(SUBAGENT_RESULT_TYPE, { version: 1, status: "aborted", completedAt: result.completedAt });
@@ -494,7 +507,7 @@ export function createSubagentController(
         return result;
       };
 
-      const finishQueuedAbort = async () => {
+      const finishQueuedAbortOnce = async () => {
         if (stored.run.status !== "queued") return;
         const result: SubagentRunInfo = { ...initialRun, status: "aborted", completedAt: new Date().toISOString() };
         const cleanupError = await cleanupWorktree(parent.cwd, isolatedWorktree);
@@ -506,22 +519,49 @@ export function createSubagentController(
         dependencies.invalidateSessionList();
         resolveCompletion(finalResult);
       };
-      const queued = getSubagentQueue().enqueue(
-        parentSessionId,
-        readSubagentSettings().maxConcurrent,
-        execute,
-        (state) => {
-          if (state === "queued") {
-            sessionManager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "queued" });
-          }
-          request.onUpdate?.({ ...stored.run, status: state });
-          stored.run = { ...stored.run, status: state };
-          dependencies.invalidateSessionList();
-        },
-        finishQueuedAbort,
-      );
+      // D3-1：两个生命周期函数的兜底 finally——任何退出路径（含收尾落盘/回调抛错）都清
+      // active 标记并删表；正常终态路径内的 delete 与这里是幂等重复。
+      const execute = async (): Promise<SubagentRunInfo> => {
+        try {
+          return await executeOnce();
+        } finally {
+          stored.active = false;
+          getSubagentRuns().delete(initialRun.sessionId);
+        }
+      };
+      const finishQueuedAbort = async (): Promise<void> => {
+        try {
+          await finishQueuedAbortOnce();
+        } finally {
+          stored.active = false;
+          getSubagentRuns().delete(initialRun.sessionId);
+        }
+      };
+      let queued: EnqueuedSubagent<SubagentRunInfo>;
+      try {
+        queued = getSubagentQueue().enqueue(
+          parentSessionId,
+          readSubagentSettings().maxConcurrent,
+          execute,
+          (state) => {
+            if (state === "queued") {
+              sessionManager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "queued" });
+            }
+            request.onUpdate?.({ ...stored.run, status: state });
+            stored.run = { ...stored.run, status: state };
+            dependencies.invalidateSessionList();
+          },
+          finishQueuedAbort,
+        );
+      } catch (error) {
+        // D3-1：enqueue 先 onState 后 pump，onState 抛错时 execute 尚未运行，删表后原样上抛。
+        getSubagentRuns().delete(initialRun.sessionId);
+        throw error;
+      }
       stored.cancelQueued = queued.cancel;
       void queued.promise.then(resolveCompletion, (error) => {
+        // D3-1：execute/取消的异常退出经 queue reject 到这里；正常终态已在 execute 内删表，此处幂等。
+        getSubagentRuns().delete(initialRun.sessionId);
         resolveCompletion({ ...initialRun, status: "failed", completedAt: new Date().toISOString(), error: error instanceof Error ? error.message : String(error) });
       });
 
@@ -567,10 +607,16 @@ export function createSubagentController(
     const manager = wrapper.inner.sessionManager;
     let resolveCompletion!: (run: SubagentRunInfo) => void;
     const completion = new Promise<SubagentRunInfo>((resolve) => { resolveCompletion = resolve; });
-    const stored: StoredSubagentExecution = { run: initialRun, completion, abortRequested: false };
+    const stored: StoredSubagentExecution = { run: initialRun, completion, abortRequested: false, active: true };
     getSubagentRuns().set(request.sessionId, stored);
-    request.onUpdate?.(initialRun);
-    dependencies.invalidateSessionList();
+    try {
+      request.onUpdate?.(initialRun);
+      dependencies.invalidateSessionList();
+    } catch (error) {
+      // D3-1：入表后的同步失败（onUpdate/列表缓存失效）必须删表，否则条目僵尸化。
+      getSubagentRuns().delete(request.sessionId);
+      throw error;
+    }
     const handleParentAbort = () => {
       stored.abortRequested = true;
       if (stored.run.status === "queued") stored.cancelQueued?.();
@@ -578,7 +624,7 @@ export function createSubagentController(
     };
     if (!runInBackground) request.signal?.addEventListener("abort", handleParentAbort, { once: true });
 
-    const execute = async (): Promise<SubagentRunInfo> => {
+    const executeOnce = async (): Promise<SubagentRunInfo> => {
       if (stored.abortRequested) {
         const result: SubagentRunInfo = { ...initialRun, status: "aborted", completedAt: new Date().toISOString() };
         manager.appendCustomEntry(SUBAGENT_RESULT_TYPE, { version: 1, status: "aborted", completedAt: result.completedAt });
@@ -625,7 +671,7 @@ export function createSubagentController(
       dependencies.invalidateSessionList();
       return result;
     };
-    const finishQueuedAbort = () => {
+    const finishQueuedAbortOnce = () => {
       if (stored.run.status !== "queued") return;
       const result: SubagentRunInfo = { ...initialRun, status: "aborted", completedAt: new Date().toISOString() };
       manager.appendCustomEntry(SUBAGENT_RESULT_TYPE, { version: 1, status: "aborted", completedAt: result.completedAt });
@@ -635,20 +681,54 @@ export function createSubagentController(
       dependencies.invalidateSessionList();
       resolveCompletion(result);
     };
-    const queued = getSubagentQueue().enqueue(parentSessionId, readSubagentSettings().maxConcurrent, execute, (state) => {
-      if (state === "queued") manager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "queued" });
-      stored.run = { ...stored.run, status: state };
-      request.onUpdate?.(stored.run);
-      dependencies.invalidateSessionList();
-    }, finishQueuedAbort);
+    // D3-1：两个生命周期函数的兜底 finally——任何退出路径（含收尾落盘/回调抛错）都清
+    // active 标记并删表；正常终态路径内的 delete 与这里是幂等重复。
+    const execute = async (): Promise<SubagentRunInfo> => {
+      try {
+        return await executeOnce();
+      } finally {
+        stored.active = false;
+        getSubagentRuns().delete(request.sessionId);
+      }
+    };
+    const finishQueuedAbort = (): void => {
+      try {
+        finishQueuedAbortOnce();
+      } finally {
+        stored.active = false;
+        getSubagentRuns().delete(request.sessionId);
+      }
+    };
+    let queued: EnqueuedSubagent<SubagentRunInfo>;
+    try {
+      queued = getSubagentQueue().enqueue(parentSessionId, readSubagentSettings().maxConcurrent, execute, (state) => {
+        if (state === "queued") manager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "queued" });
+        stored.run = { ...stored.run, status: state };
+        request.onUpdate?.(stored.run);
+        dependencies.invalidateSessionList();
+      }, finishQueuedAbort);
+    } catch (error) {
+      // D3-1：enqueue 先 onState 后 pump，onState 抛错时 execute 尚未运行，删表后原样上抛。
+      getSubagentRuns().delete(request.sessionId);
+      throw error;
+    }
     stored.cancelQueued = queued.cancel;
-    void queued.promise.then(resolveCompletion, (error) => resolveCompletion({ ...initialRun, status: "failed", completedAt: new Date().toISOString(), error: error instanceof Error ? error.message : String(error) }));
+    void queued.promise.then(resolveCompletion, (error) => {
+      // D3-1：execute/取消的异常退出经 queue reject 到这里；正常终态已在 execute 内删表，此处幂等。
+      getSubagentRuns().delete(request.sessionId);
+      resolveCompletion({ ...initialRun, status: "failed", completedAt: new Date().toISOString(), error: error instanceof Error ? error.message : String(error) });
+    });
     return { run: stored.run, completion };
   }
 
   async function get(sessionId: string): Promise<SubagentRunInfo | null> {
     const stored = getSubagentRuns().get(sessionId);
-    if (stored) return stored.run;
+    if (stored) {
+      // D3-1：生命周期代码已退出（active=false）却仍在表里 ⇒ 清理被异常路径跳过的僵尸条目。
+      // 不结算的话 wait:true 会对它永远轮询；按孤儿结算后 resume 仍可捡起该会话。
+      if (!stored.active) return settleOrphanedRun(stored.run);
+      return stored.run;
+    }
     const wrapper = dependencies.getSession(sessionId);
     if (wrapper?.isAlive()) {
       const run = readSubagentRun(
