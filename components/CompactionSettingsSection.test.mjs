@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { createJiti } from "jiti";
 
 const repoRoot = join(import.meta.dirname, "..");
@@ -10,6 +12,21 @@ const panelSource = readFileSync(join(repoRoot, "components", "SettingsPanel.tsx
 
 const jiti = createJiti(import.meta.url, { tsconfigPaths: true });
 const { getLocalePlugin, getSupportedLocales } = await jiti.import("../lib/i18n/registry.ts");
+
+const renderJiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
+const { CompactionSettingsSection, asCompactionPolicy, asCompactionSettings } = await renderJiti.import("./CompactionSettingsSection.tsx");
+// Same resolver the component uses (`@/hooks/useI18n`), so the provider and the
+// hook share one module instance and therefore one React context.
+const { I18nProvider } = await renderJiti.import("@/hooks/useI18n");
+
+/** Renders the block with no server data yet: `payload` and `policy` are both null on first paint. */
+function renderWithoutServerData() {
+  return renderToStaticMarkup(React.createElement(
+    I18nProvider,
+    { initialLocale: "en" },
+    React.createElement(CompactionSettingsSection),
+  ));
+}
 
 test("the compaction block uses the shared option control, never a native select", () => {
   assert.match(componentSource, /from "\.\/AppSelect"/);
@@ -56,4 +73,86 @@ test("the block explains that the real window is unchanged and a reload is neede
   const hint = getLocalePlugin("en").messages["settings.compactionHint"].toLowerCase();
   assert.match(hint, /context window/);
   assert.match(hint, /reload/);
+});
+
+test("first paint with no server data renders the controls instead of throwing", () => {
+  // Regression: this is the one state the source-level tests never rendered, and a
+  // page-level TypeError here takes the whole Settings › General tab down.
+  const html = renderWithoutServerData();
+  assert.match(html, /Context compaction/);
+  assert.match(html, /Balanced \(50%\)/);
+  assert.match(html, /Long context \(80%\)/);
+  assert.match(html, /Native/);
+  assert.match(html, /Save cost automatically/);
+  assert.match(html, /Follow the main model/);
+  assert.match(html, /Recent tokens kept verbatim/);
+  assert.match(html, /16384/);
+  assert.match(html, /262144/);
+  assert.match(html, /id="settings-compaction-keep-recent"/);
+});
+
+test("a response without a policy reads as no data instead of half a payload", () => {
+  // The E2E failure mode: the Settings › General fixture server answers `{}` for
+  // every /api path it does not stub, and the block used to read `data.policy`
+  // straight away. A non-null payload missing `limits` was the one that threw.
+  assert.equal(asCompactionSettings({}), null);
+  assert.equal(asCompactionSettings({ error: "nope" }), null);
+  assert.equal(asCompactionSettings(null), null);
+  assert.equal(asCompactionSettings({ policy: "balanced" }), null);
+
+  const fromPolicyOnly = asCompactionSettings({
+    policy: { mode: "long", keepRecentTokens: 32768, compactionModel: "preferred", preferredModels: ["acme/flash"] },
+  });
+  assert.deepEqual(fromPolicyOnly.limits, {
+    keepRecentTokens: { min: 16384, max: 262144, default: 65536 },
+    preferredModels: { max: 8 },
+  });
+  assert.deepEqual(fromPolicyOnly.candidates, []);
+  assert.deepEqual(fromPolicyOnly.policy, {
+    mode: "long",
+    keepRecentTokens: 32768,
+    compactionModel: "preferred",
+    preferredModels: ["acme/flash"],
+  });
+
+  // A payload whose limits are present but partial fills only the missing fields.
+  const partialLimits = asCompactionSettings({
+    policy: { mode: "balanced" },
+    limits: { keepRecentTokens: { max: 999 } },
+    candidates: [
+      { provider: "acme", modelId: "flash", label: "Flash · acme", priceConfirmed: true },
+      { provider: "acme", modelId: "broken" },
+      "not a candidate",
+    ],
+  });
+  assert.deepEqual(partialLimits.limits, {
+    keepRecentTokens: { min: 16384, max: 999, default: 65536 },
+    preferredModels: { max: 8 },
+  });
+  assert.deepEqual(partialLimits.candidates, [
+    { provider: "acme", modelId: "flash", label: "Flash · acme", priceConfirmed: true },
+  ]);
+});
+
+test("asCompactionPolicy tolerates every malformed field and refuses non-objects", () => {
+  assert.equal(asCompactionPolicy(null), null);
+  assert.equal(asCompactionPolicy(undefined), null);
+  assert.equal(asCompactionPolicy(["balanced"]), null);
+  assert.deepEqual(asCompactionPolicy({}), {
+    mode: "balanced",
+    keepRecentTokens: 65536,
+    compactionModel: "auto",
+    preferredModels: [],
+  });
+  assert.deepEqual(asCompactionPolicy({
+    mode: "wild",
+    keepRecentTokens: "65536",
+    compactionModel: "cheap",
+    preferredModels: ["acme/flash", 7],
+  }), {
+    mode: "balanced",
+    keepRecentTokens: 65536,
+    compactionModel: "auto",
+    preferredModels: ["acme/flash"],
+  });
 });
