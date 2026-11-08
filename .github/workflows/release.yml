@@ -114,7 +114,7 @@ jobs:
           tagName: v__VERSION__
           releaseName: pi-agent-desktop v__VERSION__
           releaseBody: |
-            ## Pi Agent Desktop 0.8.2 (fork)
+            ## Pi Agent Desktop 0.8.3 (fork)
 
             This is the **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2.
 
