@@ -13,6 +13,7 @@ const {
   LIVE_REFRESH_MS,
   REPLAY_STEP_MS,
   MAX_RETRY_MS,
+  SNAPSHOT_TIMEOUT_MS,
   isLiveTeamStatus,
   appendTeamSnapshot,
   clampTimelineIndex,
@@ -87,6 +88,7 @@ test("timeline constants keep the agreed cadences and history cap", () => {
   assert.equal(LIVE_REFRESH_MS, 3000);
   assert.equal(REPLAY_STEP_MS, 1200);
   assert.equal(MAX_RETRY_MS, 30000);
+  assert.equal(SNAPSHOT_TIMEOUT_MS, 20000, "matches the useModelCatalog timeout scale (d5-20)");
 });
 
 test("only forming/running/finishing teams keep polling", () => {
@@ -337,6 +339,84 @@ test("polling stops once the team is no longer live", async () => {
   assert.equal(calls, 1);
   assert.equal(fake.size(), 0, "no timer is armed after a non-live snapshot");
 
+  poller.stop();
+});
+
+test("a hidden tick while a fetch is pending still re-arms the poll (d5-20)", async () => {
+  const fake = createFakeTimers();
+  const listeners = new Set();
+  let visible = true;
+  let resolveFetch;
+  const poller = createSnapshotPoller({
+    // 永不 settle 的 fetch：半开连接的替身。
+    fetchSnapshot: () => new Promise((resolve) => { resolveFetch = resolve; }),
+    onSnapshot: () => {},
+    onError: () => {},
+    isLive: () => true,
+    isVisible: () => visible,
+    visibilitySource: {
+      addEventListener: (_type, listener) => listeners.add(listener),
+      removeEventListener: (_type, listener) => listeners.delete(listener),
+    },
+    timers: fake.timers,
+    intervalMs: LIVE_REFRESH_MS,
+  });
+
+  poller.start();
+  await flush();
+  assert.equal(fake.size(), 0, "a pending fetch arms no poll timer yet");
+
+  // 挂起期间切后台再切回：补拉被 inFlight 短路，但定时器必须重排——
+  // 否则这次挂起之后轮询永久停摆（d5-20 的本体）。
+  visible = false;
+  for (const listener of listeners) listener();
+  visible = true;
+  for (const listener of listeners) listener();
+  await flush();
+  assert.deepEqual(fake.pendingDelays(), [LIVE_REFRESH_MS], "visibility re-arm survives a pending fetch");
+
+  // fetch 落地后轮询继续走既有节奏，不产生第二个定时器。
+  resolveFetch(snapshot(at(1)));
+  await flush();
+  assert.equal(fake.size(), 1, "exactly one poll timer after the fetch settles");
+
+  poller.stop();
+});
+
+test("a snapshot fetch that never settles is cut by the poller timeout (d5-20)", async (t) => {
+  // 判死定时器是真实 setTimeout（不经注入的 timers，见 load 的注释），所以用
+  // node:test 的 mock 时钟拦截全局 setTimeout，快进 20s 让它触发。race 的
+  // fetch 侧用可手动 reject 的 promise：判死后必须显式收口，否则这个永不
+  // settle 的 promise 会让事件循环以为还有活干/提前清空（Node 对只有
+  // pending promise 的进程会直接退出）。注意 mock 时钟也拦住本文件的
+  // flush()（它用 setTimeout(0)），mock 区段内的宏任务让位改用 setImmediate。
+  const drain = () => new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let rejectFetch;
+  let errors = 0;
+  const poller = createSnapshotPoller({
+    fetchSnapshot: () => new Promise((_resolve, reject) => { rejectFetch = reject; }),
+    onSnapshot: () => {},
+    onError: () => {
+      errors += 1;
+    },
+    isLive: () => true,
+    timers: createFakeTimers().timers,
+    intervalMs: LIVE_REFRESH_MS,
+  });
+
+  poller.start();
+  t.mock.timers.tick(0);
+  await drain();
+  assert.equal(errors, 0);
+
+  t.mock.timers.tick(SNAPSHOT_TIMEOUT_MS);
+  await drain();
+  assert.equal(errors, 1, "the hung fetch surfaces as a retriable error");
+
+  // 收口 fetch 侧，避免进程带着 pending promise 异常退出。
+  rejectFetch(new Error("test teardown"));
+  await drain();
   poller.stop();
 });
 

@@ -11,6 +11,8 @@ export const LIVE_REFRESH_MS = 3000;
 export const REPLAY_STEP_MS = 1200;
 /** 拉取失败后的重试上限：指数退避但不超过 30 秒。 */
 export const MAX_RETRY_MS = 30000;
+/** 单次快照拉取的超时：与 useModelCatalog 的 20s 口径同量级（d5-20）。 */
+export const SNAPSHOT_TIMEOUT_MS = 20000;
 
 /** 团队是否仍可能产出新快照；completed / ended 后停止轮询（沿用改造前行为）。 */
 export function isLiveTeamStatus(status: string | undefined): boolean {
@@ -171,13 +173,28 @@ export function createSnapshotPoller(options: SnapshotPollerOptions): SnapshotPo
   async function load(): Promise<void> {
     if (stopped || inFlight) return;
     inFlight = true;
+    // 挂起的请求本身也要有出口：远程/隧道访问下连接可能半开，fetch 永不 settle
+    // 时 inFlight 恒真，失败重试与前台补拉全被短路，轮询永久停摆。20s 与
+    // useModelCatalog 的超时口径同量级；超时按失败走既有的退避重试路径。
+    // 判死用真实 setTimeout，不经注入的 timers——那是轮询节奏的队列，单测靠
+    // 「恰一个轮询定时器」的断言驱动，混入判死帧会污染它。
+    let settled = false;
     try {
-      const snapshot = await options.fetchSnapshot();
+      const snapshot = await Promise.race([
+        options.fetchSnapshot(),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => {
+            if (!settled) reject(new Error("snapshot fetch timed out"));
+          }, SNAPSHOT_TIMEOUT_MS);
+        }),
+      ]);
+      settled = true;
       if (stopped) return;
       options.onSnapshot(snapshot);
       attempt = 0;
       if (options.isLive(snapshot)) schedule(intervalMs);
     } catch {
+      settled = true;
       if (stopped) return;
       options.onError();
       attempt += 1;
@@ -189,7 +206,9 @@ export function createSnapshotPoller(options: SnapshotPollerOptions): SnapshotPo
 
   const onVisibilityChange = (): void => {
     if (stopped || !isVisible()) return;
-    clear();
+    // 无论是否挂起都重排定时器：挂起中只触发补拉（inFlight 短路），下一次
+    // 轮询仍由这个定时器保证——否则半开连接把 Live 永久冻在补拉那次。
+    schedule(intervalMs);
     void load();
   };
 
