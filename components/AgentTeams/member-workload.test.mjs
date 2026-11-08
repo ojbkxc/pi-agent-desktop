@@ -123,6 +123,21 @@ test("idleMemberIds 按名册顺序输出空闲者；忙者不出现", () => {
   assert.deepEqual(ids, ["w2", "w3"]);
 });
 
+// #55 独立复核判红项：lead 不接票，绝不进「空闲接派候选」。旧实现（不排除 lead）
+// 在下面两个用例都会返回含 lead 的名单而红——判别力：排除逻辑删掉即红。
+test("idleMemberIds 排除 lead：leadSessionId 命中口径（lead+空票 worker ⇒ 只 worker）", () => {
+  const lead = { ...member("lead-1"), name: "team-lead", sessionId: "lead-session", role: "orchestrator" };
+  const snap = snapshot([lead, member("w1")], []);
+  snap.team.leadSessionId = "lead-session";
+  assert.deepEqual(idleMemberIds(snap), ["w1"]);
+});
+
+test("idleMemberIds 排除 lead：leadSessionId 缺失时退化为名字 team-lead 口径", () => {
+  const lead = { ...member("lead-1"), name: "team-lead", sessionId: null, role: "orchestrator" };
+  const snap = snapshot([lead, member("w1")], []);
+  assert.deepEqual(idleMemberIds(snap), ["w1"]);
+});
+
 test("空名册 + 有票：orphan 聚合，byMemberId 为空 Map", () => {
   const { byMemberId, orphan } = deriveMemberWorkloads(snapshot([], [ticket([assignment("pending")])]));
   assert.equal(byMemberId.size, 0);

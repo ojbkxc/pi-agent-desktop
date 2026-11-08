@@ -85,11 +85,29 @@ export function deriveMemberWorkloads(snapshot: TeamWorkbenchSnapshot): DerivedW
   return { byMemberId, orphan };
 }
 
-/** 名下无未结束派活的成员 id 列表（按名册顺序），供「空闲成员：…」标注。 */
+/**
+ * 队长判定——与 lib/agent-teams-formation-layout.ts 的 pickLead 同口径（sessionId
+ * 命中 team.leadSessionId → 名字 "team-lead" → 首位兜底；该函数未导出，故此处本地
+ * 复刻，两处需同步维护）。lead 不接票，绝不进空闲接派候选：否则成员区「空闲成员」
+ * 名单会列出 team-lead（#55 独立复核判红项）。
+ */
+function isLeadMember(snapshot: TeamWorkbenchSnapshot, memberId: string): boolean {
+  const members = snapshot.members;
+  if (members.length === 0) return false;
+  const lead = (snapshot.team.leadSessionId
+    ? members.find((member) => member.sessionId && member.sessionId === snapshot.team.leadSessionId)
+    : undefined)
+    ?? members.find((member) => member.name === "team-lead")
+    ?? members[0];
+  return lead?.id === memberId;
+}
+
+/** 名下无未结束派活的成员 id 列表（按名册顺序，**不含 lead**），供「空闲成员：…」标注。 */
 export function idleMemberIds(snapshot: TeamWorkbenchSnapshot): string[] {
   const { byMemberId } = deriveMemberWorkloads(snapshot);
   const idle: string[] = [];
   for (const member of snapshot.members) {
+    if (isLeadMember(snapshot, member.id)) continue;
     const entry = byMemberId.get(member.id);
     if (entry?.idle) idle.push(member.id);
   }
