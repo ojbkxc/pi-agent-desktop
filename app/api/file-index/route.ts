@@ -9,6 +9,7 @@ import {
   isFilePathAllowed,
   isWindowsAbsolutePath,
 } from "@/lib/file-access";
+import { childProcessEnvironment } from "@/lib/project-command-env";
 import { buildEntriesFromFiles, filterFileEntries, type FileIndexEntry } from "@/lib/file-fuzzy";
 import { isHiddenOutsideGit } from "@/lib/file-tree-visibility";
 
@@ -57,7 +58,10 @@ async function listWithGit(cwd: string): Promise<FileListing | null> {
     const { stdout } = await execFileAsync(
       "git",
       ["-C", cwd, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-      { timeout: 10_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, LC_ALL: "C" } },
+      // childProcessEnvironment keeps PI_WEB_PASSWORD and the desktop token
+      // out of the git subprocess (same leak as d2-1, lower impact: this is a
+      // read-only ls-files); LC_ALL is ours, layered on top.
+      { timeout: 10_000, maxBuffer: 64 * 1024 * 1024, env: childProcessEnvironment({ LC_ALL: "C" }) },
     );
     const all = stdout.split("\0").filter(Boolean);
     if (all.length > GIT_HARD_CAP) {

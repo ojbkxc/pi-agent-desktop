@@ -6,6 +6,7 @@ import { basename, dirname, join } from "path";
 import { promisify } from "util";
 import { fileURLToPath, pathToFileURL } from "url";
 import { NextResponse } from "next/server";
+import { childProcessEnvironment } from "@/lib/project-command-env";
 import { resolveSessionPath } from "@/lib/session-reader";
 
 const execFileAsync = promisify(execFile);
@@ -220,11 +221,14 @@ async function exportSession(filePath: string, outputPath: string): Promise<void
     await execFileAsync(process.execPath, [cliPath, "--export", filePath, outputPath], {
       cwd: process.cwd(),
       timeout: 30_000,
-      env: {
-        ...process.env,
+      // childProcessEnvironment keeps PI_WEB_PASSWORD and the desktop token
+      // out of the CLI subprocess (same leak as d2-1, lower impact: the export
+      // takes only two local paths). PI_OFFLINE/PI_SKIP_VERSION_CHECK are ours,
+      // layered on top; everything the CLI needs from the host env survives.
+      env: childProcessEnvironment({
         PI_OFFLINE: "1",
         PI_SKIP_VERSION_CHECK: "1",
-      },
+      }),
       maxBuffer: 1024 * 1024,
     });
     return;
