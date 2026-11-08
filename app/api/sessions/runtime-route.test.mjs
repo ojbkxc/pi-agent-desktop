@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import test from "node:test";
 import { createJiti } from "jiti";
@@ -454,4 +454,131 @@ test("deleting a session re-parents a sibling subagent and preserves its transcr
   // The user message line survives too, in order.
   assert.ok(after.some((l) => l.includes("child task")), "user message line preserved");
   invalidateSessionPathCache(childId);
+});
+
+test("deleting a session stops a live fork child before re-parenting its file (d1-5)", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-web-delete-live-child-"));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const previousRegistry = globalThis.__piSessions;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  invalidateSessionListCache();
+  t.after(async () => {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    globalThis.__piSessions = previousRegistry;
+    invalidateSessionListCache();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const parent = SessionManager.create(dir);
+  parent.appendMessage({ role: "user", content: "parent", timestamp: Date.now() });
+  const parentId = parent.getSessionId();
+  const parentPath = parent.getSessionFile();
+
+  const child = SessionManager.create(dir, undefined, { parentSession: parentPath });
+  child.appendMessage({ role: "user", content: "child task", timestamp: Date.now() });
+  const childId = child.getSessionId();
+  const childPath = child.getSessionFile();
+
+  // A live wrapper owns the child's file, and one writer per JSONL is the
+  // house rule (see GET): the delete must stop it before swapping the file
+  // underneath it, the way the cascade treats deleted children.
+  let shutdownCalled = false;
+  globalThis.__piSessions = new Map([[childId, {
+    isAlive: () => true,
+    isRunning: () => true,
+    shutdown: async () => {
+      shutdownCalled = true;
+      globalThis.__piSessions.delete(childId);
+    },
+  }]]);
+  invalidateSessionListCache();
+
+  const response = await deleteSession(
+    new Request(`http://localhost/api/sessions/${parentId}`, { method: "DELETE" }),
+    { params: Promise.resolve({ id: parentId }) },
+  );
+  assert.equal(response.status, 200);
+  assert.equal(shutdownCalled, true, "live child stopped before its file is rewritten");
+  await assert.rejects(readFile(parentPath), { code: "ENOENT" });
+  // No grandparent: the child's parentSession key is removed entirely.
+  const header = JSON.parse((await readFile(childPath, "utf8")).split("\n")[0]);
+  assert.equal(header.parentSession, undefined);
+  invalidateSessionPathCache(childId);
+});
+
+test("a failed re-parent rewrite fails the delete instead of reporting ok (d1-5)", { skip: process.platform === "win32" && "POSIX dir permissions" }, async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-web-delete-rewrite-fail-"));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  invalidateSessionListCache();
+  const parent = SessionManager.create(dir);
+  parent.appendMessage({ role: "user", content: "parent", timestamp: Date.now() });
+  const parentId = parent.getSessionId();
+  const parentPath = parent.getSessionFile();
+  const child = SessionManager.create(dir, undefined, { parentSession: parentPath });
+  child.appendMessage({ role: "user", content: "child task", timestamp: Date.now() });
+  const childPath = child.getSessionFile();
+  // The rewrite cannot create its temp file: reattachSessionFile throws, and
+  // the delete must surface that instead of deleting the parent anyway and
+  // leaving the child pointing at a removed file behind an ok:true.
+  const childDir = dirname(childPath);
+  await chmod(childDir, 0o555);
+  t.after(async () => {
+    await chmod(childDir, 0o755);
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    invalidateSessionListCache();
+    await rm(dir, { recursive: true, force: true });
+  });
+  invalidateSessionListCache();
+
+  const response = await deleteSession(
+    new Request(`http://localhost/api/sessions/${parentId}`, { method: "DELETE" }),
+    { params: Promise.resolve({ id: parentId }) },
+  );
+  assert.equal(response.status, 500);
+  // Nothing was deleted: the parent still exists and the child still points
+  // at it, so a retry sees a consistent tree.
+  await readFile(parentPath);
+  const header = JSON.parse((await readFile(childPath, "utf8")).split("\n")[0]);
+  const { sessionPathKey } = await jiti.import("../../../lib/session-path.ts");
+  assert.equal(sessionPathKey(header.parentSession), sessionPathKey(parentPath));
+});
+
+test("an unreadable sibling is skipped while the delete still succeeds (d1-5)", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-web-delete-broken-sibling-"));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  invalidateSessionListCache();
+  t.after(async () => {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    invalidateSessionListCache();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const parent = SessionManager.create(dir);
+  parent.appendMessage({ role: "user", content: "parent", timestamp: Date.now() });
+  const parentId = parent.getSessionId();
+  const parentPath = parent.getSessionFile();
+
+  const child = SessionManager.create(dir, undefined, { parentSession: parentPath });
+  child.appendMessage({ role: "user", content: "child task", timestamp: Date.now() });
+  const childPath = child.getSessionFile();
+
+  // A sibling whose "file" is a directory: unreadable as a transcript, so it
+  // is skipped without failing — or silently swallowing — the delete.
+  const brokenPath = join(dirname(parentPath), "broken.jsonl");
+  await mkdir(brokenPath);
+  invalidateSessionListCache();
+
+  const response = await deleteSession(
+    new Request(`http://localhost/api/sessions/${parentId}`, { method: "DELETE" }),
+    { params: Promise.resolve({ id: parentId }) },
+  );
+  assert.equal(response.status, 200);
+  await assert.rejects(readFile(parentPath), { code: "ENOENT" });
+  const header = JSON.parse((await readFile(childPath, "utf8")).split("\n")[0]);
+  assert.equal(header.parentSession, undefined);
 });

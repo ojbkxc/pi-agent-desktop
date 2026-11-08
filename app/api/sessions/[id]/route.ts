@@ -394,30 +394,51 @@ export async function DELETE(
 
     // Re-attach all direct children to this session's parent (cascade re-parent)
     // Scan sibling files in the same directory
+    let siblings: string[];
     try {
-      const files = readdirSync(dir).filter(
+      siblings = readdirSync(dir).filter(
         (file) => file.endsWith(".jsonl") && sessionPathKey(join(dir, file)) !== targetPathKey,
       );
-      for (const file of files) {
-        const childPath = join(dir, file);
-        if (deletedPathKeys.has(sessionPathKey(childPath))) continue;
-        try {
-          // Bounded header read decides the rewrite; the file body itself is
-          // streamed through a line-level rewrite instead of a whole-file
-          // readFileSync (a sibling transcript can be hundreds of MB).
-          const header = readSessionHeader(childPath);
-          if (
-            !header?.parentSession ||
-            sessionPathKey(header.parentSession) !== targetPathKey
-          ) continue;
-          await reattachSessionFile(childPath, {
-            header,
-            parentSessionPath,
-            ...(parentSessionPath && parentSessionId ? { parentSessionId } : {}),
-          });
-        } catch { /* skip malformed */ }
+    } catch {
+      siblings = []; // dir unreadable: no siblings to re-parent
+    }
+    for (const file of siblings) {
+      const childPath = join(dir, file);
+      if (deletedPathKeys.has(sessionPathKey(childPath))) continue;
+      // Bounded header read decides the rewrite; the file body itself is
+      // streamed through a line-level rewrite instead of a whole-file
+      // readFileSync (a sibling transcript can be hundreds of MB). A sibling
+      // that cannot be read at all is skipped — but a rewrite failure below
+      // must not be: swallowing it published ok:true while the child kept
+      // pointing at a file this delete was about to remove.
+      let header: ReturnType<typeof readSessionHeader>;
+      try {
+        header = readSessionHeader(childPath);
+      } catch {
+        continue; // unreadable sibling: nothing to re-parent, not a rewrite failure
       }
-    } catch { /* skip if dir unreadable */ }
+      if (
+        !header?.parentSession ||
+        sessionPathKey(header.parentSession) !== targetPathKey
+      ) continue;
+      // One writer per JSONL is the house rule (see GET): a live wrapper must
+      // not own a file being swapped underneath it. Stop the child first —
+      // its transcript stays on disk and reopens from the rewritten file,
+      // the same treatment the cascade gives deleted children.
+      const childId = typeof header.id === "string" ? header.id : undefined;
+      const childSession = childId ? getRpcSession(childId) : undefined;
+      if (childId && childSession?.isAlive()) {
+        try { await abortSubagent(childId); } catch { /* ordinary session */ }
+        await childSession.shutdown();
+        invalidateSessionPathCache(childId);
+        invalidateSessionManagerCache(childPath);
+      }
+      await reattachSessionFile(childPath, {
+        header,
+        parentSessionPath,
+        ...(parentSessionPath && parentSessionId ? { parentSessionId } : {}),
+      });
+    }
 
     for (const deletedId of [...deletedSessionIds].reverse()) {
       if (deletedId === id) continue;
