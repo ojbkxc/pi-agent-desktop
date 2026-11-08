@@ -125,7 +125,32 @@ export function defaultSweepDeps(): SweepDeps {
  * 落盘时机：只要有动作就写 `next`（即使投递失败也写），否则失败项会每 tick 重发。
  * 投递失败 / 已耗尽重试的动作会写进 `state.manualNeeds` 并发通知，绝不静默放弃。
  */
+// ── D3-2 防重入护栏 ──────────────────────────────────────────────────────────
+// 一轮 sweep 的 deliver（lead 不在时走 startRpcSession 复活，且 send({type:"prompt"}) 要等
+// 扩展绑定与 MCP 服务器连接——rpc-manager 的 prompt 先等 preflight 才返回）与 notify
+// （web-push 逐设备串行网络发送）都可能超过 60s 的 tick 间隔——慢的是「复活 lead + 慢 MCP
+// 等待 + 慢推送 + 多动作累积」，不是普通轮次时长。账本（approvalNudges/failureNudges/
+// manualNeeds）只在循环尾一次性落盘：重入的下一 tick 会读旧账本重复决策，不仅向 lead
+// 重复投递同一提醒，后写者还会用旧 next 整体覆盖、抹掉并发轮写进 manualNeeds 的条目。
+// 与 lib/scheduled-tasks/scheduler.ts 的 ticking 同法：进行中直接跳过本 tick。
+//
+// 已知窗口（队长知情、本轮有意不修）：账本循环尾落盘 ⇒ sweep 中途进程退出时已发出的
+// 提醒未记账，重启后首个 tick 可能对同一 plan/ticket 重复提醒一次。「逐动作落盘」只能
+// 缩小窗口（deliver 之后、writeState 之前的窗口与写入频率无关），要闭合需 write-ahead 的
+// attempt 标记 + 陈旧标记升级为人工确认通知，属协议设计，不在本批次。
+let sweepInFlight = false;
+
 export async function runUnattendedSweep(deps: SweepDeps = defaultSweepDeps()): Promise<SweepResult> {
+  if (sweepInFlight) return { actions: 0, nudged: 0, failed: 0, notified: 0 };
+  sweepInFlight = true;
+  try {
+    return await runUnattendedSweepOnce(deps);
+  } finally {
+    sweepInFlight = false;
+  }
+}
+
+async function runUnattendedSweepOnce(deps: SweepDeps): Promise<SweepResult> {
   const { config, state, filePath } = deps.readState();
   const input = await deps.collect();
   const { actions, state: next } = planUnattendedActions({
