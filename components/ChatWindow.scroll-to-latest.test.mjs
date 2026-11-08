@@ -81,3 +81,19 @@ test("exposes the detached-tail flag from the session hook without a ref read", 
   );
   assert.match(hookSource, /promptAnchorActive,\s*showScrollToBottom,\s*\/\/ Refs/);
 });
+
+test("the scroll-save cleanup is registered once the scroll refs attach (d5-15)", () => {
+  // 旧写法 deps [scrollContainerRef]（ref 对象恒定）且空引用早退：isEmptyNew 的
+  // 挂载路径下两个 ref 的 DOM 不在树上，effect 早退后永不补注册，卸载保存滚位
+  // 整条失效。修复后必须存在「refs 就绪」的 state 探测，且 layout effect 依赖它。
+  assert.match(source, /const \[scrollRefsReady, setScrollRefsReady\] = useState\(false\);/);
+  assert.match(
+    source,
+    /setScrollRefsReady\(Boolean\(scrollContainerRef\.current && messageContentRef\.current\)\);/,
+    "a render-pass probe must re-run when the refs attach",
+  );
+  // layout effect 早退条件改为「未就绪」，空引用早退只留作防御；deps 必须是就绪标志。
+  assert.match(source, /if \(!scrollRefsReady\) return;\s+const container = scrollContainerRef\.current;/);
+  assert.match(source, /\}, \[scrollRefsReady\]\);/, "the layout effect must depend on readiness, not the constant ref object");
+  assert.doesNotMatch(source, /\}, \[scrollContainerRef\]\);\s*useEffect\(\(\) => \{\s*if \(searchTarget\)/, "the old constant-deps form must be gone");
+});

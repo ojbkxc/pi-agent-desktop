@@ -588,7 +588,17 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
   const onScrollPositionChangeRef = useRef(onScrollPositionChange);
   onScrollPositionChangeRef.current = onScrollPositionChange;
 
+  // d5-15：滚动保存的清理函数必须在「refs 真正挂上 DOM」之后注册。旧写法
+  // deps [scrollContainerRef]（ref 对象恒定）且空引用早退——isEmptyNew 的挂载
+  // 路径（两个 ref 的 DOM 不在树上，见下方 !isEmptyNew 条件渲染）此时早退，
+  // 之后 refs 有值也不再补注册，该生命周期下卸载保存滚位整条失效。把「refs
+  // 是否就绪」做成 state，就绪后重跑本 effect 才注册 cleanup。
+  const [scrollRefsReady, setScrollRefsReady] = useState(false);
+  useEffect(() => {
+    setScrollRefsReady(Boolean(scrollContainerRef.current && messageContentRef.current));
+  });
   useLayoutEffect(() => {
+    if (!scrollRefsReady) return;
     const container = scrollContainerRef.current;
     const content = messageContentRef.current;
     if (!container || !content) return;
@@ -615,7 +625,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
         oldestEntryId: searchHistoryRef.current.historyCursor,
       });
     };
-  }, [scrollContainerRef]);
+  }, [scrollRefsReady]);
 
   useEffect(() => {
     if (searchTarget) setPendingScrollRestore(null);
