@@ -36,9 +36,12 @@ pub enum PopupMenuEntry {
 
 /// Where a popup menu's selected item is delivered. The menu's click arrives as
 /// an app-level menu event (some platforms deliver it after the popup call has
-/// returned), so the command parks a sender here and waits for it.
+/// returned), so the command parks a sender here and waits for it. The sender
+/// is paired with the nonce baked into its menu ids: two concurrent popups
+/// would otherwise hand the first menu's click to the second waiter (the slot
+/// is single, the routing in `run()` was prefix-only).
 #[derive(Default)]
-pub struct PopupMenuSelection(pub Mutex<Option<std::sync::mpsc::Sender<String>>>);
+pub struct PopupMenuSelection(pub Mutex<Option<(u64, std::sync::mpsc::Sender<String>)>>);
 
 pub const POPUP_ID_PREFIX: &str = "popup:";
 /// How long to wait for the click after the popup call returns.
@@ -135,7 +138,7 @@ pub async fn show_popup_menu(
     let (sender, receiver) = std::sync::mpsc::channel::<String>();
     if let Some(state) = app.try_state::<PopupMenuSelection>() {
         if let Ok(mut slot) = state.0.lock() {
-            *slot = Some(sender);
+            *slot = Some((nonce, sender));
         }
     }
 

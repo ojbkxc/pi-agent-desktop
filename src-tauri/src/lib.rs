@@ -1375,12 +1375,20 @@ pub fn run() {
                 .build(),
         )
         .on_menu_event(|app, event| {
-            // A popup menu's click: hand it to the command waiting on it.
-            if event.id().as_ref().starts_with(POPUP_ID_PREFIX) {
+            // A popup menu's click: hand it to the command waiting on it, but
+            // only if the click belongs to that command's popup (the id is
+            // "popup:{nonce}:{item}"; the slot carries the nonce it waits for,
+            // so a concurrent second popup never steals the first's click).
+            if let Some(rest) = event.id().as_ref().strip_prefix(POPUP_ID_PREFIX) {
+                let Some(nonce) = rest.split(':').next().and_then(|n| n.parse::<u64>().ok()) else {
+                    return;
+                };
                 if let Some(state) = app.try_state::<PopupMenuSelection>() {
                     if let Ok(slot) = state.0.lock() {
-                        if let Some(sender) = slot.as_ref() {
-                            let _ = sender.send(event.id().as_ref().to_string());
+                        if let Some((slot_nonce, sender)) = slot.as_ref() {
+                            if *slot_nonce == nonce {
+                                let _ = sender.send(event.id().as_ref().to_string());
+                            }
                         }
                     }
                 }
