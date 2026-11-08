@@ -37,7 +37,16 @@ function isHostRuntimeVariable(name: string, platform: NodeJS.Platform): boolean
     || comparableName.startsWith("NEXT_")
     // The browser login password guards this server; commands run on behalf of
     // a project (and the model reading their output) have no use for it.
-    || comparableName === "PI_WEB_PASSWORD";
+    || comparableName === "PI_WEB_PASSWORD"
+    // The desktop shell's filesystem credential (`src-tauri` injects both into
+    // this server's env). Every project-side child process inherits the host
+    // environment, and one `env` would put the token in a transcript — the same
+    // threat model that keeps the relay mark secret on globalThis
+    // (lib/relay/mark.ts) instead of in process.env. `/api/desktop/save`'s raw
+    // byte branch writes any absolute path with it, so it must not reach a
+    // transcript a loopback browser page can read back.
+    || comparableName === "PI_DESKTOP_API_TOKEN"
+    || comparableName === "PI_DESKTOP_INSTANCE_ID";
 }
 
 export function sanitizeProjectCommandEnvironment(
@@ -49,6 +58,24 @@ export function sanitizeProjectCommandEnvironment(
     if (isHostRuntimeVariable(name, platform)) delete environment[name];
   }
   return environment;
+}
+
+/**
+ * Environment for server-side child processes that are not the project shell
+ * itself — `npx skills add` (its packages run install scripts), `git` — built
+ * from this server's own env so those calls stay one-liners at the call sites.
+ * The host's secrets (PI_WEB_PASSWORD, the desktop API token) never reach it:
+ * a bare `{ ...process.env }` here would hand the browser login password to an
+ * npm preinstall script and to every git subprocess.
+ */
+export function childProcessEnvironment(
+  // Record, not NodeJS.ProcessEnv: this @types/node declares NODE_ENV as a
+  // required property, which would force every call site to spell a fake
+  // NODE_ENV into its overrides.
+  overrides: Record<string, string | undefined> = {},
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  return { ...sanitizeProjectCommandEnvironment(process.env, platform), ...overrides };
 }
 
 function withAgentBinDirectory(

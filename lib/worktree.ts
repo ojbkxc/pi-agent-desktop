@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, realpathSync } from "fs";
 import { basename, dirname, join, resolve } from "path";
 import { promisify } from "util";
 import { allowFileRoot } from "./allowed-roots";
+import { childProcessEnvironment } from "./project-command-env";
 import { samePath, toNativePath } from "./paths";
 
 const execFileAsync = promisify(execFile);
@@ -61,7 +62,9 @@ async function git(cwd: string, args: string[], timeoutMs = 10_000): Promise<str
     // detection in the DELETE route) works regardless of system language.
     // GIT_TERMINAL_PROMPT=0 makes credential-hungry network commands (fetch)
     // fail fast instead of blocking the timeout on an invisible prompt.
-    env: { ...process.env, LC_ALL: "C", GIT_TERMINAL_PROMPT: "0" },
+    // childProcessEnvironment keeps PI_WEB_PASSWORD and the desktop token out
+    // of every git subprocess (d2-1); the two vars below are ours.
+    env: childProcessEnvironment({ LC_ALL: "C", GIT_TERMINAL_PROMPT: "0" }),
   });
   return stdout.trim();
 }

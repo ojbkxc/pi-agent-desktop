@@ -24,6 +24,11 @@ const CREDENTIAL_PATHS = [
   ".git-credentials",
   ".pgpass",
   ".npmrc",
+  // Other AI CLIs' plaintext token stores: Claude Code's OAuth credentials and
+  // Codex's auth file sit in these home directories alongside the very sessions
+  // a user may open as a workspace.
+  ".claude",
+  ".codex",
   ".pi/agent/auth.json",
 ] as const;
 
