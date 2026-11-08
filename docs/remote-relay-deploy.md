@@ -103,7 +103,7 @@ and its notifications stop.
 
 | Phone shows | Meaning |
 |---|---|
-| Offline · computer offline | Pi on the computer is not connected to the relay (asleep, quit, or the relay URL is wrong). |
+| Offline · computer offline | Pi on the computer is not connected to the relay (asleep, quit, or the relay URL is wrong). If you changed the relay address in Settings, a phone paired earlier still dials the old URL from its own storage — it stays here no matter what the computer does. Unpair on the phone and scan a fresh QR code to move it to the new address. |
 | This phone is no longer paired | It was removed on the computer; pair again. |
 | Pairing failed / expired | Show a new QR code; each one works once for 5 minutes. |
 
