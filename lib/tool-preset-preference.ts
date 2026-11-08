@@ -33,6 +33,25 @@ export function getPreferredToolPreset(
   }
 }
 
+/**
+ * Whether the user ever picked a preset in the dropdown.
+ *
+ * `getPreferredToolPreset()` cannot tell "explicitly chose configured" from
+ * "never chose" — both read as CONFIGURED_TOOL_PRESET. New chats must start on
+ * `DEFAULT_NEW_SESSION_TOOL_PRESET` only for users who never chose (需求3),
+ * while an explicit pick — configured included — keeps winning.
+ */
+export function hasExplicitToolPresetChoice(
+  storage: StorageLike | null = getBrowserStorage(),
+): boolean {
+  if (!storage) return false;
+  try {
+    return isToolPreset(storage.getItem(STORAGE_KEY));
+  } catch {
+    return false;
+  }
+}
+
 export function setPreferredToolPreset(
   preset: ToolPreset,
   storage: StorageLike | null = getBrowserStorage(),

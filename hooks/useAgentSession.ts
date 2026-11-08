@@ -25,8 +25,8 @@ import {
   setSessionViewSnapshot,
 } from "@/lib/session-view-cache";
 import { clearDraft, getDraft, rekeyDraft, restoreDraftSubmission } from "@/lib/draft-store";
-import { getPreferredToolPreset, setPreferredToolPreset } from "@/lib/tool-preset-preference";
-import { CONFIGURED_TOOL_PRESET, getPresetFromToolNames, getToolNamesForPreset, type ToolEntry, type ToolPreset } from "@/lib/tool-presets";
+import { getPreferredToolPreset, hasExplicitToolPresetChoice, setPreferredToolPreset } from "@/lib/tool-preset-preference";
+import { CONFIGURED_TOOL_PRESET, DEFAULT_NEW_SESSION_TOOL_PRESET, getPresetFromToolNames, getToolNamesForPreset, type ToolEntry, type ToolPreset } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import { mergeSessionStats, type SessionFileStats } from "@/lib/session-stats";
 import { userMessageKey } from "@/lib/prompt-recovery";
@@ -388,8 +388,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [modelThinkingLevelMaps, setModelThinkingLevelMaps] = useState<Record<string, Record<string, string | null>>>({});
   const [newSessionModel, setNewSessionModel] = useState<SelectedModel | null>(null);
   const [newSessionDefaultModel, setNewSessionDefaultModel] = useState<SelectedModel | null>(null);
+  // First-paint value only: the layout effect below replaces it with the
+  // user's stored pick, or DEFAULT_NEW_SESSION_TOOL_PRESET when they never
+  // chose one (需求3). Chats keep "none" — their policy owns the loadout.
   const [toolPreset, setToolPreset] = useState<ToolPreset>(
-    chatWorkspace ? "none" : CONFIGURED_TOOL_PRESET,
+    chatWorkspace ? "none" : DEFAULT_NEW_SESSION_TOOL_PRESET,
   );
   const [newSessionThinkingLevel, setNewSessionThinkingLevel] = useState<ConcreteThinkingLevel | null>(null);
   const [newSessionDefaultThinkingLevel, setNewSessionDefaultThinkingLevel] = useState<ConcreteThinkingLevel | null>(null);
@@ -441,7 +444,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // follows settings.json defaultTools and the picker must say so rather than
   // labelling it with whichever preset the resolved tools happen to match.
   const sessionToolsPinnedRef = useRef(false);
-  const toolPresetRef = useRef<ToolPreset>(chatWorkspace ? "none" : CONFIGURED_TOOL_PRESET);
+  const toolPresetRef = useRef<ToolPreset>(chatWorkspace ? "none" : DEFAULT_NEW_SESSION_TOOL_PRESET);
   const agentRunningRef = useRef(false);
   const sdkAgentActiveRef = useRef(false);
   const rpcPromptPendingRef = useRef(false);
@@ -538,7 +541,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       return;
     }
     if (!existingSessionId && (!isNew || sessionIdRef.current)) return;
-    setToolPresetState(getPreferredToolPreset());
+    // An explicit pick — configured included — always wins (硬要求: 已选用户
+    // 行为不变). Only users who never chose get the new-chat default of "full"
+    // (需求3: 对话默认全量工具，含 MCP/扩展).
+    const preferred = getPreferredToolPreset();
+    setToolPresetState(
+      preferred === CONFIGURED_TOOL_PRESET && !hasExplicitToolPresetChoice()
+        ? DEFAULT_NEW_SESSION_TOOL_PRESET
+        : preferred,
+    );
   }, [chatWorkspace, existingSessionId, isNew, setToolPresetState]);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {

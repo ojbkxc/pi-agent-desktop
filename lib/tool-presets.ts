@@ -25,7 +25,24 @@ export type ToolPreset = typeof TOOL_PRESET_VALUES[number];
 export const PRESET_NONE: string[] = [];
 export const PRESET_READ_ONLY: string[] = ["read", "grep", "find", "ls"];
 export const PRESET_DEFAULT: string[] = ["read", "bash", "edit", "write"];
+/** The built-in tool names "full" covers. Parsing/normalization only — see PRESET_FULL_MODIFIERS. */
 export const PRESET_FULL: string[] = ["bash", "read", "edit", "write", "grep", "find", "ls"];
+
+/**
+ * "full" sent to the SDK as `+name` modifiers (需求3): force every built-in tool
+ * open *on top of* settings.json defaultTools instead of pinning the session to
+ * this allowlist. The old whitelist form switched every tool outside the list
+ * off, so newly installed MCP/extension tools came up dead until re-pinned;
+ * modifier entries leave them to the SDK's registration rule
+ * (`_isActivatedOnRegistration`, defaultActive !== false), which keeps them
+ * active by default. #700's "never snapshot a tool list" core survives; what it
+ * chose as the default (configured = follow defaultTools) is superseded by the
+ * user's call that a new chat starts with everything on.
+ */
+export const PRESET_FULL_MODIFIERS: readonly string[] = PRESET_FULL.map((name) => `+${name}`);
+
+/** New chats start with everything on (需求3); chats follow settings via "configured". */
+export const DEFAULT_NEW_SESSION_TOOL_PRESET: ToolPreset = "full";
 
 const BUILTIN_TOOL_NAMES = new Set([...PRESET_FULL, "powershell"]);
 
@@ -62,6 +79,6 @@ export function getToolNamesForPreset(preset: ToolPreset): string[] | undefined 
   if (preset === CONFIGURED_TOOL_PRESET) return undefined;
   if (preset === "none") return [...PRESET_NONE];
   if (preset === "read-only") return [...PRESET_READ_ONLY];
-  if (preset === "full") return [...PRESET_FULL];
+  if (preset === "full") return [...PRESET_FULL_MODIFIERS];
   return [...PRESET_DEFAULT];
 }

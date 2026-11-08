@@ -29,9 +29,21 @@ function parseToolSelectionData(data: unknown): string[] | typeof CLEARED | unde
   if (candidate.cleared === true) return CLEARED;
   if (
     !Array.isArray(candidate.tools)
-    || candidate.tools.some((tool) => typeof tool !== "string" || !BUILTIN_TOOL_NAMES.has(tool))
+    || candidate.tools.some((tool) => typeof tool !== "string" || !tool)
   ) return undefined;
-  return [...new Set(candidate.tools as string[])];
+  const tools = candidate.tools as string[];
+  // Two shapes, never mixed (mirrors the SDK's getToolListError): a bare-name
+  // allowlist, or `+name` modifiers that force built-ins open on top of
+  // settings.json defaultTools (需求3 "full"). A `+` name must be a built-in;
+  // MCP/extension tools cannot be pinned this way — the SDK activates them on
+  // registration, which is exactly the "no snapshot" behavior #700 asked for.
+  const bare = tools.every((tool) => BUILTIN_TOOL_NAMES.has(tool));
+  if (bare) return [...new Set(tools)];
+  const modifiers = tools.every(
+    (tool) => tool.startsWith("+") && BUILTIN_TOOL_NAMES.has(tool.slice(1)),
+  );
+  if (modifiers) return [...new Set(tools)];
+  return undefined;
 }
 
 /**
@@ -53,7 +65,7 @@ export function readSessionToolSelection(entries: readonly SessionEntry[]): stri
 export function validateSessionToolSelection(tools: unknown): string[] {
   const parsed = parseToolSelectionData({ version: 1, tools });
   if (parsed === undefined || parsed === CLEARED) {
-    throw new Error("toolNames must contain only built-in tool names");
+    throw new Error("toolNames must contain only built-in tool names (bare or +name modifiers)");
   }
   return parsed;
 }
