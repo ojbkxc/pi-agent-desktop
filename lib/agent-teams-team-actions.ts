@@ -29,6 +29,15 @@ export interface TeamActionMemberResult {
   /** stopped=本次停成功；already-stopped=本来就已停；failed=失败（含原因）。 */
   status: "stopped" | "already-stopped" | "failed";
   reason?: string;
+  /**
+   * 判停证据（v8 安全降级 B，如实透出）：
+   * - `receipt`            实例在：release 回执 parked + generation 前进；
+   * - `receipt+probe`      实例在：回执之后对会话真探未运行（reclaim 必走）；
+   * - `disk`               无实例：磁盘 config/lifecycle 有名无 sessionId（从未派发）；
+   * - `disk+probe`         无实例：磁盘旧态 + 会话真探未运行；
+   * - `disk+probe+stale-running` 无实例：磁盘残留 running 旧态 + 真探未运行（重启前旧账）。
+   */
+  evidence?: string;
 }
 
 export interface TeamActionResponse {
@@ -105,11 +114,15 @@ export interface TeamActionDeps {
    * 探测本身抛错 → 本模块**不当作已停**（见下），由调用方如实记 failed。
    */
   probeRunning: (sessionId: string) => Promise<boolean>;
-}
-
-/** 已停态：parked 与 aborted 都无需再停（aborted 是 tombstone）。 */
-function isStoppedStatus(status: string | undefined): boolean {
-  return status === "parked" || status === "aborted";
+  /**
+   * reclaim 删除前的路径边界验证（v4 §3，最后防线）。实现由 route 注入；
+   * 返回 null = 通过，返回字符串 = 拒绝原因（如实透出，绝不 rm）。
+   * 可选：不注入时跳过（旧单测兼容），route 必须注入。
+   *
+   * 四道守卫由实现方保证：config 重读 rawName 非空；realpath 后目录位于 teamsRootDir
+   * 直下；目录本体非 symlink/junction（lstat + realpath 双向比对）；只 rm 唯一目录。
+   */
+  validateTeamDirForRemoval?: (teamDirName: string) => Promise<string | null>;
 }
 
 /**
@@ -150,59 +163,26 @@ export async function runTeamLifecycleAction(
     return { ...base, ok: false, results: [], error: "团队配置缺少 name，无法定位生命周期实例" };
   }
 
-  // 2) 实例必须已存在：getLifecycle 会凭空创建，绝不能拿它当探测。
-  if (!deps.hasLifecycleInstance(rawTeamName)) {
-    return {
-      ...base,
-      ok: false,
-      results: members.map((member) => ({
-        memberId: member.agentId,
-        name: member.name,
-        status: "failed" as const,
-        reason: "生命周期实例不存在（团队未被本进程加载）",
-      })),
-      error: "生命周期实例不存在",
-    };
-  }
-
+  // 2) 实例分支（v4 §2）：实例在 → 走 release 全链；实例不在 → 磁盘 + probe 双证据，
+  //    不再直接 409（否则重启后盘上团队永远无法 reclaim）。两条路径都绝不裸 getLifecycle——
+  //    这里的 hasLifecycleInstance 只读 registry Map，无副作用。
+  //    hasInstanceAtEntry 是删除前双检的基准（入口快照），见 reclaim 段注释。
+  const hasInstanceAtEntry = deps.hasLifecycleInstance(rawTeamName);
   const lifecycle = await deps.readLifecycle(teamDirName);
   const results: TeamActionMemberResult[] = [];
 
-  // 3) 逐成员顺序停止 + 回执校验。
-  for (const member of members) {
-    const before = lifecycle[member.name];
-    if (isStoppedStatus(before?.status)) {
-      results.push({ memberId: member.agentId, name: member.name, status: "already-stopped" });
-      continue;
-    }
-
-    try {
-      const after = await deps.release(rawTeamName, member.name);
-      // 回执校验：release(tombstone:false) 必须把成员落到 parked，且代数前进；
-      // release 内部吞异常，只看「没抛错」会把静默失败报成成功。
-      const advanced = typeof before?.generation !== "number"
-        || typeof after.generation !== "number"
-        || after.generation > before.generation;
-      if (after.status !== "parked" || !advanced) {
-        results.push({
-          memberId: member.agentId,
-          name: member.name,
-          status: "failed",
-          reason: `停止回执异常（status=${after.status}${advanced ? "" : "，代数未前进"}）`,
-        });
-        continue;
-      }
-
-      // 回执只证明「pi-team 记了账（已 parked）」，**不证明会话真停了**：release 吞掉 host.stop
-      // 异常。reclaim 之后要删目录 + 清实例，若会话仍在跑就会造出无生命周期记录的孤儿会话。
-      // 故回执通过后再真探一次运行态。会话口径与上面一致：lifecycle 条目优先，回退 config 名册。
-      const sessionId = after.sessionId ?? before?.sessionId ?? member.sessionId;
+  if (!hasInstanceAtEntry) {
+    // ── 无实例分支：跳过 release。判停依据 = 磁盘 lifecycle.json 旧态（任意状态均可，
+    //    running 视为重启前旧账）+ 会话真探（probe=false 才判停；抛错/true 拒删）。
+    for (const member of members) {
+      const entry = lifecycle[member.name];
+      const sessionId = entry?.sessionId ?? member.sessionId;
       if (sessionId) {
         let running: boolean;
         try {
           running = await deps.probeRunning(sessionId);
         } catch (error) {
-          // 探测抛错**不当作已停**——不能因为「探不到」就宣称停成功。
+          // 探测抛错不当作已停——不能因为「探不到」就宣称停成功。
           results.push({
             memberId: member.agentId,
             name: member.name,
@@ -216,27 +196,131 @@ export async function runTeamLifecycleAction(
             memberId: member.agentId,
             name: member.name,
             status: "failed",
-            reason: `release 回执已置 parked，但会话仍在运行（sessionId=${sessionId}）`,
+            reason: `会话仍在运行（sessionId=${sessionId}），不能回收`,
           });
           continue;
         }
+        results.push({
+          memberId: member.agentId,
+          name: member.name,
+          status: "already-stopped",
+          evidence: entry?.status === "running" ? "disk+probe+stale-running" : "disk+probe",
+        });
+        continue;
       }
-
-      results.push({ memberId: member.agentId, name: member.name, status: "stopped" });
-    } catch (error) {
+      // 有名册无 sessionId 且无 lifecycle 条目 = 从未派发过，磁盘即全部证据。
       results.push({
         memberId: member.agentId,
         name: member.name,
-        status: "failed",
-        reason: error instanceof Error ? error.message : String(error),
+        status: "already-stopped",
+        evidence: "disk",
       });
+    }
+  } else {
+    // ── 实例在：既有全链（release → 回执校验 → reclaim 真探）。逐成员顺序处理。
+    // 显式动作的强制语义（v4 §1b + v8 收口）：对**每个**成员都执行 release，
+    // 账面 parked/aborted 只是旧账，不证明用户本次「强制停止」已执行——跳过它们
+    // 会把「旧账 parked、实际仍 running」的状态谎报成 already-stopped。
+    // 可重复性证据（pi-team teamLifecycle.js）：release 先 #apply（对已在表里的
+    // parked/aborted 条目照样更新、generation 无条件 +1）再吞异常调 host.stop——
+    // 对任何账面状态都正常 resolve，重复 release 安全。
+    for (const member of members) {
+      const before = lifecycle[member.name];
+
+      try {
+        const after = await deps.release(rawTeamName, member.name);
+        // 回执校验：release(tombstone:false) 必须把成员落到 parked，且代数前进；
+        // release 内部吞异常，只看「没抛错」会把静默失败报成成功。
+        const advanced = typeof before?.generation !== "number"
+          || typeof after.generation !== "number"
+          || after.generation > before.generation;
+        if (after.status !== "parked" || !advanced) {
+          results.push({
+            memberId: member.agentId,
+            name: member.name,
+            status: "failed",
+            reason: `停止回执异常（status=${after.status}${advanced ? "" : "，代数未前进"}）`,
+          });
+          continue;
+        }
+
+        // 回执只证明「pi-team 记了账（已 parked）」，**不证明会话真停了**：release 吞掉 host.stop
+        // 异常。reclaim 之后要删目录 + 清实例，若会话仍在跑就会造出无生命周期记录的孤儿会话。
+        // 故回执通过后再真探一次运行态。会话口径与上面一致：lifecycle 条目优先，回退 config 名册。
+        const sessionId = after.sessionId ?? before?.sessionId ?? member.sessionId;
+        if (sessionId) {
+          let running: boolean;
+          try {
+            running = await deps.probeRunning(sessionId);
+          } catch (error) {
+            // 探测抛错**不当作已停**——不能因为「探不到」就宣称停成功。
+            results.push({
+              memberId: member.agentId,
+              name: member.name,
+              status: "failed",
+              reason: `无法确认会话是否已停（探测会话运行态出错）：${error instanceof Error ? error.message : String(error)}`,
+            });
+            continue;
+          }
+          if (running) {
+            results.push({
+              memberId: member.agentId,
+              name: member.name,
+              status: "failed",
+              reason: `release 回执已置 parked，但会话仍在运行（sessionId=${sessionId}）`,
+            });
+            continue;
+          }
+        }
+
+        results.push({
+          memberId: member.agentId,
+          name: member.name,
+          status: "stopped",
+          ...(sessionId ? { evidence: "receipt+probe" as const } : { evidence: "receipt" as const }),
+        });
+      } catch (error) {
+        results.push({
+          memberId: member.agentId,
+          name: member.name,
+          status: "failed",
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 
   const ok = results.every((result) => result.status !== "failed");
 
   // 4) 仅 reclaim 且全部成功才删目录——不可逆操作，任一失败都不动它。
+  //    删除前两道最后防线（v4 §2 双检 + §3 路径边界），任一未过 ⇒ 拒删、如实报错。
   if (action === "reclaim" && ok) {
+    // 删除前双检——**必须与入口快照比较，不可一律拒**：
+    // - 入口走 release 分支（实例在）：release 只置 parked、不清 registry，删除前实例
+    //   仍然存在是**正常状态**，据此拒删会让有实例的 reclaim 永远失败；
+    // - 入口走磁盘+probe 分支（实例不在）：判停至今的窗口内出现实例 = 有人复活/新建了
+    //   团队，「全员已停」的结论随新实例作废，必须拒删并如实报错。
+    if (!hasInstanceAtEntry && deps.hasLifecycleInstance(rawTeamName)) {
+      return {
+        ...base,
+        ok: false,
+        results,
+        error: "删除前检测到团队生命周期实例重新出现（入口时不存在，可能已被复活或新建），未删除目录",
+      };
+    }
+    // 路径边界验证：realpath 直下断言、非 symlink/junction、config 重读 rawName 非空。
+    if (deps.validateTeamDirForRemoval) {
+      const rejection = await deps.validateTeamDirForRemoval(teamDirName);
+      if (rejection) {
+        return {
+          ...base,
+          ok: false,
+          results,
+          error: `路径边界验证未通过，未删除目录：${rejection}`,
+        };
+      }
+    }
+
     try {
       await deps.removeTeamDir(teamDirName);
     } catch (error) {

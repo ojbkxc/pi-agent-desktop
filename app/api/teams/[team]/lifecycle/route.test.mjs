@@ -76,8 +76,17 @@ async function setup(t, { rawName = RAW_NAME, members, lifecycleEntries = {}, in
   }));
 
   const lifecycle = fakeLifecycle();
-  lifecycle.entries.set("impl", { name: "impl", status: "idle", generation: 1 });
-  lifecycle.entries.set("qa", { name: "qa", status: "running", generation: 2 });
+  // 假实例的 entries 必须与磁盘 lifecycle.json 同源（真实 pi-team 的 registry 条目
+  // 就是从磁盘装载的同一份账）：release 回执校验比较的 before 是磁盘读数，假实例
+  // 脱节会让「代数前进」比较两套账，永远对不上。
+  if (Object.keys(lifecycleEntries).length > 0) {
+    for (const [name, entry] of Object.entries(lifecycleEntries)) {
+      lifecycle.entries.set(name, { ...entry });
+    }
+  } else {
+    lifecycle.entries.set("impl", { name: "impl", status: "idle", generation: 1 });
+    lifecycle.entries.set("qa", { name: "qa", status: "running", generation: 2 });
+  }
   globalThis.__piTeamLifecycles = new Map(instance ? [[rawName, lifecycle]] : []);
 
   return { root, dir, lifecycle };
@@ -119,26 +128,27 @@ test("registry key 用 config.name：拿目录名当 key 不会有实例 → 409
   const res = await post({ action: "stop" }, DIR_NAME);
   assert.equal(res.status, 200, "正常路径：路由按原始名找到了实例");
 
-  // 反向验证：把实例注册到目录名下（错误做法）→ 按原始名查不到，必须失败。
+  // 反向验证：把实例注册到目录名下（错误做法）→ 按原始名查不到。v8 契约下
+  // 走磁盘+probe 分支（真 rpc-manager 无这些会话 → probe=false），绝不假探错 key。
   const wrong = fakeLifecycle();
   globalThis.__piTeamLifecycles = new Map([[DIR_NAME, wrong]]);
   const bad = await post({ action: "stop" });
-  assert.equal(bad.status, 409, "实例不存在时不得返回成功");
+  assert.equal(bad.status, 200, "无实例走磁盘+probe 分支（v4 §2），不再 409");
   const body = await bad.json();
-  assert.equal(body.ok, false);
-  assert.match(body.error, /生命周期实例不存在/);
+  assert.equal(body.ok, true);
+  assert.deepEqual(body.results.map((r) => r.evidence), ["disk", "disk"], "成员有名无 sessionId，纯磁盘证据");
   assert.equal(wrong.calls.length, 0, "不会去动错 key 下的实例");
 });
 
-test("生命周期实例完全不存在：409、全员 failed、目录保留", async (t) => {
+test("T1d route 层：实例完全不存在 → 磁盘+probe 判停，reclaim 删目录（重启后不再死锁）", async (t) => {
   const { dir } = await setup(t, { instance: false });
   const res = await post({ action: "reclaim" });
-  assert.equal(res.status, 409);
+  assert.equal(res.status, 200);
   const body = await res.json();
-  assert.equal(body.ok, false);
-  assert.equal(body.removed, false);
-  assert.deepEqual(body.results.map((r) => r.status), ["failed", "failed"]);
-  assert.ok((await readdir(dir)).includes("config.json"), "目录必须保留");
+  assert.equal(body.ok, true);
+  assert.equal(body.removed, true);
+  assert.deepEqual(body.results.map((r) => r.evidence), ["disk", "disk"]);
+  assert.deepEqual(await readdir(dir).catch(() => []), [], "目录已删");
 });
 
 test("团队不存在：404", async (t) => {
@@ -192,7 +202,7 @@ test("release 静默失败（status 未落到 parked）：409，不认成功", a
   assert.match(impl.reason, /回执异常/);
 });
 
-test("已 parked 成员：already-stopped，不调用 release", async (t) => {
+test("T2 route 层：parked 旧账不跳过 release——显式 stop 对全员执行全链", async (t) => {
   const { lifecycle } = await setup(t, {
     lifecycleEntries: { qa: { name: "qa", status: "parked", generation: 5 } },
   });
@@ -200,8 +210,8 @@ test("已 parked 成员：already-stopped，不调用 release", async (t) => {
   assert.equal(res.status, 200);
   const body = await res.json();
   const byName = Object.fromEntries(body.results.map((r) => [r.name, r]));
-  assert.equal(byName.qa.status, "already-stopped");
-  assert.deepEqual(lifecycle.calls.map((call) => call.name), ["impl"], "已停成员不重复 release");
+  assert.equal(byName.qa.status, "stopped", "parked 旧账成员也被强制 release（v4 §1b）");
+  assert.deepEqual(lifecycle.calls.map((call) => call.name), ["impl", "qa"], "全员 release");
 });
 
 // ── reclaim ────────────────────────────────────────────────────────────────────

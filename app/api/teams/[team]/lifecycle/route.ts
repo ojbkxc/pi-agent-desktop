@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
+import { lstat, realpath } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { getLifecycle, resolveTeamHost } from "pi-team";
-import { teamDirFor } from "@/lib/agent-teams-swimlane-store";
+import { enqueueTeamMutation, teamDirFor, teamsRootDir } from "@/lib/agent-teams-swimlane-store";
 import {
   readTeamConfig,
   readLifecycleSnapshot,
@@ -78,6 +80,35 @@ function dropTeamInstances(rawTeamName: string): TeamInstanceCleanup {
   return result;
 }
 
+/**
+ * reclaim 删除前的路径边界验证（v4 §3，最后防线）。四道守卫：
+ * 1. lstat 本体存在且为目录（不跟链接，symlink 在此暴露）；
+ * 2. realpath 双向比对（junction/重解析点解析后逃出 root 或改名都会被拦）；
+ * 3. config 重读成功且 rawName 非空（损坏的 config 不能导向「清别的目录」）；
+ * 4. 只 rm join(root, dirName) 唯一路径（removeTeamDirectory 的调用形态即此）。
+ * 任一失败 ⇒ 返回原因，绝不 rm。
+ */
+async function validateTeamDirForRemoval(teamDirName: string): Promise<string | null> {
+  const root = teamsRootDir();
+  const target = join(root, teamDirName);
+
+  const info = await lstat(target).catch(() => null);
+  if (!info) return "目标目录不存在";
+  if (info.isSymbolicLink()) return "团队目录是符号链接，拒绝删除";
+  if (!info.isDirectory()) return "团队目录不是目录本体";
+
+  const [realTarget, realRoot] = await Promise.all([realpath(target), realpath(root)]);
+  if (dirname(realTarget) !== realRoot) return "realpath 后不在团队根目录直下";
+  if (basename(realTarget).toLowerCase() !== teamDirName.toLowerCase()) {
+    return "realpath 与目录名不一致（疑似链接或重解析点）";
+  }
+
+  const config = await readTeamConfig(teamDirName, teamDirFor);
+  if (!config) return "config.json 重读失败（团队不存在或已损坏）";
+  if (!config.rawName) return "config.json 缺少 name，无法确认团队身份";
+  return null;
+}
+
 const deps: TeamActionDeps = {
   readTeamConfig: (teamDirName) => readTeamConfig(teamDirName, teamDirFor),
   readLifecycle: (teamDirName) => readLifecycleSnapshot(teamDirName, teamDirFor),
@@ -89,6 +120,7 @@ const deps: TeamActionDeps = {
     return await lifecycle.release(memberName, { tombstone: false });
   },
   removeTeamDir: (teamDirName) => removeTeamDirectory(teamDirName, teamDirFor),
+  validateTeamDirForRemoval,
   dropInstances: (rawTeamName) => Promise.resolve(dropTeamInstances(rawTeamName)),
   async probeRunning(sessionId: string): Promise<boolean> {
     // 惰性 import：lib/rpc-manager 会拖进 pi SDK，不能在纯模块里静态引入。
@@ -121,7 +153,12 @@ export async function POST(
   }
 
   const teamDirName = decodeURIComponent(team);
-  const result = await runTeamLifecycleAction(deps, { teamDirName, action });
+  // 共享 per-team mutation queue（v4 §5）：stop/reclaim 与 #54 的成员增删/改派
+  // 同 key 严格串行——reclaim 的 rm 目录不能与「加人写 config.json」竞态。
+  // 队列 key 用目录名；runTeamLifecycleAction 内部绝不再调同 key helper（防重入）。
+  const result = await enqueueTeamMutation(`team:${teamDirFor(teamDirName)}`, () =>
+    runTeamLifecycleAction(deps, { teamDirName, action }),
+  );
 
   // 团队不存在 → 404；其余失败（实例不在、成员停止失败）→ 409，逐条 results 如实带出。
   const status = result.error === "团队不存在" ? 404 : result.ok ? 200 : 409;
