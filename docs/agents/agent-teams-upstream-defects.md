@@ -124,6 +124,30 @@ pi-team 版本 **0.2.0**（`node_modules/pi-team/package.json`）；pi-team 升�
   或 state**，不能只看是否报错。根治方向：pi-team 在返回值/结构化字段里显式区分
   `alreadyApplied`，而不是靠文本。
 
+### A9. 复活成功后，触发复活的那条消息不自动唤醒投递（#需求4 核验发现，2026-11-08）
+
+- **现象**：parked/aborted 成员被 `team_message` 复活（`#revive` 成功）后，触发复活的那条
+  消息**只有落盘邮箱、不自动唤醒投递**。回执文案却是「已触发复活**并入队**」——
+  「入队」实际指邮箱队列，不是「将立即送达」。
+- **复现路径**：成员处于 parked → lead 对它发 `team_message` → bus 的 parked 分支
+  revive 成功 → 回执 `revived` → 成员先续跑旧任务；新消息要等它**下一次 wake**
+  （成员发进度、完成回执等任一 bus 唤醒点）才随 `#flush` 全量送达。成员复活后
+  若无任何主动 bus 活动，消息就滞留邮箱。
+- **证据**（pi-team 0.2.0）：`node_modules/pi-team/dist/teamBus.js:160-165`——parked 分支
+  `const revived = await this.#revive(options.to); outcome = revived ? 'revived' : 'buffered';`
+  **不调 `#scheduleWake`**；对比同函数的 running 分支（`:166-175`）两条路（人类优先立即
+  `#flush`、否则 `#scheduleWake`）。回执文案在 `teamTools.js:195`
+  （`revived: '收件人此前挂起/被杀，已触发复活并入队'`）。
+- **影响 + 修复方向**：lead 把回执里的「入队」误解为「已送达」，新指令晚一步；成员复活后
+  先按默认任务续跑旧工作、新指令晚到，可能出现一小段方向不一致的浪费。根治需 pi-team：
+  parked 分支 revive 成功后补一次 `#scheduleWake(to, 新 sessionId)`（或复用人类优先槽语义
+  立即 `#flush`）。宿主侧（pi-agent-desktop）在不 patch node_modules 的前提下**无可靠
+  workaround**：bus 的 pending 唤醒表、邮箱 claim、静默窗口都是包内私有状态，宿主桥
+  （`lib/pi-team-host.ts`）只能看到 `wake({sessionId,text})` 一个注入口——宿主在 revive
+  后自行 `wake` 一条「你有未读邮件，请先查收」的合成消息理论可行，但它抢在真消息的
+  `#flush` 之前只送提示不送正文，还得自造 claim 时机，复杂度与「让成员下次 wake 全量
+  取信」相同且有重复投递风险，判定不做，等上游补。
+
 ---
 
 ## 二、宿主 ↔ 扩展契约缺口（桌面侧能绕 / 能补）
