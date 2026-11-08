@@ -684,6 +684,12 @@ function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
   const ext = getFileName(filePath).toLowerCase().split(".").pop() ?? "";
 
   useEffect(() => {
+    // d5-37（审读结论：非缺陷，注释固化）：`!watchEnabled` 早退跳过了下面的复位，
+    // 但残留 state 在任何可达路径上都不可见——文件/标签切换必经 AppShell 的
+    // key（tab id + viewerRevision）整组件重挂载，state 天然全新；唯一不换 key
+    // 的外部变化是面板开关（watchEnabled 翻转），而 false→true 重跑本 effect
+    // 会穿过复位段，true→false 时面板本就不可见且 cleanup 已把 ES 清掉。与
+    // ImageViewer/VideoViewer 的「无条件复位」只是写法差异，不是行为差异。
     if (!watchEnabled) return;
     setBust(0);
     setSize(null);
@@ -955,6 +961,8 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, initialPage, watchEnab
     : getFileApiUrl(filePath, "preview", sourceSessionId, bust ? { v: bust } : undefined);
 
   useEffect(() => {
+    // d5-37（同 AudioViewer 的审读结论：非缺陷，注释固化——重挂载 key 使残留
+    // state 不可达，见上）。
     if (!watchEnabled) return;
     setBust(0);
     setSize(null);
