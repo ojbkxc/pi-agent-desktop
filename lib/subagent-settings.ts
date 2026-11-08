@@ -77,7 +77,11 @@ export function readSubagentSettings(
 ): SubagentSettings {
   const stored = readStoredSettings(settingsPath);
   return settingsValue(
-    stored.builtInEnabled === true,
+    // Missing key / missing file default to ON: delegation is the shipped
+    // behavior the UI guide promises (《Pi Agent 使用指南》: 复杂任务自动派发),
+    // and a fresh install has no settings file. An explicit `false` is still
+    // respected; anything else the file might hold counts as no decision.
+    stored.builtInEnabled !== false,
     readMaxConcurrent(stored.maxConcurrent),
     readDisabledBuiltIns(stored.disabledBuiltIns),
   );
@@ -86,9 +90,11 @@ export function readSubagentSettings(
 /**
  * Lowercased names of the built-in profiles switched off.
  *
- * Damaged settings fail *open* here, unlike `isBuiltInSubagentsEnabled`: an
- * unreadable file must not make built-in profiles vanish from the Agents panel,
- * and the feature switch it also holds has already failed closed by then.
+ * Damaged settings fail *open*, now for both reads: an unreadable file must
+ * not make the built-in profiles vanish from the Agents panel, and — since
+ * the delegation default moved to on — must not silently strip the
+ * delegation tools either. The user can re-open the panel and turn the
+ * feature off again; a silent "off" would look like the feature broke.
  */
 export function disabledBuiltInSubagents(
   settingsPath = getSubagentSettingsPath(),
@@ -106,7 +112,10 @@ export function isBuiltInSubagentsEnabled(
   try {
     return readSubagentSettings(settingsPath).builtInEnabled;
   } catch {
-    return false;
+    // Fail open, matching `disabledBuiltInSubagents`: a damaged file must not
+    // hide the feature. An explicit `builtInEnabled: false` still survives —
+    // only a file that cannot be parsed at all lands here.
+    return true;
   }
 }
 
