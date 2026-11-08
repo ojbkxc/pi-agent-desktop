@@ -80,6 +80,8 @@ type StoredSubagentExecution = {
   run: SubagentRunInfo;
   completion: Promise<SubagentRunInfo>;
   abortRequested: boolean;
+  /** 「排队中取消」的句柄（parent abort / subagent abort 工具依赖）：queued 态取消入队的执行。 */
+  cancelQueued?: () => boolean;
   /**
    * D3-1：true 表示生命周期代码（排队/执行）仍在管理该条目。execute 与
    * finishQueuedAbort 的兜底 finally 在任何退出路径上都置 false 并删表；get() 把
