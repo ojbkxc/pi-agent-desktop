@@ -367,12 +367,14 @@ export function resolveActiveToolNames(
   // silently drop every entry and leave the session with no coding tools at all.
   // A pure-modifier list instead forces tools open/closed on top of defaultTools,
   // exactly what the SDK does with the `tools` option (sdk.js applyToolModifiers).
-  const selectedToolNames = allModifiers
-    ? resolveDefaultToolEntries([...requested]).filter((name) => codingToolNames.has(name))
-    : resolveShellTools(
-      requested.filter((name) => codingToolNames.has(name)),
-      defaultTools,
-    );
+  // Both branches go through resolveShellTools so the PowerShell setting swaps the
+  // shell tool for the modifier form too — read-only/default already did (#44②).
+  const selectedToolNames = resolveShellTools(
+    allModifiers
+      ? resolveDefaultToolEntries([...requested]).filter((name) => codingToolNames.has(name))
+      : requested.filter((name) => codingToolNames.has(name)),
+    defaultTools,
+  );
   const carriedToolNames = carry.filter((name) => {
     const tool = registered.get(name);
     return tool !== undefined && !codingToolNames.has(name) && tool.exposure !== "hidden";
@@ -1534,7 +1536,10 @@ export class AgentSessionWrapper {
         if (this.chatWorkspace || this.chatUnlocked) {
           throw new Error("Chats have no tools. Open a project to change the tool preset.");
         }
-        const toolNames = command.toolNames as string[];
+        // Same gate as the other two entries (startRpcSession / setRpcSessionTools):
+        // a mixed bare+modifier list must be rejected, not silently stripped down
+        // to its bare names with every modifier dropped.
+        const toolNames = validateSessionToolSelection(command.toolNames);
         this.setActiveToolSelection(toolNames);
         return null;
       }
