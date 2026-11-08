@@ -15,11 +15,26 @@ const FORBIDDEN_FIRST_SEGMENTS = new Set(["api", "login", "__shell"]);
 
 export function safeAppPath(path: unknown): string {
   if (typeof path !== "string" || path === "" || path.includes("\\")) return "/";
+  // WHATWG URL parsing strips ASCII tab/LF/CR from anywhere in the input, so
+  // "/ap\ni/…" reaches the server as "/api/…" — the exact framed-GET
+  // escalation this function exists to prevent (iframe src, 302 redirects and
+  // SW fetches all go through URL parsing). Any other C0 control or DEL is
+  // equally foreign to a plain route path. Never try to normalize: a guard
+  // that guesses what the browser will request eventually guesses wrong.
+  if (/[\u0000-\u001f\u007f]/.test(path)) return "/";
   if (!path.startsWith("/") || path.startsWith("//")) return "/";
-  // Encoded separators, encoded dots, and traversal never name an app page;
-  // normalizing them away would only make the check lie about what gets framed.
-  if (/%2f|%2e/i.test(path) || /(^|\/)\.\.?(\/|$)/.test(path)) return "/";
-  const first = path.slice(1).split(/[/?]/, 1)[0] ?? "";
+  // Encoded bytes in the path portion never name an app route — routes and
+  // session ids are plain text, and Next decodes the pathname before matching,
+  // so "%61pi" would arrive as "/api". Only query values (a leafId, a search
+  // term) legitimately carry %XX, so the check stops at the first "?".
+  // Encoded separators, encoded dots, and traversal never name an app page
+  // either; normalizing them away would only make the check lie about what
+  // gets framed.
+  const queryStart = path.indexOf("?");
+  const pathPart = queryStart === -1 ? path : path.slice(0, queryStart);
+  if (/%[0-9a-f]{2}/i.test(pathPart)) return "/";
+  if (/(^|\/)\.\.?(\/|$)/.test(pathPart)) return "/";
+  const first = pathPart.slice(1).split("/", 1)[0] ?? "";
   if (first.includes(".") || FORBIDDEN_FIRST_SEGMENTS.has(first.toLowerCase())) return "/";
   return path;
 }
