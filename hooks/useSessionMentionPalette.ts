@@ -26,6 +26,9 @@ export function useSessionMentionPalette({ cwd, value, setValue, setAtQuery, tex
   const [sessionIndex, setSessionIndex] = useState<{ entries: SessionMentionEntry[]; fetchedAt: number } | null>(null);
   const hashItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const sessionIndexFetchingRef = useRef(false);
+  // d5-26：仅卸载置位的守卫——不能用 effect cleanup 的 cancelled 标志，那会随
+  // hashQuery 每次键入变化把仍然想要的索引 fetch 误判为过期（索引本就跨查询复用）。
+  const disposedRef = useRef(false);
   // Visible mention name -> session id, resolved into the message on send.
   const sessionMentionTargetsRef = useRef(new Map<string, string>());
 
@@ -70,6 +73,8 @@ export function useSessionMentionPalette({ cwd, value, setValue, setAtQuery, tex
         return res.json() as Promise<{ sessions?: SessionInfo[] }>;
       })
       .then((data) => {
+        // d5-26：卸载后不再 setState（组件已死的迟到响应无人消费还触发 React 警告）。
+        if (disposedRef.current) return;
         const entries = (data.sessions ?? []).map((session): SessionMentionEntry => ({
           kind: "session",
           id: session.id,
@@ -80,11 +85,18 @@ export function useSessionMentionPalette({ cwd, value, setValue, setAtQuery, tex
         }));
         setSessionIndex({ entries, fetchedAt: Date.now() });
       })
-      .catch(() => {})
+      .catch(() => {
+        // d5-26：索引失败保持静默——下一次键入 hashQuery 变化会重试（原判定已核实）。
+      })
       .finally(() => {
         sessionIndexFetchingRef.current = false;
       });
   }, [hashQuery, cwd, sessionIndex]);
+
+  useEffect(() => () => {
+    // d5-26：卸载标记（仅卸载，不随依赖变化置位，理由见上）。
+    disposedRef.current = true;
+  }, []);
 
   const applyHashCompletion = useCallback((entry: SessionMentionEntry) => {
     if (!hashQuery) return;
