@@ -548,6 +548,7 @@ function PackageDetail({
   updateStatus,
   checkingUpdate,
   updateError,
+  bulkRunning,
   onAction,
   onCheckUpdate,
   onReloadSession,
