@@ -181,7 +181,7 @@ npm run relay:shell           # → relay-shell/dist/
 
 | 检查 | 命令 | 结果 |
 |---|---|---|
-| 手机壳可构建 | `npm run relay:shell` | 成功，产物 `relay-shell/dist/`（94 KB，含 `__shell/shell.js`、`tunnel-sw.js`、manifest、图标）✓ |
+| 手机壳可构建 | `npm run relay:shell` | 成功，产物 `relay-shell/dist/`（含 `__shell/shell-<build>.js`（内容 hash 命名）、`tunnel-sw.js`、manifest、图标）✓ |
 | relay 服务端单测 | `cd relay && node --test server.test.mjs` | 16/16 通过 ✓ |
 
 （无法本地验证的：真实服务器 + 域名 + Caddy 发证书 + Docker 构建 + 真机 iPhone —— 需要你操作。）

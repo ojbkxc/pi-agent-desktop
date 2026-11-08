@@ -38,6 +38,7 @@ test("owner-authority GET endpoints and shell files are never framed", () => {
     "/login?next=/",
     "/__shell/",
     "/__shell/shell.js",
+    "/__shell/shell-0123456789ab.js",
     "/tunnel-sw.js",
     "/favicon.ico",
   ]) {

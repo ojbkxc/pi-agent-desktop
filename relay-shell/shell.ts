@@ -12,6 +12,16 @@ const DB_NAME = "pi-relay";
 const STORE = "config";
 const KEY = "phone";
 
+/**
+ * The build id stamped by scripts/build-relay-shell.mjs (second pass, define).
+ * A hand-run bundle or an unbuilt import has no define and falls back to
+ * "dev". Printed once so a deployment can be checked from the phone's
+ * devtools console against the file name served at /__shell/ (deploy docs:
+ * "verify the shell version").
+ */
+declare const __SHELL_BUILD__: string;
+const SHELL_BUILD: string = typeof __SHELL_BUILD__ === "string" ? __SHELL_BUILD__ : "dev";
+
 interface StoredConfig {
   relayUrl: string;
   agentId: string;
@@ -87,7 +97,10 @@ async function canKeepCryptoKeys(): Promise<boolean> {
 }
 
 function show(screen: "pair" | "unpaired" | "app" | "message", text?: string): void {
-  for (const id of ["pair", "unpaired", "app", "message"]) $(`screen-${id}`).hidden = id !== screen;
+  // "boot" is the one screen index.html shows by itself; it stays up while
+  // shell.js loads and goes away the moment any real screen takes over. If
+  // shell.js never runs, boot keeps saying so instead of a silent blank page.
+  for (const id of ["boot", "pair", "unpaired", "app", "message"]) $(`screen-${id}`).hidden = id !== screen;
   if (text !== undefined) $("message-text").textContent = text;
 }
 
@@ -336,6 +349,9 @@ $("reconnect-button").addEventListener("click", () => {
 });
 
 async function main(): Promise<void> {
+  // Deployment check (deploy docs: "verify the shell version"): the console
+  // line must match the shell-<id>.js file the entry host serves.
+  console.info(`[pi-shell] build ${SHELL_BUILD}`);
   // Framed by another page: refuse (no frame-ancestors from a static host's meta tags).
   if (window.top !== window.self) {
     document.body.textContent = "Pi cannot run inside another page.";

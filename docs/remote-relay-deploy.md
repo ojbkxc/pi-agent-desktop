@@ -57,6 +57,15 @@ Use a dedicated host name at the origin root.
 
 Rebuild and re-upload the shell after updating Pi.
 
+**Verify the shell version** (a skipped rebuild ships silently old code):
+each build publishes `__shell/shell-<build>.js` — a 12-hex content hash — and
+rewrites the copied `index.html` to reference exactly that name, so an old
+`index.html` cannot load new bundle bytes or the other way round. To check a
+deployment: the file name under `/__shell/` in the upload **is** the build id;
+in a phone's devtools console the shell prints `[pi-shell] build <id>`, and it
+must match. The pair screen falls back to a "Loading…" notice that says to
+reload or re-upload if the interface never appears.
+
 ## 3. Connect Pi
 
 On the computer: **Settings › General › Remote relay**
