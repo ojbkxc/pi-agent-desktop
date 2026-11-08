@@ -200,7 +200,9 @@ export interface UseAgentSessionOptions {
   onAgentEnd?: () => void;
   onAttentionNeeded?: (request: BlockingExtensionUiRequest) => void;
   onSessionCreated?: (session: SessionInfo, sourceDraftKey: string) => void;
-  onSessionForked?: (newSessionId: string) => void;
+  /** sourceSessionId（d5-7）：发起 fork 的会话 id——宿主据此判断 fork 落地时用户
+   *  是否已手动切走，切走则放弃就地合并，避免把别的会话身份合并进 fork 会话。 */
+  onSessionForked?: (newSessionId: string, sourceSessionId?: string) => void;
   modelsRefreshKey?: number;
   chatInputRef?: React.RefObject<ChatInputHandle | null>;
   onBranchDataChange?: (tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null, options?: LeafChangeOptions) => void, locked: boolean) => void;
@@ -2148,7 +2150,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       });
       const { cancelled, newSessionId } = result ?? {};
       if (!cancelled && newSessionId) {
-        onSessionForked?.(newSessionId);
+        // d5-7：带上发起 fork 的会话 id，供宿主做「用户是否已切走」守卫。
+        onSessionForked?.(newSessionId, sid);
       }
     } catch (e) {
       console.error("Fork failed:", e);
@@ -2512,7 +2515,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             return complete({ handled: true, error: "Cannot clone an empty or unsaved session" });
           }
           const completed = complete({ handled: true, message: "Cloned current session branch" });
-          onSessionForked?.(result.newSessionId);
+          // d5-7：clone 同样携带来源会话 id（/clone 即刻返回，守卫通常不触发）。
+          onSessionForked?.(result.newSessionId, sid);
           return completed;
         }
 

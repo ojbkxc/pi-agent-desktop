@@ -1345,6 +1345,14 @@ export function AppShell() {
     };
   }, [shortcutHelpOpen]);
 
+  // d5-7：当前选中会话 id 的渲染期镜像——await 期间用户切换后，回调里能读到最新值。
+  const selectedSessionIdRef = useRef<string | null>(null);
+  selectedSessionIdRef.current = selectedSession?.id ?? null;
+
+  // d5-8：会话打开的单调请求号。detail fetch 慢（大 .jsonl 秒级），两次快速点击按
+  // 完成序落地会覆盖最后一次点击（同步目录命中也自增，压制之前的在途 fetch）。
+  const openSessionRequestRef = useRef(0);
+
   // Client-built transient SessionInfo (new session / fork) lacks the
   // server-computed projectKey, which the same-project check in
   // handleCwdChange relies on. Hydrate it from the session list so switching
@@ -1365,6 +1373,8 @@ export function AppShell() {
   }, []);
 
   const handleOpenSession = useCallback(async (sessionId: string, entryId?: string) => {
+    // d5-8：每次打开都使之前的在途 detail fetch 失效（含下面的同步目录命中路径）。
+    const requestId = ++openSessionRequestRef.current;
     // Prefer the catalogue the sidebar already delivered: selecting from it
     // avoids a full detail round trip just to obtain the SessionInfo.
     const catalogued = sessionCatalog.find((s) => s.id === sessionId);
@@ -1376,6 +1386,7 @@ export function AppShell() {
       const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { cache: "no-store" });
       const data = await response.json() as { info?: SessionInfo; error?: string };
       if (!response.ok || !data.info) throw new Error(data.error ?? `HTTP ${response.status}`);
+      if (requestId !== openSessionRequestRef.current) return;
       handleSelectSession(data.info, false, entryId);
     } catch (error) {
       console.error("[pi-web] failed to open session:", error instanceof Error ? error.message : error);
@@ -1566,18 +1577,29 @@ export function AppShell() {
     setAutoNameStatus(selectedSession?.id && autoNameInFlightRef.current.has(selectedSession.id) ? { kind: "naming" } : { kind: "idle" });
   }, [selectedSession?.id]);
 
-  const handleSessionForked = useCallback((newSessionId: string) => {
+  const handleSessionForked = useCallback((newSessionId: string, sourceSessionId?: string) => {
     invalidateWorkspaceRestore();
     activeNewSessionDraftKeyRef.current = null;
     setRefreshKey((k) => k + 1);
-    setNewSessionCwd(null);
-    setSelectedSession((prev) => ({
-      ...(prev ?? { path: "", cwd: "", created: "", modified: "", messageCount: 0, firstMessage: "" }),
-      id: newSessionId,
-      transient: false,
-    }));
+    // d5-7：await fork 期间用户已手动切走（当前选中不再是发起 fork 的会话）时，
+    // 放弃就地合并与跳转——把别的会话的 cwd/name 合并进 fork 会话就是混合态，
+    // hydrate 失败时会被固化。语义与 handleSessionCreated 的 draftKey 代际一致：
+    // 用户的显式切换赢。fork 会话仍进列表（refreshKey 已 bump），后台回填其信息。
+    const switchedAway = Boolean(
+      sourceSessionId
+      && selectedSessionIdRef.current
+      && selectedSessionIdRef.current !== sourceSessionId,
+    );
+    if (!switchedAway) {
+      setNewSessionCwd(null);
+      setSelectedSession((prev) => ({
+        ...(prev ?? { path: "", cwd: "", created: "", modified: "", messageCount: 0, firstMessage: "" }),
+        id: newSessionId,
+        transient: false,
+      }));
+      router.replace(`?session=${encodeURIComponent(newSessionId)}`, { scroll: false });
+    }
     hydrateSelectedSession(newSessionId);
-    router.replace(`?session=${encodeURIComponent(newSessionId)}`, { scroll: false });
   }, [invalidateWorkspaceRestore, router, hydrateSelectedSession]);
 
   const handleAskInNewChat = useCallback(async (
@@ -1591,7 +1613,7 @@ export function AppShell() {
     });
     if (!result?.newSessionId) throw new Error(translate("chat.quoteForkFailed"));
     setPendingQuotePrompt({ sessionId: result.newSessionId, text: prompt });
-    handleSessionForked(result.newSessionId);
+    handleSessionForked(result.newSessionId, sourceSessionId);
   }, [handleSessionForked, translate]);
 
   // The Artifacts page's "continue in new chat": like the quote flow, a fork at
@@ -1602,6 +1624,9 @@ export function AppShell() {
     sourceEntryId: string,
     prompt: string,
   ) => {
+    // d5-8：与 handleOpenSession 共用单调请求号——慢链路（fork + detail）期间用户
+    // 的任何会话打开都会使本次落地失效，过期结果不再抢占当前选择。
+    const requestId = ++openSessionRequestRef.current;
     const result = await sendAgentCommand<{ newSessionId?: string }>(sourceSessionId, {
       type: "fork_branch",
       entryId: sourceEntryId,
@@ -1610,6 +1635,7 @@ export function AppShell() {
     const response = await fetch(`/api/sessions/${encodeURIComponent(result.newSessionId)}`, { cache: "no-store" });
     const data = await response.json().catch(() => ({})) as { info?: SessionInfo; error?: string };
     if (!response.ok || !data.info) throw new Error(data.error ?? translate("chat.quoteForkFailed"));
+    if (requestId !== openSessionRequestRef.current) return;
     setPendingQuotePrompt({ sessionId: result.newSessionId, text: prompt });
     setRefreshKey((k) => k + 1);
     handleSelectSession(data.info);
