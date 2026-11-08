@@ -12,12 +12,13 @@
  *
  * 客户端组件不要 import 本文件（含 node:fs）；只 import lib/agent-teams-swimlane.ts。
  */
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { rename as renamePromise, unlink as unlinkPromise } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import * as lockfile from "proper-lockfile";
 import { userHome } from "./user-home";
-import { serializeByKey } from "./key-serializer";
 import {
   projectTeamWorkbench,
   type AcceptedRecordLike,
@@ -329,26 +330,187 @@ export interface ApplyTeamMemberModelsOptions {
 }
 
 /**
- * config.json 的 per-team 写队列。只靠队列并不闭环——pi-team 扩展自身写 config.json
- * 不经过这里——所以队列之内还要**同步重读**最新落盘内容再合并（见
- * applyMemberModelIntentsSync）：同步段没有任何 await，JS 单线程下同进程写者（含
- * pi-team）不可能插进读与写之间；队列则把并发 PATCH 的写回按团队排成先后。
+ * ── 团队文件写原语（#54 起共享）─────────────────────────────────────────────
+ *
+ * config.json 的变更原语分三层，语义如实、不夸口：
+ *
+ * 1. `enqueueTeamMutation(key, task)`：进程内 per-key 异步队列。同一 key 的变更
+ *    排队串行；前序失败不阻断后续。
+ * 2. `mutateTeamConfigFile(teamDir, mutate)`：在上面的队列之内再持 **上游同款文件锁**
+ *    （proper-lockfile `config.json.lock`，选项照 pi-team teamHelpers.js:151-160
+ *    withTeamFileLock：retries {10, 5ms, 100ms}）——上游官方 `mutateTeamFileAsync`
+ *    就守这把锁，所以持锁期间与 pi-team 扩展（lead 会话工具路径）跨进程互斥。
+ *    临界区内**重读磁盘最新 config** 再交给 mutate；mutate 返回要写回的 next
+ *    （null = 只读）则原子写回（随机临时文件 + rename + Windows 瞬时错误有界重试）。
+ *    跨进程口径如实：守锁写者（pi-team mutateTeamFileAsync）真互斥；上游无锁写者
+ *    （writeTeamFileAsync 仅建团时用）与独立 pi CLI 的窗口靠锁内重读缓解，pi-team
+ *    未来统一走锁即全自动互斥——不宣称对无锁写者完全防护。
+ * 3. `withQuotaLock(task)`：teamsRoot 下 `.quota.lock` 文件锁，串行「读全部团队名册
+ *    判 12/32」的桌面写者；pi-team 自己的 checkSpawnLimits 读盘但非原子，残余如实。
  */
-const TEAM_CONFIG_QUEUE: symbol = Symbol.for("pi-web:team-config-write-queue");
+const TEAM_MUTATION_QUEUES: symbol = Symbol.for("pi-web:teams-mutation-queues");
 
-/** config.json 原子写回：随机临时文件（防并发同写一个 temp）+ rename；失败清掉临时。 */
-function writeTeamConfigSync(teamDir: string, config: unknown): void {
+function teamMutationQueues(): Map<string, Promise<unknown>> {
+  const holder = globalThis as Record<symbol, Map<string, Promise<unknown>> | undefined>;
+  let queues = holder[TEAM_MUTATION_QUEUES];
+  if (!queues) {
+    queues = new Map();
+    holder[TEAM_MUTATION_QUEUES] = queues;
+  }
+  return queues;
+}
+
+/** per-team 串行原语：同一 key 的异步任务排队互斥；前序失败不阻断后续。 */
+export function enqueueTeamMutation<T>(key: string, task: () => Promise<T>): Promise<T> {
+  const queues = teamMutationQueues();
+  const previous = queues.get(key) ?? Promise.resolve();
+  const run = previous.then(task, task);
+  const tracked = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  queues.set(key, tracked);
+  void tracked.finally(() => {
+    if (queues.get(key) === tracked) queues.delete(key);
+  });
+  return run;
+}
+
+const TEAM_FILE_LOCK_RETRIES = { retries: 10, minTimeout: 5, maxTimeout: 100 } as const;
+/** Windows rename 瞬时错误的退避上限（杀软/索引器顶住句柄可长达数秒）。 */
+const RENAME_RETRY_MAX_ATTEMPTS = 23;
+
+export interface TeamConfigMutation<T> {
+  /**
+   * 文件锁临界区内执行：`config` 是**刚从磁盘重读**的最新内容。允许 async（临界区
+   * 内可 await lifecycle 等判定——锁持续持有，互斥不破）。
+   * 返回 `next` 为要写回的完整 config（null/undefined = 只读不写）。
+   * 抛错 = 本次变更不落盘，错误原样透传给调用方。
+   */
+  mutate: (config: Record<string, unknown>) =>
+    | { value: T; next: Record<string, unknown> | null }
+    | Promise<{ value: T; next: Record<string, unknown> | null }>;
+  /** config.json 不存在/不可读时的错误文案（调用方语境）。 */
+  unreadableError: string;
+}
+
+/**
+ * config.json.lock 文件锁临界区（**不含队列**）：锁内重读最新 config 交给 fn。
+ * 上层编排若已在本团队的 `team:<dir>` 队列内，用这个原语做嵌套的 config 临界区
+ * （同 key 队列嵌套会死锁，严禁在队列 task 内再走 mutateTeamConfigFile）。
+ */
+export async function withTeamConfigLock<T>(
+  teamDir: string,
+  fn: (config: Record<string, unknown>) => { value: T; next: Record<string, unknown> | null } | Promise<{ value: T; next: Record<string, unknown> | null }>,
+  unreadableError: string,
+): Promise<T> {
+  const target = join(teamDir, "config.json");
+  const release = await lockfile.lock(target, {
+    lockfilePath: `${target}.lock`,
+    realpath: false,
+    retries: { ...TEAM_FILE_LOCK_RETRIES },
+  });
+  try {
+    const config = readTeamConfigSync(teamDir);
+    if (!config) throw new Error(unreadableError);
+    const { value, next } = await fn(config);
+    // 必须在持锁期间 await 写盘（lead 复审核实）：漏 await 会先放锁再写——
+    // 与 pi-team 无锁写者竞态、写失败被吞后调用方却当成功。
+    if (next) await writeTeamConfigWithRetry(teamDir, next);
+    return value;
+  } finally {
+    await release().catch(() => undefined);
+  }
+}
+
+/**
+ * 上游 `mutateTeamFileAsync` 的桌面同款：per-team 队列 + `config.json.lock` 文件锁
+ * 内重读-变更-原子写。返回 mutate 的 value；mutate 抛错则整个变更不落盘。
+ */
+export async function mutateTeamConfigFile<T>(teamDir: string, mutation: TeamConfigMutation<T>): Promise<T> {
+  // 队列键统一 `team:<dir>`（lead 裁定）：同团队所有编排（config/成员/工单）串行在
+  // 同一条队列上；config.json.lock 文件锁只保护 config 临界区本身。
+  return enqueueTeamMutation(`team:${teamDir}`, () =>
+    withTeamConfigLock(teamDir, mutation.mutate, mutation.unreadableError));
+}
+
+/** teamsRoot 下 `.quota.lock` 文件锁：串行「读全部团队名册判配额」的桌面写者。 */
+export async function withQuotaLock<T>(task: () => Promise<T>): Promise<T> {
+  const root = teamsRootDir();
+  const lockPath = join(root, ".quota.lock");
+  // proper-lockfile 要求目标存在：先 wx 落空占位（照 pi-team teamTickets.js:121-123）。
+  await writeFile(lockPath, "{}", { encoding: "utf8", flag: "wx" }).catch(() => undefined);
+  const release = await lockfile.lock(lockPath, {
+    lockfilePath: `${lockPath}.lock`,
+    realpath: false,
+    retries: { ...TEAM_FILE_LOCK_RETRIES },
+  });
+  try {
+    return await task();
+  } finally {
+    await release().catch(() => undefined);
+  }
+}
+
+/** 团队并发上限（口径对齐 pi-team constants.js：env 覆盖，非正回落默认）。 */
+export function readTeamQuotaLimits(env: NodeJS.ProcessEnv = process.env): { perTeamLimit: number; globalLimit: number } {
+  const perTeam = Number(env.PI_TEAM_MAX_MEMBERS);
+  const global = Number(env.PI_TEAM_MAX_GLOBAL_WORKERS);
+  return {
+    perTeamLimit: Number.isFinite(perTeam) && perTeam > 0 ? Math.floor(perTeam) : 12,
+    globalLimit: Number.isFinite(global) && global > 0 ? Math.floor(global) : 32,
+  };
+}
+
+/**
+ * 读全部团队名册的 worker 数（口径对齐 pi-team countActiveWorkers teamTools.js:34-50，
+ * 但 lead 判定升级为 resolveLeadNames 可靠链——改名 lead 不再虚占全局配额）。坏目录
+ * 跳过。写路径（POST add）必须在 withQuotaLock 内使用；**只读路径（GET workload）直接
+ * 调用、不得进 withQuotaLock**——它会落占位文件，GET 必须零写盘（lead 复核）。
+ */
+export async function readGlobalRosterWorkers(excludeTeamDirName?: string): Promise<{ total: number }> {
+  let names: string[] = [];
+  try {
+    names = await readdir(teamsRootDir());
+  } catch {
+    return { total: 0 };
+  }
+  let total = 0;
+  for (const dirName of names) {
+    if (excludeTeamDirName && dirName === excludeTeamDirName) continue;
+    const snapshot = await readTeamConfigSnapshot(dirName);
+    if (!snapshot) continue;
+    const leads = resolveLeadNames(snapshot);
+    total += snapshot.members.filter((member) => !leads.has(member.name)).length;
+  }
+  return { total };
+}
+
+/** config.json 原子写回：随机临时文件（防并发同写一个 temp）+ rename（Windows 瞬时错误有界 **async** 重试，不冻结事件循环）；失败清掉临时。 */
+async function writeTeamConfigWithRetry(teamDir: string, config: unknown): Promise<void> {
   const target = join(teamDir, "config.json");
   const temp = join(teamDir, `config.json.${randomUUID()}.tmp`);
   try {
-    writeFileSync(temp, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-    renameSync(temp, target);
-  } catch (error) {
-    try {
-      unlinkSync(temp);
-    } catch {
-      // 尚未创建，或已 rename 走。
+    await writeFile(temp, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    // Windows rename 瞬时错误有界退避：杀软/索引器顶住「刚被换上的文件」句柄
+    // （EPERM/EACCES/EBUSY）可长达数秒。**异步退避**（lead 裁定）：Atomics.wait/
+    // 同步 sleep 会冻结整个 Node 事件循环（不止单团队）；等待期间锁在手，本团队
+    // 队列自然串行，其它团队与请求不受影响。
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await renamePromise(temp, target);
+        return;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        const transient = code === "EPERM" || code === "EACCES" || code === "EBUSY";
+        if (attempt >= RENAME_RETRY_MAX_ATTEMPTS || !transient) throw error;
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, Math.min(25 * 2 ** attempt, 500));
+        });
+      }
     }
+  } catch (error) {
+    await unlinkPromise(temp).catch(() => undefined);
     throw error;
   }
 }
@@ -377,59 +539,103 @@ interface MemberModelIntent {
 }
 
 /**
- * 把意图落盘，Windows 瞬时错误有界重试：rename 覆盖「刚被换上的文件」会被杀软/索引器
- * 的短暂句柄顶住（EPERM/EACCES/EBUSY，tmpdir 上连续快速换名时可长达数秒）。每次重试都
- * 是一段完整的「同步重读→合并→写」（applyMemberModelIntentsSync）——读与写之间仍无
- * await，正确性不因重试破坏；等待发生在两次完整尝试之间，事件循环不被阻塞。重试耗尽
- * 才如实抛错——原子换名保证旧 config 完好，路由会以 500 上报、不谎报成功。
+ * 阶段二：把意图合并进**锁内重读**的磁盘最新 config.json 并原子写回。
+ * 迁移到 `mutateTeamConfigFile`（per-team 队列 + config.json.lock 上游同款文件锁），
+ * 与 pi-team 扩展跨进程互斥；合并基线永远是锁内刚读到的盘上内容，先落盘者的改动
+ * 不会被旧快照覆盖。行为与旧「同步段」版本等价——互斥从「进程内单线程同步段」
+ * 升级为「跨进程文件锁」。
  */
 async function persistMergedTeamConfig(teamDir: string, intents: readonly MemberModelIntent[]): Promise<void> {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      applyMemberModelIntentsSync(teamDir, intents);
-      return;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      const transient = code === "EPERM" || code === "EACCES" || code === "EBUSY";
-      if (attempt >= 23 || !transient) throw error;
-      // 不 unref：重试是承重工作，unref 会让事件循环在只剩这个 timer 时提前清空，
-      // 进程带着 pending promise 退出（测试里表现为 ERR_TEST_FAILURE cancelled）。
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, Math.min(25 * 2 ** attempt, 500));
-      });
-    }
-  }
+  await mutateTeamConfigFile(teamDir, {
+    unreadableError: "config.json 在保存成员模型时不可读，未写盘",
+    mutate: (config) => {
+      const rawMembers = config.members;
+      if (!Array.isArray(rawMembers)) {
+        throw new Error("config.json 在保存成员模型时不可读，未写盘");
+      }
+      for (const intent of intents) {
+        let member = findConfigMember(rawMembers, intent.memberId);
+        if (!member) {
+          // 名册里没有（plan 独有成员，或阶段一之后被并发移除）：按意图补一条，
+          // 幂等由 agentId 命中保证。刻意不写 sessionId（见 applyTeamMemberModelChanges 注释）。
+          member = {
+            agentId: intent.memberId,
+            name: intent.name,
+            ...(intent.agentType ? { agentType: intent.agentType } : {}),
+            joinedAt: intent.joinedAt,
+            cwd: intent.cwd,
+          };
+          rawMembers.push(member);
+        }
+        member.model = intent.modelId;
+        member.providerId = intent.provider;
+      }
+      return { value: undefined, next: config };
+    },
+  });
 }
 
+/** 只读解析 config.json 的完整形态（lead 判定链的数据面；不写盘、不加锁）。 */
+export interface TeamConfigSnapshot {
+  rawName: string;
+  /** config 的 leadSessionId（上游 A1 已知可能恒 'unknown-session'——调用方须甄别）。 */
+  leadSessionId: string | null;
+  members: Array<{ agentId: string; name: string; sessionId?: string }>;
+}
+
+/** 读 config.json 的完整快照（含 leadSessionId；团队不存在/损坏返回 null）。 */
+export async function readTeamConfigSnapshot(dirName: string): Promise<TeamConfigSnapshot | null> {
+  const config = await readJson<Record<string, unknown>>(join(teamsRootDir(), dirName, "config.json"));
+  if (!config || !Array.isArray(config.members)) return null;
+  const members: TeamConfigSnapshot["members"] = [];
+  for (const item of config.members) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    if (typeof record.agentId !== "string" || typeof record.name !== "string") continue;
+    members.push({
+      agentId: record.agentId,
+      name: record.name,
+      ...(typeof record.sessionId === "string" && record.sessionId ? { sessionId: record.sessionId } : {}),
+    });
+  }
+  return {
+    rawName: typeof config.name === "string" ? config.name : "",
+    leadSessionId: typeof config.leadSessionId === "string" && config.leadSessionId ? config.leadSessionId : null,
+    members,
+  };
+}
+
+/** 常量 lead 名（pi-team constants.js TEAM_LEAD_NAME，根导出不含 constants 故本地常量）。 */
+export const TEAM_LEAD_NAME = "team-lead";
+
 /**
- * 阶段二单次尝试：把意图合并进磁盘上最新的 config.json 并原子写回。整段同步、无
- * await——读与写之间本进程任何代码（含 pi-team 扩展）都无法插入；合并基线永远是刚
- * 读到的盘上内容，因此先落盘者的改动不会被旧快照覆盖。
+ * 可靠 lead 判定链（workload 排除与全局配额计数共用同一口径）：
+ * ① leadSessionId 与某成员 sessionId 精确相等（且不是上游占位 'unknown-session'）=> 该成员是 lead；
+ * ② 名册首位成员（pi-team team_create 恒把 lead 放 members[0]，teamTools.js:261-264）——
+ *    **仅在 ① 无证据时回退使用**，避免已知 lead 身份时误伤首位普通 worker；
+ * ③ 名为常量 team-lead 的成员恒为 lead。
+ * 返回 lead 名集合（可能空——空名册）。
  */
-function applyMemberModelIntentsSync(teamDir: string, intents: readonly MemberModelIntent[]): void {
-  const config = readTeamConfigSync(teamDir);
-  const rawMembers = config?.members;
-  if (!config || !Array.isArray(rawMembers)) {
-    throw new Error("config.json 在保存成员模型时不可读，未写盘");
-  }
-  for (const intent of intents) {
-    let member = findConfigMember(rawMembers, intent.memberId);
-    if (!member) {
-      // 名册里没有（plan 独有成员，或阶段一之后被并发移除）：按意图补一条，
-      // 幂等由 agentId 命中保证。刻意不写 sessionId（见 applyTeamMemberModelChanges 注释）。
-      member = {
-        agentId: intent.memberId,
-        name: intent.name,
-        ...(intent.agentType ? { agentType: intent.agentType } : {}),
-        joinedAt: intent.joinedAt,
-        cwd: intent.cwd,
-      };
-      rawMembers.push(member);
+export function resolveLeadNames(snapshot: TeamConfigSnapshot): Set<string> {
+  const leads = new Set<string>();
+  // ① 有可靠 leadSessionId → member.sessionId 证据：**只排除命中成员**，不再排除
+  //    首位（#55 已独立 PASS 的精确链——首位可能是普通 worker）。
+  if (snapshot.leadSessionId && snapshot.leadSessionId !== "unknown-session") {
+    const bySession = snapshot.members.find((member) => member.sessionId === snapshot.leadSessionId);
+    if (bySession) {
+      leads.add(bySession.name);
+      return leads;
     }
-    member.model = intent.modelId;
-    member.providerId = intent.provider;
   }
-  writeTeamConfigSync(teamDir, config);
+  // ② 无 ① 证据：名字常量回退（恒 lead）。
+  for (const member of snapshot.members) {
+    if (member.name === TEAM_LEAD_NAME) leads.add(member.name);
+  }
+  if (leads.size > 0) return leads;
+  // ③ 连常量名都没有：建团结构回退（首位恒 lead）。
+  const first = snapshot.members[0];
+  if (first) leads.add(first.name);
+  return leads;
 }
 
 /** 在 config.members 原始数组里按 agentId 找成员条目。 */
@@ -540,9 +746,10 @@ export async function applyTeamMemberModelChanges(
     results.push({ memberId: update.memberId, name, status });
   }
 
-  // 阶段二：per-team 队列内重读最新 config、合并意图、原子写回（Windows 瞬时错误重试）。
+  // 阶段二：per-team 队列 + config.json.lock（上游同款文件锁）内重读最新 config、
+  // 合并意图、原子写回（Windows 瞬时错误重试）。
   if (intents.length > 0) {
-    await serializeByKey(TEAM_CONFIG_QUEUE, teamDir, () => persistMergedTeamConfig(teamDir, intents));
+    await persistMergedTeamConfig(teamDir, intents);
   }
   return { teamExists: true, results };
 }
