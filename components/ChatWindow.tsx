@@ -528,9 +528,14 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
     playDoneSoundRef.current();
   }, [completionNotificationsEnabled, extensionDialog]);
 
-  // Register the abort handler for the global Esc shortcut
+  // Register the abort handler for the global Esc shortcut. d5-14: needs a
+  // cleanup — after unmount (workspace switch / sessionKey remount gap) the
+  // module-level handler must not keep pointing at this stale abort.
   useEffect(() => {
     registerAbortHandler(sessionBusy ? handleAbort : null);
+    return () => {
+      if (sessionBusy) registerAbortHandler(null);
+    };
   }, [sessionBusy, handleAbort]);
 
   // --- Lazy-load historical messages ---

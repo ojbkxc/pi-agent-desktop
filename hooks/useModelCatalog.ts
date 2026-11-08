@@ -168,11 +168,14 @@ export function useModelCatalog(cwd?: string | null): ModelCatalogController {
     setLoading(true);
     setError(null);
     const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
+    // d5-24：远程/隧道访问下连接可能半开挂起——没有超时 loading 会永卡且同 cwd
+    // 无自愈。20s 与服务端冷启动上限同量级，超时按失败呈现（切 cwd / refresh 重试）。
+    const timeoutSignal = AbortSignal.timeout(20_000);
     (async () => {
       try {
         const [modelsResponse, enabledResponse] = await Promise.all([
-          fetch(`/api/models${query}`, { cache: "no-store" }),
-          fetch(`/api/models/enabled${query}`, { cache: "no-store" }).catch(() => null),
+          fetch(`/api/models${query}`, { cache: "no-store", signal: timeoutSignal }),
+          fetch(`/api/models/enabled${query}`, { cache: "no-store", signal: timeoutSignal }).catch(() => null),
         ]);
         if (!modelsResponse.ok) throw new Error(`HTTP ${modelsResponse.status}`);
         const modelsPayload = await modelsResponse.json() as unknown;

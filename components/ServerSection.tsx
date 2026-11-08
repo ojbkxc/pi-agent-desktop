@@ -55,6 +55,9 @@ export function ServerSection() {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  // d5-1：start/stop 的 POST 只更新视图、从不续排轮询链——从非 live 态启动隧道时
+  // 状态会永远停在 connecting。POST 成功后踢一次轮询 effect 重新探测。
+  const [publicAccessPollKick, setPublicAccessPollKick] = useState(0);
   const initialized = useRef(false);
 
   useEffect(() => {
@@ -114,7 +117,8 @@ export function ServerSection() {
     };
     // reloadKey re-runs the probe after a download, since `binary.available` is
     // resolved per request and would otherwise stay stale until the panel reopens.
-  }, [t, reloadKey]);
+    // publicAccessPollKick (d5-1) re-runs it after a start/stop POST for the same reason.
+  }, [t, reloadKey, publicAccessPollKick]);
 
   const call = useCallback(async (
     input: RequestInfo,
@@ -129,7 +133,12 @@ export function ServerSection() {
       const body = await response.json().catch(() => ({})) as Record<string, unknown>;
       if (!response.ok) throw new Error(typeof body.error === "string" ? body.error : `HTTP ${response.status}`);
       if (key === "server-settings") setServer(body as unknown as ServerSettingsResponse);
-      else setPublicAccess((previous) => (previous ? { ...previous, view: body.view as PublicAccessView } : previous));
+      else {
+        setPublicAccess((previous) => (previous ? { ...previous, view: body.view as PublicAccessView } : previous));
+        // d5-1：踢一次轮询。effect 重跑后的首次 GET 会按返回状态重算 lastLive：
+        // connecting/reconnecting/online 自续 2s 链，终态（disabled/failed 等）自然停。
+        setPublicAccessPollKick((kick) => kick + 1);
+      }
       return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));

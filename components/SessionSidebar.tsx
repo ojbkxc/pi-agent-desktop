@@ -731,8 +731,24 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         setProjectMenuView("actions");
       }
     };
+    // d5-5：项目菜单此前没有 Escape 处理——按 Esc 既关不掉菜单，事件还会冒泡到
+    // window 级快捷键把运行中的 Agent 停掉。preventDefault 让本次 Esc 到此为止
+    // （与会话行菜单同款）。
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !isImeComposing(e)) {
+        e.preventDefault();
+        setProjectMenu(null);
+        setProjectMenuPos(null);
+        setProjectBranchMenu(null);
+        setProjectMenuView("actions");
+      }
+    };
     document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("keydown", onKeyDown);
+    };
   }, [projectMenu]);
 
   useEffect(() => {
@@ -745,7 +761,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       setProjectViewMenuPos(null);
     };
     const onKeyDown = (event: KeyboardEvent) => {
+      // d5-5：preventDefault——否则 Esc 关掉菜单后继续冒泡到 window 快捷键，误停运行中的 Agent。
       if (event.key === "Escape" && !isImeComposing(event)) {
+        event.preventDefault();
         setProjectViewMenuOpen(false);
         setProjectViewMenuPos(null);
       }
@@ -779,7 +797,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       close();
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !isImeComposing(event)) close();
+      // d5-5：preventDefault——同 projectViewMenu，Esc 不再泄漏到全局停止。
+      if (event.key === "Escape" && !isImeComposing(event)) {
+        event.preventDefault();
+        close();
+      }
     };
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
