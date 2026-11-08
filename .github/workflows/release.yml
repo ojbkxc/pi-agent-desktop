@@ -114,6 +114,32 @@ jobs:
           tagName: v__VERSION__
           releaseName: pi-agent-desktop v__VERSION__
           releaseBody: |
+            ## Pi Agent Desktop 0.8.4 (fork)
+
+            This is the **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2.
+
+            ### New
+
+            - **Team workload is visible and actionable.** See member availability and queued work, then make a first assignment, reassign work, or add a member with one action. Delivery receipts report the real result instead of merely closing the panel.
+            - **Teams can be stopped and reclaimed explicitly.** Inspect directory usage and recent activity, with an idle notice that never stops or deletes anything automatically. Reclaim requires a second confirmation, permanently removes team records, and preserves member session transcripts (`.jsonl`) and artifacts.
+
+            Bundled components: pi 1.5.0, pi-web 0.10.0.
+
+            ---
+
+            ## Pi Agent Desktop 0.8.4（fork）
+
+            这是 pi-agent-desktop 的 **ojbkxc fork**，基于上游 0.8.2 构建。
+
+            ### 新增
+
+            - **团队忙闲可见，并可一键调度。** 查看成员忙闲与任务积压，一键完成首次分配、改派或加人；真实投递回执报告实际结果，而不是只关闭面板。
+            - **团队可显式停止和回收。** 查看目录占用与最近活动；闲置提示绝不会自动停止或删除。回收需二次确认，永久删除团队记录，同时保留成员会话记录（`.jsonl`）与产物。
+
+            内置组件版本：pi 1.5.0、pi-web 0.10.0。
+
+            ---
+
             ## Pi Agent Desktop 0.8.3 (fork)
 
             This is the **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2.
