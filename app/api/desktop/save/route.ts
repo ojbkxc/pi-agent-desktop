@@ -12,6 +12,7 @@ import {
   RequestBodyTooLargeError,
 } from "@/lib/bounded-form-data";
 import { isDesktopApiRequestAllowed } from "@/lib/desktop-api-auth";
+import { replaceFileAtomicBytesSync } from "@/lib/atomic-file";
 import { MAX_DESKTOP_SAVE_BYTES } from "@/lib/desktop-api";
 
 export const runtime = "nodejs";
@@ -85,7 +86,9 @@ export async function POST(request: NextRequest) {
       const destError = assertWritableDest(destPath);
       if (destError) return NextResponse.json({ error: destError }, { status: 400 });
 
-      fs.copyFileSync(sourcePath, destPath);
+      // Atomic replace: a failed or interrupted write leaves the file already
+      // at the destination intact, never a truncated half.
+      replaceFileAtomicBytesSync(destPath, fs.readFileSync(sourcePath));
       return NextResponse.json({ ok: true, destPath });
     }
 
@@ -107,7 +110,7 @@ export async function POST(request: NextRequest) {
     if (destError) return NextResponse.json({ error: destError }, { status: 400 });
 
     const bytes = await readRequestBytesWithinLimit(request, MAX_DESKTOP_SAVE_BYTES);
-    fs.writeFileSync(destPath, bytes);
+    replaceFileAtomicBytesSync(destPath, bytes);
     return NextResponse.json({ ok: true, destPath });
   } catch (error) {
     if (error instanceof RequestBodyTooLargeError) {

@@ -37,6 +37,7 @@ import {
 import { isDesktopApiRequestAllowed } from "@/lib/desktop-api-auth";
 import { filePathFromApiSegments, isWindowsAbsolutePath, samePath } from "@/lib/paths";
 import { hasParentDirectorySegment } from "@/lib/path-security";
+import { replaceFileAtomicBytesSync } from "@/lib/atomic-file";
 
 const IGNORED_NAMES = new Set([
   "node_modules", ".git", ".next", "dist", "build", "__pycache__",
@@ -307,16 +308,10 @@ export async function POST(
           errors.push({ name: source.fileName, error: "Cannot replace a directory or symbolic link" });
           continue;
         }
-        if (conflictSet.has(source.fileName)) {
-          try {
-            fs.unlinkSync(destination);
-          } catch (error) {
-            errors.push({ name: source.fileName, error: error instanceof Error ? error.message : String(error) });
-            continue;
-          }
-        }
         try {
-          fs.copyFileSync(source.sourcePath, destination);
+          // Atomic replace: no unlink-then-copy window that loses the file
+          // already at the destination when the new write fails.
+          replaceFileAtomicBytesSync(destination, fs.readFileSync(source.sourcePath));
           uploaded.push(source.fileName);
         } catch (error) {
           errors.push({ name: source.fileName, error: error instanceof Error ? error.message : String(error) });
@@ -394,17 +389,11 @@ export async function POST(
         continue;
       }
 
-      if (conflictSet.has(file.name)) {
-        try {
-          fs.unlinkSync(destination);
-        } catch (error) {
-          errors.push({ name: file.name, error: error instanceof Error ? error.message : String(error) });
-          continue;
-        }
-      }
-
       try {
-        fs.writeFileSync(destination, bytes, { flag: "wx" });
+        // Atomic replace: a failed write leaves the old file at the destination
+        // intact instead of deleting it first, and no "wx" race on a name that
+        // reappeared between the conflict check and the write.
+        replaceFileAtomicBytesSync(destination, bytes);
         uploaded.push(file.name);
       } catch (error) {
         errors.push({ name: file.name, error: error instanceof Error ? error.message : String(error) });

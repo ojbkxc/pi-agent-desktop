@@ -110,3 +110,28 @@ export async function replaceFileAtomicStream(
     throw error;
   }
 }
+
+/**
+ * Replace a file with new bytes in one swap: a uniquely named temporary file
+ * in the destination's own directory, renamed over it. A crash mid-write
+ * leaves either the old bytes or the new ones, never a truncated file, and a
+ * failed swap unlinks the temp. Unlike `replaceFileAtomicSync` this carries no
+ * permission, symlink, or fsync semantics — only the swap. It exists for the
+ * routes that overwrite a user-picked destination (`/api/desktop/save`,
+ * `/api/files` upload replace), where the old in-place write destroyed the
+ * previous file whenever the process died or the disk filled mid-write.
+ */
+export function replaceFileAtomicBytesSync(path: string, contents: string | Uint8Array): void {
+  const tempPath = join(dirname(path), `.${basename(path)}-${randomUUID()}.tmp`);
+  try {
+    writeFileSync(tempPath, contents);
+    renameSync(tempPath, path);
+  } catch (error) {
+    try {
+      unlinkSync(tempPath);
+    } catch {
+      // Never created, or already renamed.
+    }
+    throw error;
+  }
+}
