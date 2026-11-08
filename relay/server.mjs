@@ -141,9 +141,19 @@ export function createRelay(options) {
       if (file.startsWith(normalize(shellDir) + sep)) {
         try {
           const body = await readFile(file);
+          // Content hash as a weak validator: with `no-cache` every visit
+          // still revalidates, but an unchanged shell no longer re-downloads
+          // (a phone on mobile data used to pull the full bundle each time).
+          const etag = `"${createHash("sha256").update(body).digest("base64url").slice(0, 16)}"`;
+          if (request.headers["if-none-match"] === etag) {
+            response.writeHead(304, { etag });
+            response.end();
+            return;
+          }
           response.writeHead(200, {
             "content-type": SHELL_TYPES[extname(file)] ?? "application/octet-stream",
             "cache-control": "no-cache",
+            etag,
             "x-content-type-options": "nosniff",
             ...(relative.endsWith("/sw.js") ? { "service-worker-allowed": "/" } : {}),
           });
