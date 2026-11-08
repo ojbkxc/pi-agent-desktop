@@ -12,9 +12,12 @@
  *
  * 客户端组件不要 import 本文件（含 node:fs）；只 import lib/agent-teams-swimlane.ts。
  */
-import { readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { userHome } from "./user-home";
+import { serializeByKey } from "./key-serializer";
 import {
   projectTeamWorkbench,
   type AcceptedRecordLike,
@@ -325,12 +328,108 @@ export interface ApplyTeamMemberModelsOptions {
   deliver: (sessionId: string, update: { provider: string; modelId: string }) => Promise<MemberModelDelivery>;
 }
 
-/** 原子写回 config.json：先写同目录临时文件再 rename，避免撕裂写入。 */
-async function writeTeamConfig(teamDir: string, config: unknown): Promise<void> {
+/**
+ * config.json 的 per-team 写队列。只靠队列并不闭环——pi-team 扩展自身写 config.json
+ * 不经过这里——所以队列之内还要**同步重读**最新落盘内容再合并（见
+ * applyMemberModelIntentsSync）：同步段没有任何 await，JS 单线程下同进程写者（含
+ * pi-team）不可能插进读与写之间；队列则把并发 PATCH 的写回按团队排成先后。
+ */
+const TEAM_CONFIG_QUEUE: symbol = Symbol.for("pi-web:team-config-write-queue");
+
+/** config.json 原子写回：随机临时文件（防并发同写一个 temp）+ rename；失败清掉临时。 */
+function writeTeamConfigSync(teamDir: string, config: unknown): void {
   const target = join(teamDir, "config.json");
-  const temp = join(teamDir, `config.json.${process.pid}.tmp`);
-  await writeFile(temp, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-  await rename(temp, target);
+  const temp = join(teamDir, `config.json.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(temp, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    renameSync(temp, target);
+  } catch (error) {
+    try {
+      unlinkSync(temp);
+    } catch {
+      // 尚未创建，或已 rename 走。
+    }
+    throw error;
+  }
+}
+
+/** 同步读 config.json：阶段二的合并基线必须读盘，不能用阶段一的旧快照。 */
+function readTeamConfigSync(teamDir: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(readFileSync(join(teamDir, "config.json"), "utf8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/** 阶段一收集的「要写什么」：落盘所需的最小意图，阶段二据此改**磁盘最新**的 config。 */
+interface MemberModelIntent {
+  memberId: string;
+  name: string;
+  provider: string;
+  modelId: string;
+  /** plan 独有成员追加名册时带的 agentType（existing 成员没有）。 */
+  agentType?: string;
+  /** 追加条目时的 joinedAt：existing 成员沿用原值，plan 独有成员用 plan.createdAt。 */
+  joinedAt: number;
+  /** 追加条目时的 cwd：existing 成员沿用原值，plan 独有成员为 ""（沿用旧追加语义）。 */
+  cwd: string;
+}
+
+/**
+ * 把意图落盘，Windows 瞬时错误有界重试：rename 覆盖「刚被换上的文件」会被杀软/索引器
+ * 的短暂句柄顶住（EPERM/EACCES/EBUSY，tmpdir 上连续快速换名时可长达数秒）。每次重试都
+ * 是一段完整的「同步重读→合并→写」（applyMemberModelIntentsSync）——读与写之间仍无
+ * await，正确性不因重试破坏；等待发生在两次完整尝试之间，事件循环不被阻塞。重试耗尽
+ * 才如实抛错——原子换名保证旧 config 完好，路由会以 500 上报、不谎报成功。
+ */
+async function persistMergedTeamConfig(teamDir: string, intents: readonly MemberModelIntent[]): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      applyMemberModelIntentsSync(teamDir, intents);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const transient = code === "EPERM" || code === "EACCES" || code === "EBUSY";
+      if (attempt >= 23 || !transient) throw error;
+      // 不 unref：重试是承重工作，unref 会让事件循环在只剩这个 timer 时提前清空，
+      // 进程带着 pending promise 退出（测试里表现为 ERR_TEST_FAILURE cancelled）。
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, Math.min(25 * 2 ** attempt, 500));
+      });
+    }
+  }
+}
+
+/**
+ * 阶段二单次尝试：把意图合并进磁盘上最新的 config.json 并原子写回。整段同步、无
+ * await——读与写之间本进程任何代码（含 pi-team 扩展）都无法插入；合并基线永远是刚
+ * 读到的盘上内容，因此先落盘者的改动不会被旧快照覆盖。
+ */
+function applyMemberModelIntentsSync(teamDir: string, intents: readonly MemberModelIntent[]): void {
+  const config = readTeamConfigSync(teamDir);
+  const rawMembers = config?.members;
+  if (!config || !Array.isArray(rawMembers)) {
+    throw new Error("config.json 在保存成员模型时不可读，未写盘");
+  }
+  for (const intent of intents) {
+    let member = findConfigMember(rawMembers, intent.memberId);
+    if (!member) {
+      // 名册里没有（plan 独有成员，或阶段一之后被并发移除）：按意图补一条，
+      // 幂等由 agentId 命中保证。刻意不写 sessionId（见 applyTeamMemberModelChanges 注释）。
+      member = {
+        agentId: intent.memberId,
+        name: intent.name,
+        ...(intent.agentType ? { agentType: intent.agentType } : {}),
+        joinedAt: intent.joinedAt,
+        cwd: intent.cwd,
+      };
+      rawMembers.push(member);
+    }
+    member.model = intent.modelId;
+    member.providerId = intent.provider;
+  }
+  writeTeamConfigSync(teamDir, config);
 }
 
 /** 在 config.members 原始数组里按 agentId 找成员条目。 */
@@ -345,21 +444,30 @@ function findConfigMember(
 }
 
 /**
- * 改团队成员的模型：读-改-写整份 config.json 的 members[].model / providerId
- * （其余字段原样保留），并对存活会话投递 { type: "set_model" }。
+ * 改团队成员的模型：把 members[].model / providerId 写进 config.json（其余字段原样
+ * 保留），并对存活会话投递 { type: "set_model" }。
+ *
+ * 分两个阶段，防止「投递等待窗口里的并发写回」用旧快照覆盖别人：
+ *
+ * - **阶段一（可并发）**：读 config/lifecycle/plan 做校验与投递，只收集「要写什么」
+ *   （MemberModelIntent）与逐条结果，不碰盘。投递抛错的成员不进意图——「失败不写盘、
+ *   不追加名册」由收集口径保证。
+ * - **阶段二（串行）**：per-team 队列内**同步重读**磁盘最新的 config.json，把意图合并
+ *   进去再原子写回（见 applyMemberModelIntentsSync）。合并基线是刚读到的盘上内容，
+ *   所以先落盘者（另一个 PATCH，或 pi-team 自身的无锁写）的改动不会被旧快照覆盖。
  *
  * 名册口径与投影层 `buildRoster`（#13）一致，统一到 **config.json 为权威名册**：
  * - 成员在 config 里 → 直接更新；
  * - 成员是 plan 独有（team_plan launch 只做 lifecycle.adopt、不写 config）→ **追加**一条
  *   config 名册条目（agentId/name 取自 plan），因为投影里 config.member.model 优先于
- *   plan.runtime.modelId——只写 plan.json 会让新值在界面上不可见。**幂等**：追加后再次调用按
- *   agentId 命中既有条目，不会重复追加。追加条目**不写 sessionId**（投影优先读 config.sessionId，
- *   写死会遮蔽 lifecycle 里后续换新的会话）。
+ *   plan.runtime.modelId——只写 plan.json 会让新值在界面上不可见。**幂等**：追加后再次
+ *   调用按 agentId 命中既有条目，不会重复追加。追加条目**不写 sessionId**（投影优先读
+ *   config.sessionId，写死会遮蔽 lifecycle 里后续换新的会话）。
  *
  * 逐条判定（**如实区分，不谎报已生效**）：
  * - config 与 plan 里都找不到该 memberId → failed("成员不存在")；
- * - 有存活会话且未 parked：投递成功 → applied 并写盘；投递抛错（如 Model not found）
- *   → failed 且**不写盘**（保持 config 与运行态一致，也不追加名册），错误原样透传；
+ * - 有存活会话且未 parked：投递成功 → applied；投递抛错（如 Model not found）
+ *   → failed 且**不写盘**（保持 config 与运行态一致），错误原样透传；
  * - 无存活会话 / parked / 未派发：只写盘 → saved（调用方据此显示「已保存待复活」）。
  *
  * 团队不存在（无 config.json）时返回 teamExists=false、results=[]。
@@ -376,8 +484,9 @@ export async function applyTeamMemberModelChanges(
   const rawMembers = config?.members;
   if (!config || !Array.isArray(rawMembers)) return { teamExists: false, results: [] };
 
+  // 阶段一：校验 + 投递，只收集意图与结果。
   const results: TeamMemberModelResult[] = [];
-  let mutated = false;
+  const intents: MemberModelIntent[] = [];
 
   for (const update of options.updates) {
     const existing = findConfigMember(rawMembers, update.memberId);
@@ -403,7 +512,7 @@ export async function applyTeamMemberModelChanges(
         const delivery = await options.deliver(sessionId, { provider: update.provider, modelId: update.modelId });
         status = delivery.kind === "applied" ? "applied" : "saved";
       } catch (error) {
-        // 命令失败（例：Model not found）：不写盘、不追加名册，保持 config 与运行态一致。
+        // 命令失败（例：Model not found）：不进意图，落盘时保持 config 与运行态一致。
         results.push({
           memberId: update.memberId,
           name,
@@ -414,22 +523,26 @@ export async function applyTeamMemberModelChanges(
       }
     }
 
-    // 成功路径才落库：plan 独有成员在此追加名册条目（幂等，见函数注释）。
-    // 带上 plan 的 agentType，否则投影里该成员的角色会从 plan 值退化成通用 "member"。
-    const member = existing ?? {
-      agentId: update.memberId,
-      name,
+    // 成功路径才收集意图；plan 独有成员在阶段二追加名册条目（幂等，见
+    // applyMemberModelIntentsSync）。带上 plan 的 agentType，否则投影里该成员的角色会
+    // 从 plan 值退化成通用 "member"。
+    intents.push({
+      memberId: update.memberId,
+      name: name ?? update.memberId,
+      provider: update.provider,
+      modelId: update.modelId,
       ...(planMember?.agentType ? { agentType: planMember.agentType } : {}),
-      joinedAt: typeof plan?.createdAt === "number" ? plan.createdAt : 0,
-      cwd: "",
-    };
-    if (!existing) rawMembers.push(member);
-    member.model = update.modelId;
-    member.providerId = update.provider;
-    mutated = true;
+      joinedAt: existing && typeof existing.joinedAt === "number"
+        ? existing.joinedAt
+        : typeof plan?.createdAt === "number" ? plan.createdAt : 0,
+      cwd: existing && typeof existing.cwd === "string" ? existing.cwd : "",
+    });
     results.push({ memberId: update.memberId, name, status });
   }
 
-  if (mutated) await writeTeamConfig(teamDir, config);
+  // 阶段二：per-team 队列内重读最新 config、合并意图、原子写回（Windows 瞬时错误重试）。
+  if (intents.length > 0) {
+    await serializeByKey(TEAM_CONFIG_QUEUE, teamDir, () => persistMergedTeamConfig(teamDir, intents));
+  }
   return { teamExists: true, results };
 }
