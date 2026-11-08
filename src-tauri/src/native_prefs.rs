@@ -154,6 +154,17 @@ fn read_ui_prefs(app: &AppHandle) -> serde_json::Value {
         .unwrap_or_else(|| serde_json::json!({}))
 }
 
+/// A short random suffix for temp file names. The repo has had one real
+/// incident of two writers colliding on a fixed temp name and tearing the
+/// file (d1-1); a unique suffix keeps the same shape from appearing here.
+/// On the (never observed) `getrandom` failure the suffix is all zeros,
+/// which degrades to the previous fixed name rather than to corruption.
+fn random_suffix() -> String {
+    let mut bytes = [0_u8; 8];
+    let _ = getrandom::fill(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 fn write_ui_prefs(app: &AppHandle, prefs: &serde_json::Value) -> Result<(), String> {
     let path = ui_prefs_path(app)?;
     if let Some(parent) = path.parent() {
@@ -163,9 +174,11 @@ fn write_ui_prefs(app: &AppHandle, prefs: &serde_json::Value) -> Result<(), Stri
     // Write-then-rename: a crash mid-write must not leave a half-written JSON
     // file behind. `read_ui_prefs` silently falls back to `{}` on a parse
     // error, which would lose the theme, the saved server port and the
-    // last-version marker in one go. (`fs::rename` replaces an existing
+    // last-version marker in one go. The temp name is unique per call (the
+    // reader only ever looks at the final name; a second caller writing
+    // concurrently cannot tear this one). (`fs::rename` replaces an existing
     // target on Windows too, via MOVEFILE_REPLACE_EXISTING.)
-    let tmp = path.with_extension("json.tmp");
+    let tmp = path.with_extension(format!("json.{}.tmp", random_suffix()));
     fs::write(&tmp, raw).map_err(|error| error.to_string())?;
     fs::rename(&tmp, &path).map_err(|error| error.to_string())
 }

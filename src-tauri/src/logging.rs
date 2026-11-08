@@ -80,14 +80,19 @@ pub fn append_desktop_log(dir: &Path, message: &str) {
 pub const SERVER_LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Rotates `path` to `path.1` (replacing the previous one) when it exceeds
-/// `cap`. Best effort: a failed rotation keeps appending, same as
-/// `append_desktop_log`'s rotation.
-pub fn rotate_log_on_start(path: &Path, cap: u64) {
-    if fs::metadata(path).is_ok_and(|meta| meta.len() > cap) {
-        let mut rotated = path.as_os_str().to_os_string();
-        rotated.push(".1");
-        let _ = fs::rename(path, PathBuf::from(rotated));
+/// `cap`. Best effort, but a failure is *returned, not swallowed*: this
+/// function exists because server.log grew without bound, and a silently
+/// failed rotation (the Windows handle-contention case it is scheduled
+/// around) would quietly revert to that defect. The caller logs the failure.
+pub fn rotate_log_on_start(path: &Path, cap: u64) -> Option<String> {
+    if !fs::metadata(path).is_ok_and(|meta| meta.len() > cap) {
+        return None;
     }
+    let mut rotated = path.as_os_str().to_os_string();
+    rotated.push(".1");
+    fs::rename(path, PathBuf::from(rotated))
+        .err()
+        .map(|error| error.to_string())
 }
 
 /// Appends a line to `desktop.log` in the app log directory. The log exists so

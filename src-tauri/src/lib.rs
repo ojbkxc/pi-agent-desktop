@@ -863,8 +863,15 @@ fn start_packaged_server_attempt(
     let log_path = log_dir.join("server.log");
     // The server's own log grows without bound otherwise (it only ever gets
     // appended to by the Node child); rotate before this launch takes the
-    // file, while the previous holder is gone.
-    rotate_log_on_start(&log_path, logging::SERVER_LOG_MAX_BYTES);
+    // file, while the previous holder is gone. A failed rotation is logged:
+    // it means this launch keeps appending to an over-cap file, which is the
+    // defect the rotation exists to prevent.
+    if let Some(error) = rotate_log_on_start(&log_path, logging::SERVER_LOG_MAX_BYTES) {
+        desktop_log(
+            app,
+            &format!("server.log rotation failed; it keeps growing until the next launch: {error}"),
+        );
+    }
     let stdout = OpenOptions::new()
         .create(true)
         .append(true)
