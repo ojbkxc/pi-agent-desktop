@@ -39,7 +39,9 @@ export interface DispatchSuggestion {
   assignmentId?: string;
   fromMember?: string;
   toMember?: string;
-  expectedUpdatedAt?: string;
+  /** 后端真实契约：毫秒时间戳（number）。改派请求体原样带回，route 校验
+   *  typeof === "number" 且与票面 updatedAt 全等（design-54 v5 / lib 实现）。 */
+  expectedUpdatedAt?: number;
   reason: string;
 }
 export interface WorkloadQuota {

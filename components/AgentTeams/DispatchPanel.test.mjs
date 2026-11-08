@@ -38,7 +38,8 @@ const reassignSuggestion = {
   assignmentId: "assign-1",
   fromMember: "ghost",
   toMember: "worker-two",
-  expectedUpdatedAt: "2026-11-08T00:00:00.000Z",
+  // 后端真实契约：expectedUpdatedAt 是毫秒时间戳（number），route 校验 typeof === "number"。
+  expectedUpdatedAt: 1762560000000,
   reason: "assignee not on roster",
 };
 const addMemberSuggestion = {
@@ -58,8 +59,13 @@ test("dispatchBody：assign 三字段、reassign 五字段（v5 契约）、add-
     ticketId: "t2",
     assignmentId: "assign-1",
     toMember: "worker-two",
-    expectedUpdatedAt: "2026-11-08T00:00:00.000Z",
+    expectedUpdatedAt: 1762560000000,
   });
+  // 真实请求体类型对齐后端 route：expectedUpdatedAt 必须是 number 毫秒（route
+  // 校验 typeof !== "number" 即 409）。
+  const realBody = dispatchBody(reassignSuggestion, "worker-two", "req-2");
+  assert.equal(typeof realBody.expectedUpdatedAt, "number");
+  assert.equal(Number.isFinite(realBody.expectedUpdatedAt), true);
   assert.equal(dispatchBody(addMemberSuggestion, "worker-one", "req-3"), null);
   // 缺 expectedUpdatedAt/assignmentId 的 reassign 拒绝构造（契约缺参不硬发）。
   assert.equal(dispatchBody({ ...reassignSuggestion, expectedUpdatedAt: undefined }, "w", "req-4"), null);
