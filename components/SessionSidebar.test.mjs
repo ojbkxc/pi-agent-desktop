@@ -393,7 +393,9 @@ test("performDelete 无论成败都在 finally 复位 deleting", () => {
   assert.ok(start !== -1, "performDelete 存在");
   const body = source.slice(start, source.indexOf("const archive:", start));
   // 不变量：复位收敛到 finally（成功与失败两条路径都经过），try 成功分支不再各自复位。
-  assert.match(body, /\} finally \{[\s\S]*?setDeleting\(false\);\s*\n\s*\}\s*\n\s*\}\), ?\[/, "成功路径必须经 finally 复位 deleting");
+  // 真实文本形态：setDeleting(false);\n    }\n  }, [（useCallback 箭头体 } 直接接 deps，
+  // 没有介于其间的 )——闭括号在 deps 数组之后）。
+  assert.match(body, /\} finally \{[\s\S]*?setDeleting\(false\);\s*\n\s*\}\s*\n\s*\}, ?\[/, "成功路径必须经 finally 复位 deleting");
   // 成功分支不再各自复位（复位收敛到 finally），失败分支保留 setDeleteError。
   const tryBody = body.slice(body.indexOf("try {"), body.indexOf("} catch (e) {"));
   assert.doesNotMatch(tryBody, /setDeleting\(false\)/, "成功分支不得自行复位（收敛到 finally）");
