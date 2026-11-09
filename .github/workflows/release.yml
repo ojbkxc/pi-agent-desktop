@@ -120,6 +120,42 @@ jobs:
 
             ### New
 
+            - **Skill market.** A full page that browses two registries (ClawHub and SkillHub), searches them, previews a skill's `SKILL.md`, file list and security reports, and installs it into `~/.pi/agent/skills/`. Installation verifies every file against the registry checksum and only ever writes directories it can remove again; a skill you placed there by hand is never touched.
+            - **The sidebar entry that used to open Teams now opens the market** — the team workbench is reached from the session header strip, as in cc-haha.
+
+            ### Fixed
+
+            - Reading a session that had been compacted could answer HTTP 500 when a historical assistant message carried no usage block; context usage is now reported as unknown instead.
+            - Session switching logged a browser console error for every session that is not part of a team; that is now an ordinary empty answer.
+
+            Bundled components: pi 1.5.0, pi-web 0.10.0.
+
+            ---
+
+            ## Pi Agent Desktop 0.8.2（fork）
+
+            这是 pi-agent-desktop 的 **ojbkxc fork**，基于上游 0.8.2 构建。
+
+            ### 新增
+
+            - **技能市场。** 整页浏览两个注册源（ClawHub 与 SkillHub），可搜索、预览 `SKILL.md`、文件清单与安全报告，并安装到 `~/.pi/agent/skills/`。安装会逐文件校验注册源给出的校验和，且只写自己可再次删除的目录；手工放进该目录的技能不会被碰。
+            - **侧栏原本打开「团队」的入口现在打开市场** —— 团队工作台改从会话头部团队条进入，与 cc-haha 一致。
+
+            ### 修复
+
+            - 读取被压缩过的会话时，若某条历史 assistant 消息没有 usage 字段，状态接口会返回 HTTP 500；现在把上下文用量如实报为未知。
+            - 切换到不属于任何团队的会话时，浏览器控制台会多一条错误；现在只是一份普通的空结果。
+
+            内置组件版本：pi 1.5.0、pi-web 0.10.0。
+
+            ---
+
+            ## Pi Agent Desktop 0.8.2 (fork)
+
+            This is the **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2.
+
+            ### New
+
             - **Team workload is visible and actionable.** See member availability and queued work, then make a first assignment, reassign work, or add a member with one action. Delivery receipts report the real result instead of merely closing the panel.
             - **Teams can be stopped and reclaimed explicitly.** Inspect directory usage and recent activity, with an idle notice that never stops or deletes anything automatically. Reclaim requires a second confirmation, permanently removes team records, and preserves member session transcripts (`.jsonl`) and artifacts.
 
