@@ -28,7 +28,9 @@ export async function checkChatAppearanceReset(page) {
     appliedWidth: document.documentElement.style.getPropertyValue("--chat-content-max-width"),
     appliedFontSize: document.documentElement.style.getPropertyValue("--chat-content-font-size"),
   })), { width: "820", fontSize: "14", appliedWidth: "820px", appliedFontSize: "14px" });
-  await page.reload({ waitUntil: "networkidle" });
+  // 同 checkChatAppearance 里的 reload：networkidle 在有 SSE 的页面上等不到，改为等偏好生效。
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.documentElement.style.getPropertyValue("--chat-content-max-width") === "820px");
   const showSidebar = page.getByRole("button", { name: "Show sidebar", exact: true });
   if (await showSidebar.isVisible()) await showSidebar.click();
   await openGeneralSettings(page);
@@ -80,7 +82,11 @@ export async function checkChatAppearance(page) {
   await closeSettings();
   assert.equal(await textarea.inputValue(), draft);
   assert.ok(await fittedHeight() < narrowHeight, "Widening must shrink the existing draft");
-  await page.reload({ waitUntil: "networkidle" });
+  // 页面常驻 SSE（会话事件流）与 10s 轮询，networkidle 在这种页面上不成立：连接一直是 inflight，
+  // 等待最后只能靠 30s 超时收场。改为等「本地偏好已应用」——useChatAppearance 在应用挂载时把
+  // localStorage 的值写成 :root 上的 CSS 变量，这就是重载后应用就绪的可观测点。
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.documentElement.style.getPropertyValue("--chat-content-font-size") === "18px");
   await page.locator(".markdown-code-block pre").waitFor();
   assert.equal(await font(textarea), "18px");
   assert.equal(await font(page.locator(".markdown-user-message")), "18px");

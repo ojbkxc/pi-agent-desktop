@@ -138,16 +138,22 @@ export function useActiveTeamStrip(sessionId: string | null, refreshKey: number 
         const response = await fetch(url, { cache: "no-store" });
         if (stopped) return;
         if (!response.ok) {
-          // 404 = 该会话暂无团队：停止轮询、快照置空（条不占位），等 refreshKey / 重新可见。
-          // 其它错误按网络类失败重试。
-          if (response.status !== 404) schedule(TEAM_STRIP_RETRY_MS);
+          // 404 = 团队目录在但读不出快照（真异常）；按网络类失败重试。
+          schedule(TEAM_STRIP_RETRY_MS);
           return;
         }
-        const data = await response.json() as TeamWorkbenchSnapshot;
+        const data = await response.json() as TeamWorkbenchSnapshot | { team?: null };
         if (stopped) return;
-        setSnapshot(data);
+        // 200 且 team 为 null = 该会话不属于任何团队（常态）。停止轮询、快照置空
+        // （条不占位），等 refreshKey / 重新可见再拉。
+        if (!data.team) {
+          setSnapshot(null);
+          return;
+        }
+        const snapshot = data as TeamWorkbenchSnapshot;
+        setSnapshot(snapshot);
         // 仅活跃期继续 3 秒轮询；completed / ended 停止，保留最后一次快照。
-        if (isActiveTeamPhase(data.team.status)) schedule(TEAM_STRIP_POLL_MS);
+        if (isActiveTeamPhase(snapshot.team.status)) schedule(TEAM_STRIP_POLL_MS);
       } catch {
         if (!stopped) schedule(TEAM_STRIP_RETRY_MS);
       }

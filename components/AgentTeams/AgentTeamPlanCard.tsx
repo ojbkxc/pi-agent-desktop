@@ -44,10 +44,10 @@ export function planStateLabelKey(state: PlanState): string {
   return `teams.plan.state.${state}`;
 }
 
-/** 状态 → 徽标色（只用主题 token + 一个固定 danger 色）。 */
+/** 状态 → 徽标色（只用主题 token）。 */
 export function planStateToneColor(state: PlanState): string {
   if (state === "review_pending") return "var(--accent)";
-  if (state === "launch_failed") return "#e5484d";
+  if (state === "launch_failed") return "var(--danger)";
   return "var(--text-muted)";
 }
 
@@ -63,19 +63,19 @@ const S: Record<string, CSSProperties> = {
   },
   icon: { flex: "0 0 auto", color: "var(--text-muted)" },
   text: { display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 },
-  label: { fontSize: 11, color: "var(--text-dim)" },
-  name: { fontSize: 13, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-  meta: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-muted)" },
-  badge: { padding: "1px 7px", borderRadius: 999, border: "1px solid var(--border)", fontSize: 11 },
+  label: { fontSize: "var(--fs-micro)", color: "var(--text-dim)" },
+  name: { fontSize: "var(--fs-body)", fontWeight: "var(--fw-semibold)", color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  meta: { display: "flex", alignItems: "center", gap: 6, fontSize: "var(--fs-caption)", color: "var(--text-muted)" },
+  badge: { padding: "1px 7px", borderRadius: 999, border: "1px solid var(--border)", fontSize: "var(--fs-micro)" },
   review: {
     flex: "0 0 auto",
     border: "none",
     borderRadius: 7,
     padding: "5px 11px",
     background: "var(--accent)",
-    color: "#fff",
-    fontSize: 12,
-    fontWeight: 600,
+    color: "var(--accent-contrast)",
+    fontSize: "var(--fs-caption)",
+    fontWeight: "var(--fw-semibold)",
     cursor: "pointer",
   },
   overlay: {
@@ -98,20 +98,20 @@ const S: Record<string, CSSProperties> = {
     padding: 16,
   },
   dialogHead: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 },
-  h2: { fontSize: 15, fontWeight: 600, color: "var(--text)", margin: 0 },
+  h2: { fontSize: "var(--fs-title)", fontWeight: "var(--fw-semibold)", color: "var(--text)", margin: 0 },
   section: { marginTop: 14 },
-  h4: { fontSize: 12, fontWeight: 600, color: "var(--text-muted)", margin: "0 0 6px" },
+  h4: { fontSize: "var(--fs-caption)", fontWeight: "var(--fw-semibold)", color: "var(--text-muted)", margin: "0 0 6px" },
   member: { padding: "6px 0", borderTop: "1px solid var(--border)" },
-  memberName: { fontSize: 13, fontWeight: 600, color: "var(--text)" },
-  mono: { fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text-muted)" },
-  muted: { fontSize: 12, color: "var(--text-muted)" },
-  prompt: { fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text-dim)", whiteSpace: "pre-wrap", margin: "4px 0 0" },
-  task: { padding: "6px 0", borderTop: "1px solid var(--border)", fontSize: 12, color: "var(--text)" },
-  alert: { color: "#e5484d", fontSize: 12, margin: "6px 0" },
+  memberName: { fontSize: "var(--fs-body)", fontWeight: "var(--fw-semibold)", color: "var(--text)" },
+  mono: { fontFamily: "var(--font-mono)", fontSize: "var(--fs-micro)", color: "var(--text-muted)" },
+  muted: { fontSize: "var(--fs-caption)", color: "var(--text-muted)" },
+  prompt: { fontFamily: "var(--font-mono)", fontSize: "var(--fs-micro)", color: "var(--text-dim)", whiteSpace: "pre-wrap", margin: "4px 0 0" },
+  task: { padding: "6px 0", borderTop: "1px solid var(--border)", fontSize: "var(--fs-caption)", color: "var(--text)" },
+  alert: { color: "var(--danger)", fontSize: "var(--fs-caption)", margin: "6px 0" },
   footer: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 },
-  ghost: { border: "1px solid var(--border)", background: "transparent", color: "var(--text)", borderRadius: 7, padding: "5px 11px", fontSize: 12, cursor: "pointer" },
-  approve: { border: "none", background: "var(--accent)", color: "#fff", borderRadius: 7, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" },
-  approveOff: { border: "none", background: "var(--border)", color: "var(--text-dim)", borderRadius: 7, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "not-allowed" },
+  ghost: { border: "1px solid var(--border)", background: "transparent", color: "var(--text)", borderRadius: 7, padding: "5px 11px", fontSize: "var(--fs-caption)", cursor: "pointer" },
+  approve: { border: "none", background: "var(--accent)", color: "var(--accent-contrast)", borderRadius: 7, padding: "5px 12px", fontSize: "var(--fs-caption)", fontWeight: "var(--fw-semibold)", cursor: "pointer" },
+  approveOff: { border: "none", background: "var(--border)", color: "var(--text-dim)", borderRadius: 7, padding: "5px 12px", fontSize: "var(--fs-caption)", fontWeight: "var(--fw-semibold)", cursor: "not-allowed" },
 };
 
 function UsersIcon() {

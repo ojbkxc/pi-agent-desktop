@@ -96,6 +96,11 @@ app/api/
   models-config/test/route.ts     POST test a configured model/provider
   plugins/route.ts                GET/POST package plugin management
   plugins/marketplace/route.ts    GET the pi-extensions catalog (fixed URL, read-only)
+  market/skills/route.ts          GET skill market list/search across clawhub.ai + api.skillhub.cn (+ ?installed=1)
+  market/skills/[id]/route.ts     GET one skill detail (source:slug, ?owner=) + install state
+  market/skills/[id]/file/route.ts GET a skill file preview (truncated past 300 KB)
+  market/installed/route.ts       GET marker-scanned installed market skills
+  market/install/route.ts         POST install or (action:"uninstall") remove a market skill
   skills/route.ts                 GET/PATCH loaded skills and disable-model-invocation
   skills/install/route.ts         POST install skills through npx skills add
   skills/search/route.ts          GET/POST skills.sh search
@@ -131,6 +136,8 @@ lib/
   npx.ts               npx runner used by skill install
   pi-types.ts          local structural types for pi SDK objects
   plugin-marketplace.ts  pi-extensions catalog: parse/validate + source mapping (fixed URL, see app/api/plugins/marketplace)
+  skill-market/       skill market: the two registries' providers, the merge/TTL-cache layer, and
+                      install/uninstall (temp dir + sha256 + .market-meta.json marker; see docs/agents/fork-skill-market.md)
   rpc-manager.ts      AgentSessionWrapper + registry + startRpcSession
   scheduled-tasks/    scheduler, runner, cron, store, run index for scheduled tasks (see docs/agents/scheduled-tasks.md)
   public-access/      Cloudflare tunnel: config validation, the cloudflared spawner, the gateway probe, the state machine, the binary resolver and install (see docs/agents/fork-public-access.md)
@@ -164,6 +171,8 @@ components/
   AgentsConfig.tsx    built-in subagent toggle + agent profile editor
   PluginsConfig.tsx   modal for installed package plugins
   SkillsConfig.tsx    modal for loaded/search/installable skills
+  skill-market/       the skill market page (card grid, detail with file preview + security reports,
+                      install confirmation) and its sidebar row
   scheduled/          Scheduled page (list, detail, editor, run history) and its sidebar row
   tasks/              Tasks page (waiting / running / recent across projects) and its sidebar row
   RemoteAccessSection.tsx  Settings › General › Remote access (Tailscale) and "Notify this device"
@@ -213,6 +222,7 @@ Read the doc for the area you touch before changing it. Upstream docs (no prefix
 - [mcp-add.md](docs/agents/mcp-add.md): Settings › MCP add (paste re-parsed on the server, host-variable confirmation, literal secrets kept global, fresh-folder trust, the add pane) and the paste importer's escaping and grammars. Files: `lib/mcp-add.ts`, `lib/mcp-import*.ts`, `lib/shell-words.ts`, fresh-folder trust in `lib/project-trust.ts`, `components/McpAddServer.tsx`, `components/mcp-add-helpers.ts`, the `add` action of `app/api/mcp/route.ts`.
 - [models.md](docs/agents/models.md): default model and reasoning level, mid-run reasoning changes, remote provider catalogs, `enabledModels` scoping and minimal edits, provider auth listing and credentials. Files: `app/api/models/**`, `app/api/models-config/**`, `app/api/auth/**`, `lib/default-preferences.ts`, `lib/model-scope.ts`, `lib/enabled-models*.ts`, `lib/model-catalog-refresh.ts`, `lib/provider-listing*.ts`, `components/ModelsConfig.tsx`, `components/EnabledModelsSection.tsx`, `components/ModelSelector.tsx`, `components/SelectorRow.tsx`.
 - [files-and-access.md](docs/agents/files-and-access.md): worktrees and project grouping, the file access allow-list (the `/api/files` security boundary), file tree visibility, web password throttling. Files: `app/api/files/**`, `app/api/cwd/**`, `app/api/worktrees/**`, `app/api/file-index/**`, `app/api/web-auth/**`, `proxy.ts`, `lib/path-security.ts`, `lib/file-access.ts`, `lib/linked-directory.ts`, `lib/session-file-references*.ts`, `lib/file-tree-visibility.ts`, `lib/worktree.ts`, `lib/paths.ts`, `lib/auth-throttle.ts`, `components/FileExplorer.tsx`.
+- [fork-skill-market.md](docs/agents/fork-skill-market.md): the skill market page — the two registries (clawhub.ai + api.skillhub.cn), owner-pinned slug reads, the interleaved merge + cursor + TTL cache, safe install (temp dir, sha256, marker file) and uninstall that refuses non-market directories, the routes and the UI. Files: `lib/skill-market/**`, `app/api/market/**`, `components/skill-market/**`.
 - [settings-ui.md](docs/agents/settings-ui.md): Plugins and Skills routes, sidebar group switches, the shared `SettingsUi` blocks every settings panel and add pane uses. Files: `app/api/plugins/**`, `app/api/skills/**`, `components/SettingsUi.tsx`, `components/settings-ui-helpers.ts`, `components/SkillsConfig.tsx`, `components/PluginsConfig.tsx`; also before adding a settings section or add pane.
 - [subagents.md](docs/agents/subagents.md): the built-in subagent setting, profiles and their files, run status, completion notifications. Files: `lib/subagent*.ts`, `app/api/subagents/**`, `components/AgentsConfig.tsx`.
 - [scheduled-tasks.md](docs/agents/scheduled-tasks.md): scheduled tasks (the Scheduled page): server-side scheduler and its lease, catch-up and overlap rules, read-only default, the run index that hides runs from the project tree, why shared state is on `globalThis`. Files: `lib/scheduled-tasks/**`, `app/api/scheduled-tasks/**`, `instrumentation-node.ts`, `hooks/useScheduledTasks.ts`, `components/scheduled/**`, the Scheduled row in `components/SessionSidebar.tsx`, the page overlay in `components/AppShell.tsx`.

@@ -1271,7 +1271,20 @@ export class AgentSessionWrapper {
 
       case "get_state": {
         const model = this.inner.model;
-        const contextUsage = this.inner.getContextUsage();
+        // pi SDK 1.5.0 的 getContextUsage() 在「有 compaction 之后的 assistant 消息」分支里
+        // 直接 `calculateContextTokens(message.usage)`，**没有**先判 usage 是否存在
+        // （同一文件里 getAssistantUsage() 是判过的）。会话文件里只要有一条缺 usage 的
+        // assistant 消息（第三方导入、手工编辑、provider 未回报 usage），这里就抛
+        // TypeError，把整个 state 接口打成 500 —— 打开会话后连标题栏状态都读不出来。
+        // 这层兜底只针对这个已知的 SDK 缺陷：拿不到上下文用量就当未知（null），
+        // 不让一条缺字段的历史消息拖垮整个状态读取。
+        let contextUsage: ReturnType<typeof this.inner.getContextUsage>;
+        try {
+          contextUsage = this.inner.getContextUsage();
+        } catch (error) {
+          console.warn("[get_state] getContextUsage failed; reporting unknown context usage:", error);
+          contextUsage = undefined;
+        }
         return {
           sessionId: this.inner.sessionId,
           sessionFile: this.inner.sessionFile ?? "",

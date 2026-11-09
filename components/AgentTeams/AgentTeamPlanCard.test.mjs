@@ -182,6 +182,6 @@ test("回调接线：启用时点批准触发 onApprove、点关闭触发 onClos
 test("状态标签键与徽标色覆盖四态（纯函数输出）", () => {
   assert.equal(planStateLabelKey("review_pending"), "teams.plan.state.review_pending");
   assert.equal(planStateToneColor("review_pending"), "var(--accent)");
-  assert.equal(planStateToneColor("launch_failed"), "#e5484d");
+  assert.equal(planStateToneColor("launch_failed"), "var(--danger)");
   assert.equal(planStateToneColor("draft"), "var(--text-muted)");
 });

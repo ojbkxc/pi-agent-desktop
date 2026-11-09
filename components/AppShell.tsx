@@ -28,6 +28,8 @@ const FileExplorer = dynamic(() => import("./FileExplorer").then((m) => m.FileEx
 const TasksView = dynamic(() => import("./tasks/TasksView").then((m) => m.TasksView), { ssr: false });
 const AgentTeamsView = dynamic(() => import("./AgentTeams/AgentTeamsView").then((m) => m.AgentTeamsView), { ssr: false });
 const ScheduledView = dynamic(() => import("./scheduled/ScheduledView").then((m) => m.ScheduledView), { ssr: false });
+// 技能市场整页：卡片网格 + 详情 + 安装确认，数据来自 /api/market/**（双源合并）。
+const SkillMarketView = dynamic(() => import("./skill-market/SkillMarketView").then((m) => m.SkillMarketView), { ssr: false });
 import { openFileTab, saveFileViewerState } from "./file-tab-state";
 import { SettingsPanel } from "./SettingsPanel";
 import { keepDocumentTitle } from "@/lib/document-title";
@@ -116,10 +118,12 @@ import { getProjectDisplayName } from "@/lib/project-display";
 
 type SessionCopyField = "file" | "id" | "projectDir" | "gitBranch" | "gitWorktree";
 /** A page covering the chat area, named by `?view=`. */
-type WorkspaceView = "tasks" | "scheduled" | "artifacts" | "teams" | null;
+type WorkspaceView = "tasks" | "scheduled" | "artifacts" | "teams" | "market" | null;
 
 function parseWorkspaceView(value: string | null | undefined): WorkspaceView {
-  return value === "tasks" || value === "scheduled" || value === "artifacts" || value === "teams" ? value : null;
+  return value === "tasks" || value === "scheduled" || value === "artifacts" || value === "teams" || value === "market"
+    ? value
+    : null;
 }
 type AutoNameStatus =
   | { kind: "idle" }
@@ -208,6 +212,7 @@ export function AppShell() {
   const scheduledOpen = workspaceView === "scheduled";
   const artifactsOpen = workspaceView === "artifacts";
   const teamsOpen = workspaceView === "teams";
+  const marketOpen = workspaceView === "market";
   const pageOpen = workspaceView !== null;
   // D2：从会话团队条点「打开」时记下要选中的团队（目录名），供工作台初始选中；
   // 从侧栏入口打开时为 null，由工作台自选（最新创建的团队）。
@@ -1417,12 +1422,9 @@ export function AppShell() {
   const handleOpenTasks = useCallback(() => openWorkspaceView("tasks"), [openWorkspaceView]);
   const handleOpenScheduled = useCallback(() => openWorkspaceView("scheduled"), [openWorkspaceView]);
   const handleOpenArtifacts = useCallback(() => openWorkspaceView("artifacts"), [openWorkspaceView]);
-  // 侧栏「团队」入口：不指定团队，由工作台自选。
-  const handleOpenTeams = useCallback(() => {
-    setOpenedTeamName(null);
-    openWorkspaceView("teams");
-  }, [openWorkspaceView]);
+  const handleOpenMarket = useCallback(() => openWorkspaceView("market"), [openWorkspaceView]);
   // 会话团队条「打开」：带着该会话所属团队（目录名）打开，工作台初始即选中它。
+  // 这是团队工作台**唯一**入口（侧栏那一行已移除，与 cc-haha 一致）。
   const handleOpenTeamWorkbench = useCallback((teamName: string | null) => {
     setOpenedTeamName(teamName);
     openWorkspaceView("teams");
@@ -1977,6 +1979,8 @@ export function AppShell() {
       ? translate("artifacts.page.title")
     : teamsOpen
       ? translate("teams.title")
+    : marketOpen
+      ? translate("market.title")
     : selectedSession
       ? selectedSession.name || selectedSession.firstMessage || translate("appshell.untitledTask")
       : showChat
@@ -2046,8 +2050,8 @@ export function AppShell() {
         onSessionsChange={handleSessionsChange}
         onOpenTasks={handleOpenTasks}
         tasksOpen={tasksOpen}
-        onOpenTeams={handleOpenTeams}
-        teamsOpen={teamsOpen}
+        onOpenMarket={handleOpenMarket}
+        marketOpen={marketOpen}
         onOpenScheduled={handleOpenScheduled}
         scheduledOpen={scheduledOpen}
         onOpenArtifacts={handleOpenArtifacts}
@@ -3057,6 +3061,7 @@ export function AppShell() {
             onOpenSession={(sessionId) => void handleOpenSession(sessionId)}
           />
         )}
+        {marketOpen && <SkillMarketView />}
         {teamsOpen && (
           <AgentTeamsView
             teamName={openedTeamName ?? undefined}

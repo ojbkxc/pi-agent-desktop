@@ -539,7 +539,11 @@ test("reconnects active shell output to its streaming tool call", () => {
   assert.match(updateSource, /setActiveToolResults/);
   assert.match(updateSource, /content,/);
   assert.match(endSource, /setActiveToolResults[\s\S]*next\.delete\(id\)/);
-  assert.match(chatWindowSource, /const map = new Map\(activeToolResults\)/);
+  // 结果表从 activeToolResults 建，且**空 id 不入表**（provider 把流式 tool_call 分片各自成块时
+  // 会留下空 toolCallId，同键互串结果与时长）。
+  assert.match(chatWindowSource, /const map = new Map<string, ToolResultMessage>\(\)/);
+  assert.match(chatWindowSource, /for \(const \[id, result\] of activeToolResults\)/);
+  assert.match(chatWindowSource, /if \(id\.trim\(\)\) map\.set\(id, result\)/);
   assert.match(chatWindowSource, /<MessageView message=\{streamState\.streamingMessage as AgentMessage\} toolResults=\{toolResultsMap\}/);
 });
 

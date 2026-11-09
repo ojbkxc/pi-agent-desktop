@@ -351,16 +351,12 @@ const FORK_FEATURES = [
     markers: ["<TasksView", "handleOpenTasks", 'value === "tasks"'],
   },
   {
-    name: "Teams entry in the sidebar",
-    file: "components/SessionSidebar.tsx",
-    // The Agent Teams swimlane page entry; losing the row leaves the feature unreachable.
-    markers: ["TeamsSidebarRow", "onOpenTeams"],
-  },
-  {
     name: "Teams page in AppShell",
     file: "components/AppShell.tsx",
     // The fork's Agent Teams swimlane page, its own `?view=teams` state alongside Tasks.
-    markers: ["<AgentTeamsView", "handleOpenTeams", 'value === "teams"'],
+    // 入口只有会话头部团队条（`AgentTeamStrip` 的 onOpen）——侧栏那一行已按用户决定移除，
+    // 与 cc-haha 一致（它也没有侧栏团队入口）。团队条消失才是这个功能真的不可达。
+    markers: ["<AgentTeamsView", "handleOpenTeamWorkbench", 'value === "teams"'],
   },
   {
     name: "Remote access settings and Notify this device",

@@ -142,6 +142,10 @@ test("GET /api/teams/session/[id]/workbench resolves the team by lead session", 
   assert.equal(member.status, 200);
   assert.equal((await member.json()).team.id, "demo");
 
+  // 「该会话不属于任何团队」是常态：200 + `{team: null}`，不是 404。
+  // 桌面每次打开会话都会探测一次（团队条 / 计划卡 / 内联卡），用 404 会把常态
+  // 记成浏览器的 console error，既污染用户控制台也让 e2e 的「无页面错误」永远红。
   const missing = await sessionRoute.GET(new Request("http://localhost/api/teams/session/nope/workbench"), { params: Promise.resolve({ id: "nope" }) });
-  assert.equal(missing.status, 404);
+  assert.equal(missing.status, 200);
+  assert.deepEqual(await missing.json(), { team: null });
 });

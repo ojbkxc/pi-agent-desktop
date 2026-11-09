@@ -112,8 +112,9 @@ export function AgentTeamInlineCard({ sessionId, isError, hasResult, onOpen }: A
           if (!cancelled) setState({ kind: "absent" });
           return;
         }
-        const snapshot = await response.json() as TeamWorkbenchSnapshot;
-        if (!cancelled) setState({ kind: "ready", snapshot });
+        // 会话不属于任何团队时路由回 200 `{team: null}`（常态，不是错误）。
+        const snapshot = await response.json() as TeamWorkbenchSnapshot | { team?: null };
+        if (!cancelled) setState(snapshot.team ? { kind: "ready", snapshot: snapshot as TeamWorkbenchSnapshot } : { kind: "absent" });
       } catch {
         if (!cancelled) setState({ kind: "absent" });
       }

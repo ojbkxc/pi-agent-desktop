@@ -47,7 +47,7 @@ import { ArchivedProjectsSection } from "./ArchivedProjectsSection";
 import { ScheduledSidebarRow } from "./scheduled/ScheduledSidebarRow";
 import { ArtifactsSidebarRow } from "./artifacts/ArtifactsSidebarRow";
 import { TasksSidebarRow } from "./tasks/TasksSidebarRow";
-import { TeamsSidebarRow } from "./AgentTeams/TeamsSidebarRow";
+import { MarketSidebarRow } from "./skill-market/MarketSidebarRow";
 import { isScheduledRunSession } from "@/hooks/useScheduledTasks";
 import { prefetchSessionData } from "@/lib/session-data-cache";
 import { isImeComposing } from "@/lib/ime";
@@ -100,9 +100,9 @@ interface Props {
   artifactsOpen?: boolean;
   onOpenTasks?: () => void;
   tasksOpen?: boolean;
-  /** Opens the Agents (team swimlane) page; the row under Tasks is absent without it. */
-  onOpenTeams?: () => void;
-  teamsOpen?: boolean;
+  /** Opens the skill market page; the row under Tasks is absent without it. */
+  onOpenMarket?: () => void;
+  marketOpen?: boolean;
 }
 
 interface WorktreeState {
@@ -303,7 +303,7 @@ function readIdSetPref(key: Parameters<typeof getPrefJson>[0]): Set<string> {
     : new Set();
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onChatWorkspaceCwdChange, onProjectsChange, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange, headerControls, onOpenTerminal, onOpenScheduled, scheduledOpen = false, onOpenArtifacts, artifactsOpen = false, onOpenTasks, tasksOpen = false, onOpenTeams, teamsOpen = false }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onChatWorkspaceCwdChange, onProjectsChange, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange, headerControls, onOpenTerminal, onOpenScheduled, scheduledOpen = false, onOpenArtifacts, artifactsOpen = false, onOpenTasks, tasksOpen = false, onOpenMarket, marketOpen = false }: Props) {
   const { t } = useI18n();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [chatWorkspaceCwd, setChatWorkspaceCwd] = useState<string | null>(null);
@@ -523,17 +523,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       cancelled = true;
     };
   }, [refreshKey]);
-
-  // Flattened member set — preserves the original aggregate badge口径.
-  const teamMemberSessionIds = useMemo(
-    () => new Set(teamMemberSessionGroups.flat()),
-    [teamMemberSessionGroups],
-  );
-
-  const runningTeamMemberCount = useMemo(
-    () => [...teamMemberSessionIds].filter((id) => runningSessionIds.has(id)).length,
-    [teamMemberSessionIds, runningSessionIds],
-  );
 
   // 逐会话团队运行点（E1 缺口 3）：某团队只要有任一成员会话仍在跑，该团队即视为
   // 「在跑」，其**全部**成员会话行都打点（lead 会话通常也在 memberSessionIds 里，
@@ -1964,7 +1953,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         </button>
 
         {onOpenTasks && <TasksSidebarRow active={tasksOpen} runningCount={runningSessionIds.size} onOpen={onOpenTasks} />}
-        {onOpenTeams && <TeamsSidebarRow active={teamsOpen} runningCount={runningTeamMemberCount} onOpen={onOpenTeams} />}
+        {onOpenMarket && <MarketSidebarRow active={marketOpen} onOpen={onOpenMarket} />}
         {onOpenScheduled && <ScheduledSidebarRow active={scheduledOpen} onOpen={onOpenScheduled} />}
         {onOpenArtifacts && <ArtifactsSidebarRow active={artifactsOpen} onOpen={onOpenArtifacts} />}
       </div>

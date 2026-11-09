@@ -9,7 +9,6 @@ import {
   EVENT_WIDTH,
   LANE_LABEL_WIDTH,
   type MemberStatus,
-  type TeamWorkbenchSnapshot,
   type SwimlaneEventType,
 } from "@/lib/agent-teams-swimlane";
 import { AppSelect } from "@/components/AppSelect";
@@ -776,7 +775,7 @@ export function AgentTeamsView({
                 cursor: "pointer",
               }}
             >
-              <span style={{ fontSize: 14, color: "var(--text-dim)" }} aria-hidden="true">‹</span>
+              <span style={{ fontSize: "var(--fs-body)", color: "var(--text-dim)" }} aria-hidden="true">‹</span>
               <span
                 style={{
                   writingMode: "vertical-rl",

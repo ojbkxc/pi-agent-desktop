@@ -258,7 +258,8 @@ try {
     page.on("pageerror", (error) => errors.push(error.message));
     page.on("console", (event) => {
       if (event.type() !== "error") return;
-      const message = event.text();
+      // Chrome 的 "Failed to load resource" 文本里不带 URL；带上 location 才能定位是哪个请求。
+      const message = `${event.text()}${event.location().url ? ` @ ${event.location().url}` : ""}`;
       // Both by design: the static HTML preview's sandbox blocks the fixture's
       // inline script, and the opt-in scripted (srcDoc) preview cannot resolve
       // the fixture's relative stylesheet.
