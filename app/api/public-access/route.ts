@@ -93,7 +93,15 @@ export async function POST(req: Request) {
         break;
       case "install-binary": {
         const result = await installCloudflared();
-        if (!result.ok) return NextResponse.json({ error: result.message, code: "runtime" }, { status: 502, headers: NO_STORE });
+        if (!result.ok) {
+          // 界面按 code 本地化，message 只作为详情（title）。别再像以前那样把
+          // stderr/Node 报错（如 "Cannot find module …"）当主文案丢进中文界面。
+          // code: "missing-script" = 打包漏了 scripts/prepare-cloudflared.mjs。
+          return NextResponse.json(
+            { error: "cloudflared install failed", code: result.code, detail: result.message },
+            { status: 502, headers: NO_STORE },
+          );
+        }
         break;
       }
       default:

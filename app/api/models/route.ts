@@ -118,7 +118,11 @@ const EMPTY_MODELS: ModelsData = {
 };
 
 export async function GET(req: Request) {
-  const requestedCwd = new URL(req.url).searchParams.get("cwd") || process.cwd();
+  // 不带 ?cwd 时退回进程 cwd（网页版=仓库根，可过白名单，行为不变）。打包版下进程 cwd 是
+  // 安装包内部（`resources/server`），永远不在白名单里——所以下面把「没给 cwd」和「给了但
+  // 不允许」分开报：前者 400（调用方必须说明项目目录），后者 403。
+  const rawCwd = new URL(req.url).searchParams.get("cwd");
+  const requestedCwd = rawCwd || process.cwd();
   const cwd = resolve(requestedCwd);
 
   let cwdStat;
@@ -132,7 +136,12 @@ export async function GET(req: Request) {
   }
   const allowedRoots = await getAllowedFileRoots();
   if (!isExistingFilePathAllowed(cwd, allowedRoots)) {
-    return Response.json({ error: "Access denied" }, { status: 403 });
+    return Response.json(
+      rawCwd
+        ? { error: "Access denied" }
+        : { error: "Access denied: no ?cwd given, and this process's working directory is not an allowed project folder" },
+      { status: rawCwd ? 403 : 400 },
+    );
   }
 
   try {

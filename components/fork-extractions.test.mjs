@@ -249,6 +249,28 @@ const EXTRACTIONS = [
 
 const FORK_FEATURES = [
   {
+    name: "Agent Team strip in the session topbar",
+    file: "components/AppShell.tsx",
+    // The fork mounts a live Agent Team strip between the topbar title and the
+    // actions block, and a generic back button for full-page overlays. A clean
+    // upstream merge of AppShell.tsx would drop both silently.
+    markers: ["useActiveTeamStrip", "AgentTeamStrip", "closeWorkspaceView", "app-topbar-back", "openedTeamName"],
+  },
+  {
+    name: "Agent Team markers on messages",
+    file: "components/MessageView.tsx",
+    // A user message that requested a team carries a read-only chip, and the
+    // team_create tool call renders an inline card. Merging upstream's
+    // MessageView.tsx would drop both.
+    markers: ["AgentTeamChip", "AgentTeamInlineCard", "agentTeamRequested"],
+  },
+  {
+    name: "composer Agent Team toggle",
+    file: "components/ChatInput.tsx",
+    // The per-message switch and its cost dialog live in the composer toolbar.
+    markers: ["AgentTeamToggle", "AgentTeamChip", "AgentTeamCostDialog"],
+  },
+  {
     name: "ChatWindow new-session header",
     file: "components/ChatWindow.tsx",
     // Upstream renders an empty-state branding header (app icon + product name +
@@ -482,6 +504,36 @@ const FORK_FEATURES = [
     name: "artifacts: General settings has the artifacts switch",
     file: "components/SettingsPanel.tsx",
     markers: ["<ArtifactsSettingRow />"],
+  },
+  {
+    name: "Agent Teams workbench member inspector",
+    file: "components/AgentTeams/AgentTeamsView.tsx",
+    // C7: clicking a member opens the right dock inspector (details + task history +
+    // messages + "open its session"). The panel itself lives in the fork-owned
+    // AgentTeamsMemberInspector; these are the mount points in the workbench a clean
+    // upstream merge could drop, silently reverting to "click a member = open session".
+    markers: ["AgentTeamsMemberInspector", "openMemberInspector", "<AgentTeamsMemberInspector"],
+  },
+  {
+    name: "Agent Teams workbench task drawer",
+    file: "components/AgentTeams/AgentTeamsView.tsx",
+    // C8: the board cards become selectable (TaskBoardCanvas.onSelectTask) and the
+    // drawer renders owner / depends-on / unblocks. Both the wiring and the selected
+    // id state are fork additions to this file.
+    markers: ["AgentTeamTaskDetail", "onSelectTask", "selectedTicketId"],
+  },
+  {
+    name: "Agent Teams workbench communication rail",
+    file: "components/AgentTeams/AgentTeamsView.tsx",
+    // C11: the collapsed right dock is a narrow vertical rail that expands into the
+    // real AgentTeamsCommunicationFeed (C6). Losing this wiring leaves the feed
+    // unreachable from the workbench.
+    markers: [
+      "AgentTeamsCommunicationFeed",
+      "agent-teams-communication-rail",
+      "agent-teams-communication-pane",
+      "<AgentTeamsCommunicationFeed",
+    ],
   },
 ];
 

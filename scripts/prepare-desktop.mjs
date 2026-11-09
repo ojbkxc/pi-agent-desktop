@@ -168,6 +168,17 @@ async function assembleServer() {
     join(serverResourcesDir, "desktop-server.cjs"),
   );
 
+  // 设置页的「下载 cloudflared」在打包版里要靠这个脚本：lib/public-access/install.ts
+  // 用子进程调它（进程 cwd 就是本目录），由它下载 + 校验 sha256 并把二进制写进用户目录。
+  // 不 stage 的话，点下载只会得到 Node 的 "Cannot find module …" —— 界面看起来像坏了
+  // （曾经就是这个报错）。脚本只用 node 内建模块，直接原样拷贝即可。
+  const cloudflaredScriptDir = join(serverResourcesDir, "scripts");
+  await mkdir(cloudflaredScriptDir, { recursive: true });
+  await copyFile(
+    join(rootDir, "scripts", "prepare-cloudflared.mjs"),
+    join(cloudflaredScriptDir, "prepare-cloudflared.mjs"),
+  );
+
   const staticSource = join(desktopBuildDir, "static");
   const staticDestination = join(serverResourcesDir, ".next-desktop", "static");
   await mkdir(dirname(staticDestination), { recursive: true });
@@ -245,6 +256,17 @@ async function bundleNodeRuntime() {
     await copyFile(
       join(rootDir, "desktop", "server-helper-Info.plist"),
       join(contentsDir, "Info.plist"),
+    );
+    // Stage npm inside the .app exactly like the other platforms stage it beside
+    // `node`. `lib/node-cli.ts` looks for `<nodeDir>/node_modules/npm/bin/<name>-cli.js`;
+    // with node at Contents/MacOS/node that resolves inside the bundle, so a
+    // Finder-launched app (minimal PATH) still finds npm. Without it the lookup fell
+    // through to a bare `npx`, and skill install / plugin update died with a bare ENOENT
+    // that looks like a broken feature.
+    await cp(
+      await findNpmSource(),
+      join(contentsDir, "MacOS", "node_modules", "npm"),
+      { recursive: true },
     );
   } else {
     const executableName = process.platform === "win32" ? "node.exe" : "node";

@@ -88,16 +88,54 @@ and with a password the request still has to pass the normal `/login` or Basic p
 `proxy.ts` answers an unauthenticated tunnel request with an explicit 403 that names
 the missing password, instead of the generic "untrusted".
 
-## cloudflared binary (`lib/public-access/binary.ts`, `scripts/prepare-cloudflared.mjs`)
+## cloudflared binary (`lib/public-access/binary.ts`, `lib/public-access/install.ts`, `scripts/prepare-cloudflared.mjs`, `scripts/prepare-desktop.mjs`)
 
-`resolveCloudflaredBinary()` looks at `PI_WEB_CLOUDFLARED`, then
-`$PI_DESKTOP_RESOURCE_DIR/cloudflared/`, then `<repo>/vendor/cloudflared/`, then `PATH`.
-`npm run prepare:cloudflared` downloads the pinned release (version + SHA256 table in the
-script), verifies the digest, untars when needed and writes it atomically, leaving a
-`.json` manifest beside it. A digest mismatch aborts. Nothing is fetched at runtime
-until the user presses Download in Settings (`lib/public-access/install.ts` shells out to
-the same script, so the digest table stays in one place). The staged binaries under
+`resolveCloudflaredBinary()` takes the first candidate that exists and is executable, in
+this order (sources in parentheses are the `source` value it reports):
+
+1. `PI_WEB_CLOUDFLARED` — explicit override; a relative path is resolved against the cwd (`env`). This is also how a packaged or self-hosted install side-loads a pinned binary.
+2. `~/.pi/agent/bin/cloudflared/` — where Settings › Download installs (`user`; `userCloudflaredDir()`, honours `PI_AGENT_HOME`).
+3. `<cwd>/vendor/cloudflared/` — the repo-local artifact of `npm run prepare:cloudflared` (`vendor`).
+4. `cloudflared` on `PATH` (`path`).
+
+The binary name inside the directories is `cloudflared-<target-triple>[.exe]`, so its
+location encodes the platform; only the `PATH` lookup uses the plain `cloudflared` name.
+There is deliberately **no** tier for the packaged resources: packaged resources may be
+read-only (macOS `.app`, Program Files) and are rebuilt on every upgrade, so a binary
+written there would either fail to write or vanish after an update. The user directory is
+what survives upgrades, and a packaged/self-hosted install that must pin a fixed binary
+passes `PI_WEB_CLOUDFLARED` instead. (An earlier `PI_DESKTOP_RESOURCE_DIR` tier was
+removed: nothing in the app ever set it — only a unit test injected it — so it could never
+fire in production.)
+
+`npm run prepare:cloudflared` still writes `<repo>/vendor/cloudflared/` by default
+(`--dir` overrides it) and does the same work it always did: download the pinned release
+(version + SHA256 table in the script), verify the digest, untar when needed, write
+atomically and leave a `.json` manifest beside it. A digest mismatch aborts. Nothing is
+fetched at runtime until the user presses Download in Settings. The staged binaries under
 `vendor/cloudflared/` are gitignored.
+
+The Settings download (`lib/public-access/install.ts`) runs that same script as a child
+process — `execFile(process.execPath, [script, "--dir", userCloudflaredDir()])`, 15-minute
+timeout — so the digest table stays in one place. The script is resolved by
+`resolveCloudflaredInstallScript()`: `PI_WEB_CLOUDFLARED_SCRIPT`, then
+`<cwd>/scripts/prepare-cloudflared.mjs`, then `<cwd>/../scripts/prepare-cloudflared.mjs`.
+If none exists it returns `{ok:false, code:"missing-script"}` rather than letting Node's
+`Cannot find module …` escape; a non-zero exit (or timeout) is
+`code:"download-failed"`.
+
+`scripts/prepare-desktop.mjs` stages `scripts/prepare-cloudflared.mjs` into
+`resources/server/scripts/`; the packaged server runs with `resources/server/` as its cwd,
+so the `<cwd>/scripts/…` candidate is what resolves there and makes Download work in the
+packaged app. When that staging is missing, the failure surfaces as the classified
+`missing-script` code instead of a raw module-resolution error.
+
+On failure the route (`install-binary` action of `app/api/public-access/route.ts`)
+returns `502` with `{error:"cloudflared install failed", code, detail}`. The UI
+(`components/ServerSection.tsx`) localises on `code` with a fixed message and puts
+`detail` — the raw stderr — only into the `title` attribute, never into the visible
+sentence. The old behaviour (rendering the Node error itself) is what made a broken
+package look like a broken page.
 
 ## The port
 
@@ -113,5 +151,6 @@ port takes effect on restart; the UI says so.
 
 Pairing / QR / device management, cc-haha's separate second listener and its
 phone-visible path allow-list, the `cloudflareProxy.ts` network-proxy bridge, bundling
-cloudflared into the Tauri resources, and telling a phone when a quick-tunnel address
-changes.
+cloudflared into the Tauri resources (no tier reads the packaged resources at all — it is
+downloaded on demand into the user directory, `~/.pi/agent/bin/cloudflared/`, or pinned
+via `PI_WEB_CLOUDFLARED`), and telling a phone when a quick-tunnel address changes.

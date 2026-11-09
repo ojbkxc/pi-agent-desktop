@@ -137,6 +137,12 @@ lib/
   server-port.ts      read/write the saved listener port (mirrored by bin/pi-web-settings.js for launchers that cannot load the SDK)
   session-reader.ts   SessionManager wrappers + path cache + buildSessionContext adapter
   tool-presets.ts     PRESET_NONE/DEFAULT/FULL + getPresetFromTools()
+  agent-teams-*.ts    team swimlane projection (`agent-teams-swimlane.ts`) and its stores, the plan
+                      store + approval prompt (`agent-teams-plan*.ts`), the guide/notice prefs, and
+                      the unattended-delivery seam the plan approve route posts through
+  goal/               /goal mode: per-session JSON store (`goal-store.ts`), the pure state machine
+                      and its two continuation gates (`goal-types.ts`), and the `pi-goal` extension
+                      that turns agent_end into the next turn (`goal-extension.ts`)
   types.ts            shared TypeScript types
   normalize.ts        normalizeToolCalls() — field name mismatch between file format and our types
   workspace-state.ts  persisted session/cwd/file-tab restore for desktop cold starts
@@ -161,7 +167,13 @@ components/
   scheduled/          Scheduled page (list, detail, editor, run history) and its sidebar row
   tasks/              Tasks page (waiting / running / recent across projects) and its sidebar row
   RemoteAccessSection.tsx  Settings › General › Remote access (Tailscale) and "Notify this device"
-  ServerSection.tsx   Settings › General › Server: the listener port and the Cloudflare tunnel switch
+  ServerSection.tsx   Settings › General › Server: the listener port and the Cloudflare tunnel switch,
+                      including the cloudflared download/install row (see fork-public-access.md)
+  AgentTeams/         agent-team surfaces: the workbench view (lanes / task board / member inspector /
+                      comm feed / replay), the topbar strip, the composer toggle + armed chip + cost
+                      dialog, the one-time guide, the `team_create` / `team_delete` inline cards, the
+                      plan-approval card (docs/agent-teams-design.md), and the `/goal` strip
+                      (`GoalStrip.tsx`, display-only; its data comes from `GET /api/goals/[session]`)
   RelaySection.tsx    Settings › General › Remote relay: relay config, pairing QR, approvals, paired phones
   SettingsPanel.tsx   settings dialog; its General tab hosts the app intro, Version & Updates and the desktop-only switches
   AppUpdatesSection.tsx  Version & Updates block at the top of General
@@ -179,6 +191,12 @@ hooks/
   useScheduledTasks.ts     shared store + SSE for scheduled tasks
   useKeyboardShortcuts.ts  Esc stops the running agent unless a field or nearer handler took it; Ctrl+Alt+N
   useTheme.ts              theme state
+  useAgentTeamsEnabled.ts  the Agent Teams switch: the global `enabled` flag vs the per-message `armed` flag
+  useActiveTeamStrip.ts    header strip + inline card: session → team snapshot, phase, progress;
+                           `deriveTeamStripPhase` is the one shared phase derivation
+  useTeamPlan.ts           plan-approval card: 2s poll of `/api/teams/[team]/plan`, approve posts a prompt
+  useGoalState.ts          /goal strip data: 2s poll while the goal is active, paused while the
+                           tab is hidden, refreshed once per new message otherwise
 ```
 
 ---
@@ -243,6 +261,10 @@ Each one undid a real regression; the linked note has the reasoning.
 - `SettingsPanel` keeps the `onBusyChange` guard so a desktop update cannot be dismissed mid-install. ([fork-ui](docs/agents/fork-ui.md))
 - Chats own a server-created folder under the chat root (a new chat is requested with the root, never a path built in the browser); `workspaceKind` / `chatFolder` come from the server, and chats stay out of project trust / worktrees / project files / terminals / the right panel. Server policy keeps a chat off the shell, with file tools confined to its folder, `read` also opening skills and files the user named in their own message (read-only), MCP tools limited to those their server marks read-only, no extension tool the user has not allowed, and context-file-free, even for persisted sessions. Only the per-chat unlock (`pi-web:chat-unlock`, never on a network-exposed server) lifts that. Legacy chats (the old shared `chat-workspace` cwd) keep their old policy. ([fork-chat-workspace](docs/agents/fork-chat-workspace.md))
 - The Cloudflare tunnel's hostname is trusted only while the tunnel is online **and** `PI_WEB_PASSWORD` is set; `publicAccess.origin` is written on `online` and cleared on stop/failure, so hand-editing the settings file alone never widens the host allow-list. Keep `/health` free of anything but `{status,gatewayId}`. ([fork-public-access](docs/agents/fork-public-access.md))
+- The cloudflared the Settings download needs is staged into the packaged server by `scripts/prepare-desktop.mjs` (`resources/server/scripts/`), and the downloaded binary lands in `~/.pi/agent/bin/cloudflared/`, never in the app's own resources — those can be read-only (macOS `.app`) and every upgrade rebuilds them. Never render a raw Node/stderr message as user copy: map the failure to an i18n code and keep the raw text in `title`. ([fork-public-access](docs/agents/fork-public-access.md))
+- Fork UI copy lives in `lib/i18n/locale-plugins.ts` under `FORK_MESSAGE_PATCHES` (en / zh-CN / zh-TW), **not** in `lib/i18n/messages/*.ts` — those are pi-web's upstream locales and a merge overwrites them. A key present in only some locales renders its own name in the UI, so `lib/i18n/usage.test.mjs` and `registry.test.mjs` gate every `t()` call site. ([fork-ui](docs/agents/fork-ui.md))
+- The plan-approval card must never write `plan.json` itself: `POST /api/teams/[team]/plan/approve` only delivers a prompt to the lead session, because a desktop-written approve misses `approvedSnapshot` and `isTeamExecutionApproved()` stays false, so the launch never starts. Approving does not auto-launch. ([agent-teams-design](docs/agent-teams-design.md))
+- The composer Agent Team row mirrors cc-haha and must keep doing so: the global switch defaults **on** (`AGENT_TEAMS_ENABLED_DEFAULT`), the row is a per-message `armed` toggle that resets on send, and when the global switch is off the row **stays visible with no switch and leads to Settings** — only member sessions and Lean mode hide it. Turning it off must not make the feature disappear from the conversation. ([agent-teams-design](docs/agent-teams-design.md))
 
 ---
 

@@ -10223,6 +10223,326 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   .tasks-dot--running { animation: none; }
 }
 
+/* Session-topbar Agent Team strip (components/AgentTeams/AgentTeamStrip.tsx): the
+   always-visible trace of the team the current session is running. Clicking it
+   opens the workbench. A team never takes over the conversation — this strip is
+   the only thing it adds to the chat surface. */
+.agent-team-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  margin-left: 8px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-base) var(--ease-native), border-color var(--dur-base) var(--ease-native);
+}
+
+.agent-team-strip:hover { background: var(--bg-hover); }
+
+.agent-team-strip:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.agent-team-strip--compact { padding: 2px 6px; gap: 4px; }
+
+.agent-team-strip-icon { flex-shrink: 0; color: var(--text-dim); }
+
+.agent-team-strip-label {
+  flex-shrink: 0;
+  color: var(--text);
+  font-weight: var(--fw-semibold);
+}
+
+.agent-team-strip-avatars {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.agent-team-strip-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: -5px;
+  border: 1px solid var(--bg-panel);
+  border-radius: 50%;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: var(--fw-semibold);
+  line-height: 1;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.agent-team-strip-avatar:first-child { margin-left: 0; }
+
+/* Member accents mirror the workbench palette so a face keeps its colour
+   between the strip and the swimlane. */
+.agent-team-strip-avatar--gray { color: var(--text-muted); }
+.agent-team-strip-avatar--blue { color: #3b82f6; }
+.agent-team-strip-avatar--green { color: #22863a; }
+.agent-team-strip-avatar--purple { color: #8250df; }
+.agent-team-strip-avatar--orange { color: #bc4c00; }
+.agent-team-strip-avatar--teal { color: #1b7c83; }
+.agent-team-strip-avatar--pink { color: #bf3989; }
+.agent-team-strip-avatar--red { color: var(--danger); }
+
+.agent-team-strip-avatar--overflow {
+  font-variant-numeric: tabular-nums;
+  padding: 0 1px;
+}
+
+.agent-team-strip-phase {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.agent-team-strip-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.agent-team-strip-dot--running {
+  background: var(--success);
+  animation: scheduled-pulse 1.4s ease-in-out infinite;
+}
+.agent-team-strip-dot--completed { background: var(--success); }
+.agent-team-strip-dot--forming { background: var(--text-dim); }
+.agent-team-strip-dot--finishing { background: var(--warning); }
+.agent-team-strip-dot--interrupted { background: var(--warning); }
+.agent-team-strip-dot--failed { background: var(--danger); }
+
+/* 会话列表「团队运行中」点（components/SessionSidebar.tsx）：某团队只要有成员会话仍在跑，
+   该团队全部成员会话行打点。形态/配色与 .agent-team-strip-dot--running 一致（success + 脉冲），
+   避免出现「有 className 但无样式」的隐形空 span。 */
+.session-item-team-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  animation: scheduled-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-item-team-dot { animation: none; }
+}
+
+.agent-team-strip-phase-label { color: var(--text-muted); }
+
+/* 会话头部常驻的 token 用量（components/AppShell.tsx）：与 cc-haha 一样把
+   「↑in · ↓out · $cost · %ctx」放在标题旁，而不是只藏在 tooltip 里。无数据时不渲染，
+   所以这里只管排版：等宽数字避免跳动，不抢焦点（muted）。 */
+.app-topbar-usage {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-small);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.agent-team-strip-progress {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-team-strip-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-left: 4px;
+  color: var(--text-muted);
+}
+
+.agent-team-strip-open-chevron { flex-shrink: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-team-strip-dot--running { animation: none; }
+}
+
+/* Composer Agent Team toggle (components/AgentTeams/AgentTeamToggle.tsx): the
+   per-message switch. Off by default; arming it covers only the next message. */
+.composer-teams-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  min-height: var(--control-h-sm);
+  padding: 0 8px;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-small);
+  cursor: pointer;
+  transition: background var(--dur-base) var(--ease-native), border-color var(--dur-base) var(--ease-native), color var(--dur-base) var(--ease-native);
+}
+
+.composer-teams-toggle:hover { background: var(--bg-hover); color: var(--text); }
+.composer-teams-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.composer-teams-toggle.is-armed {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.composer-teams-toggle.is-unavailable { opacity: 0.5; cursor: not-allowed; }
+
+.composer-teams-toggle-icon { flex-shrink: 0; }
+.composer-teams-toggle-label { white-space: nowrap; }
+
+/* Agent Team chip (components/AgentTeams/AgentTeamChip.tsx): the armed marker on
+   the composer, and the read-only "requested a team" marker on a sent message. */
+.composer-teams-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  min-height: var(--control-h-sm);
+  padding: 0 6px 0 8px;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-size: var(--fs-small);
+}
+
+.composer-teams-chip.is-touch { min-height: 36px; }
+
+.composer-teams-chip--message {
+  min-height: 0;
+  padding: 1px 6px;
+  font-size: var(--fs-micro);
+}
+
+.composer-teams-chip-row {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.composer-teams-chip-icon { flex-shrink: 0; }
+.composer-teams-chip-label { white-space: nowrap; }
+
+.composer-teams-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.composer-teams-chip-remove:hover { background: var(--bg-hover); color: var(--text); }
+.composer-teams-chip-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Armed composer chip gets the same accent treatment as the toggle it mirrors; the
+   read-only `--message` chip on a sent bubble stays muted (it is history, not state). */
+.composer-teams-chip--composer.is-armed {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* 窄屏（isMobile → `--compact`）：条收敛成「图标 + 头像 + 阶段点 + 打开」，
+   标签/进度/阶段文字让位给标题。用 `--compact` 而不是媒体查询，断点只有一个来源
+   （useIsMobile），不必再维护一份 CSS 断点。 */
+.agent-team-strip--compact .agent-team-strip-label,
+.agent-team-strip--compact .agent-team-strip-progress,
+.agent-team-strip--compact .agent-team-strip-phase-label { display: none; }
+
+/* Agent Team cost confirmation (components/AgentTeams/AgentTeamCostDialog.tsx). */
+.agent-team-cost-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.agent-team-cost-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(420px, 100%);
+  padding: 16px;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  color: var(--text);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+.agent-team-cost-title { margin: 0; font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.agent-team-cost-body { margin: 0; color: var(--text-muted); font-size: var(--fs-small); line-height: 1.55; }
+.agent-team-cost-remember { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--fs-small); }
+.agent-team-cost-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+.agent-team-cost-cancel,
+.agent-team-cost-confirm {
+  min-height: var(--control-h-sm);
+  padding: 0 12px;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-small);
+  cursor: pointer;
+}
+
+.agent-team-cost-cancel { background: transparent; color: var(--text); }
+.agent-team-cost-cancel:hover { background: var(--bg-hover); }
+.agent-team-cost-confirm { border-color: var(--accent); background: var(--accent); color: var(--bg); }
+.agent-team-cost-confirm:hover { opacity: 0.9; }
+
+/* Workspace-overlay back button in the topbar (AppShell). */
+.app-topbar-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  height: var(--control-h-sm);
+  padding: 0 10px;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-small);
+  cursor: pointer;
+  transition: background var(--dur-base) var(--ease-native), color var(--dur-base) var(--ease-native);
+}
+
+.app-topbar-back:hover { background: var(--bg-hover); color: var(--text); }
+.app-topbar-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* Agents page (components/AgentTeams/AgentTeamsView.tsx): the team swimlane.
    Per-member horizontal lanes on a time axis, cross-lane flow arrows and the
    task graph. Reuses the Scheduled page's shell/header; only the canvas is new. */

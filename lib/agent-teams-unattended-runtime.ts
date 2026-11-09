@@ -66,8 +66,11 @@ const nudgeKey = (action: UnattendedAction): string =>
  * 存活 → 直接 send；不在 → 用 resolveSessionPath 找到会话文件后 startRpcSession 复活再发。
  * lead 正在跑（isRunning）则跳过，避免把提醒塞进一次进行中的运行。
  * 任意失败都如实返回 { ok:false, reason }，绝不静默吞掉。
+ *
+ * 导出供 B3 计划卡的「用户手动批准」动作复用：批准同样不写盘、只投递 prompt 给 lead，
+ * 由 lead 用 team_plan 工具执行（桌面无法自己 launch）。
  */
-async function defaultDeliver(sessionId: string, message: string): Promise<DeliveryResult> {
+export async function defaultDeliver(sessionId: string, message: string): Promise<DeliveryResult> {
   try {
     const { getRpcSession, startRpcSession } = await import("./rpc-manager");
     const existing = getRpcSession(sessionId);

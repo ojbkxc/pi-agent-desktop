@@ -201,6 +201,11 @@ export interface WorkbenchMember {
   color: string;
   status: MemberStatus;
   activity: "active" | "idle";
+  /**
+   * 是否队长（追加字段，语义与 buildRoster 内部判定、color 取 gray、status 恒 running
+   * 一致——单一真源）。通信流据此判定「lead → 成员=派工 / 成员 → lead=汇报」。
+   */
+  isLead: boolean;
   sessionId: string | null;
   cwd: string;
   worktreePath: string | null;
@@ -301,6 +306,36 @@ export interface WorkbenchReceipt {
   ackedAt: string;
 }
 
+/**
+ * 通信流（C6）消费的一条消息（**追加字段**，先前只有 flows[]/lanes[].events[] 的粗投影）。
+ *
+ * 数据来源：邮箱 messages（inboxes/*.json + *.history.jsonl 合并去重后的投影输入）。
+ * 与 flows[] 的区别：本数组保留 message.id（供回执对齐）、kind、recipients 与从结构化
+ * text 里解析出的 protocolType/taskId——这四样是 flows[] 缺的（p0-recon Q4 结论）。
+ *
+ * 字段语义（全部如实，缺失不编造）：
+ * - `to`：收件人成员名；未知为空串；广播为 "*"（落盘按收件人分目录，读取器补 to）。
+ * - `recipients`：收件人列表。当前投影只有单一 `to`（store 按 message.id 去重后一条消息
+ *   只对应一个收件人目录），故最多一项；保留数组形态以兼容未来多收件人广播。
+ * - `kind`：direct / broadcast（to="*"）/ system（无 from）。
+ * - `protocolType`：text 为 JSON 对象且带字符串 type 时的该 type（如 idle_notification、
+ *   task_assignment）；否则省略。这是「结构化协议消息未解析」的补足（p0-recon Q4 建议）。
+ * - `taskId`：text JSON 载荷里的 taskId（如派工信封）；否则省略。
+ */
+export interface WorkbenchMessage {
+  id: string;
+  from: string;
+  to: string;
+  recipients: string[];
+  kind: "direct" | "broadcast" | "system";
+  text: string;
+  summary?: string;
+  timestamp: string;
+  color?: string;
+  taskId?: string;
+  protocolType?: string;
+}
+
 /** lane-diagram.html 消费的扁平任务形态（cc-haha agentTeamsModel 对齐）。 */
 export interface WorkbenchTask {
   id: string;
@@ -323,6 +358,11 @@ export interface TeamWorkbenchSnapshot {
   tasks: WorkbenchTask[];
   /** acks/receipts.jsonl 的已读回执（新增字段，不影响既有字段语义）。 */
   receipts: WorkbenchReceipt[];
+  /**
+   * 邮箱消息的通信流投影（新增字段，按 timestamp 升序，保持投影输入顺序）。
+   * 供 components/AgentTeams/AgentTeamsCommunicationFeed 消费；不影响既有字段语义。
+   */
+  messages: WorkbenchMessage[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -428,6 +468,7 @@ function buildRoster(
       color: colorForMember(member, index, isLead),
       status,
       activity: activityOf(status),
+      isLead,
       sessionId: member.sessionId ?? entry?.sessionId ?? null,
       cwd: member.cwd,
       worktreePath: member.worktreePath ?? null,
@@ -459,6 +500,7 @@ function buildRoster(
       color: colorForMember({}, index, isLead),
       status,
       activity: activityOf(status),
+      isLead,
       sessionId: entry?.sessionId ?? null,
       cwd: "",
       worktreePath: null,
@@ -470,6 +512,32 @@ function buildRoster(
   });
 
   return members;
+}
+
+/**
+ * 从消息文本里解析结构化协议载荷的 type / taskId。
+ *
+ * pi-team 把结构化载荷（idle_notification / task_assignment 等）以 JSON 存在 message.text，
+ * 旧投影把它当纯文本、kind 只有粗粒度 message/report。这里直通 type 与 taskId，供通信流
+ * 分类（p0-recon Q4 建议：结构化 type 在投影层解析，不换数据源）。文本不是 JSON 对象或无
+ * 可解析字段时返回空对象——绝不编造。
+ */
+function parseProtocolMeta(text: string): { protocolType?: string; taskId?: string } {
+  const raw = (text ?? "").trim();
+  if (!raw.startsWith("{") || !raw.endsWith("}")) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const record = parsed as Record<string, unknown>;
+    const type = typeof record.type === "string" && record.type.trim() ? record.type.trim() : undefined;
+    const taskId = typeof record.taskId === "string" && record.taskId.trim() ? record.taskId.trim() : undefined;
+    return {
+      ...(type ? { protocolType: type } : {}),
+      ...(taskId ? { taskId } : {}),
+    };
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -743,6 +811,36 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
     }))
     .sort((a, b) => (a.ackedAt < b.ackedAt ? -1 : a.ackedAt > b.ackedAt ? 1 : 0));
 
+  // ── messages[]：邮箱消息的通信流投影（新增）─────────────────────────────────
+  // 保留 id（回执对齐）、kind、recipients 与结构化 protocolType/taskId——flows[] 缺的四样。
+  // 排序沿用输入顺序（store 已按 timestamp 升序稳定排序），组件再反转成最新在上。
+  const projectedMessages: WorkbenchMessage[] = messages.map((message) => {
+    const text = message.text ?? "";
+    const to = message.to ?? "";
+    const meta = parseProtocolMeta(text);
+    const kind: WorkbenchMessage["kind"] = to === "*"
+      ? "broadcast"
+      : !message.from
+        ? "system"
+        : "direct";
+    // id 缺失时用与 store 去重同口径的稳定身份（from|timestamp|text），保证跨帧 id 稳定。
+    const id = message.id && message.id.trim()
+      ? message.id
+      : `mail:${message.from}|${message.timestamp}|${text}`;
+    return {
+      id,
+      from: message.from,
+      to,
+      recipients: to ? [to] : [],
+      kind,
+      text,
+      timestamp: message.timestamp,
+      ...(message.summary ? { summary: message.summary } : {}),
+      ...(message.color ? { color: message.color } : {}),
+      ...meta,
+    };
+  });
+
   const teamStatus: WorkbenchTeam["status"] = (() => {
     if (tickets.length === 0) return "forming";
     const ended = tickets.filter((ticket) => ticket.status === "ended").length;
@@ -771,6 +869,7 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
     taskAnchors,
     tasks: compatTasks,
     receipts: receiptItems,
+    messages: projectedMessages,
   };
 }
 

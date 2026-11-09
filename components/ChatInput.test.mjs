@@ -11,12 +11,12 @@ const jiti = createJiti(import.meta.url, {
 });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
-const { ChatInput, ModelErrorBanner, ModelScopeWarningBanner, canClearBuiltinCommandInput, canRestoreUserMessage, canRunBuiltinSlashCommandWhileStreaming, compressImageFile, cycleListIndex, filterModelOptions, getTopbarBoundary, getUpwardMenuMaxHeight, getUserMessageText, getUserMessageDraftImages, isExactSlashCommand, modelSupportsImageInput, pendingTypedSuffix, replaceLinksWithMarkdown, resolveImageLanding, shouldCompressImageFile, offersBuiltinSlashCommandWhileStreaming, submitsSlashCommandOnEnter} = await jiti.import("./ChatInput.tsx");
+const { ChatInput, ModelErrorBanner, ModelScopeWarningBanner, canClearBuiltinCommandInput, canRestoreUserMessage, canRunBuiltinSlashCommandWhileStreaming, compressImageFile, cycleListIndex, filterModelOptions, getTopbarBoundary, getUpwardMenuMaxHeight, getUserMessageText, getUserMessageDraftImages, isExactSlashCommand, modelSupportsImageInput, pendingTypedSuffix, replaceLinksWithMarkdown, resolveImageLanding, shouldCompressImageFile, offersBuiltinSlashCommandWhileStreaming, submitsSlashCommandOnEnter, userMessageRequestsAgentTeam} = await jiti.import("./ChatInput.tsx");
 
 const { isBareMcpCommand } = await jiti.import("@/lib/mcp-command.ts");
-const { composeMessageWithAttachedFiles } = await jiti.import("@/lib/chat-attachments.ts");
-const { withAgentTeamRequest } = await jiti.import("@/lib/agent-team-request.ts");
-const { shouldDisarmAgentTeam } = await jiti.import("@/hooks/useAgentTeamsEnabled.ts", { default: false });
+const { composeMessageWithAttachedFiles, splitMessageForComposer } = await jiti.import("@/lib/chat-attachments.ts");
+const { withAgentTeamRequest, hasAgentTeamRequest } = await jiti.import("@/lib/agent-team-request.ts");
+const { shouldDisarmAgentTeam, armAgentTeam, disarmAgentTeam, isAgentTeamsArmed } = await jiti.import("@/hooks/useAgentTeamsEnabled.ts", { default: false });
 const { ModelSelector } = await jiti.import("./ModelSelector.tsx");
 const { clearDraft, getDraft, mergeRestoredSubmissionDraft, mergeRestoredSubmissionText, rekeyDraft, setDraft } = await jiti.import("@/lib/draft-store");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
@@ -1063,6 +1063,123 @@ test("handleSend sends exactly once and routes builtin commands through the pend
   const command = await run({ value: "/compact", agentTeamsEnabled: true, builtinHandled: false });
   assert.equal(command.sent.message, "/compact");
   assert.equal(command.disarms, 0, "commands leave the arming for the next real prompt");
+});
+
+/**
+ * 抽出 `useImperativeHandle(ref, () => ({...}))` 的工厂并调用它，得到 composer 的命令式句柄
+ * （insertIfEmpty / replaceMessage / rekeyDraft / restoreSubmission …）。
+ * 与 chatInputCallback 一样走 vm：句柄里的自由变量由 `context` 提供，测试因此能只装配
+ * replaceMessage 真正用到的那几个依赖。
+ */
+function chatInputHandle(context) {
+  const sourceText = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  const source = ts.createSourceFile("ChatInput.tsx", sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  function findFactory(node) {
+    if (ts.isCallExpression(node)
+      && ts.isIdentifier(node.expression)
+      && node.expression.text === "useImperativeHandle") {
+      return node.arguments[1];
+    }
+    return ts.forEachChild(node, findFactory);
+  }
+  const factory = new Script(ts.transpileModule(findFactory(source).getText(source), {
+    compilerOptions: { target: ts.ScriptTarget.ES2020 },
+  }).outputText).runInNewContext(context);
+  return factory();
+}
+
+/**
+ * 抽出 armed chip 的 ✕ 处理器（`<AgentTeamChip onRemove={() => disarmAgentTeam(draftKey)} />`），
+ * 让「点 ✕」走真实的 JSX 接线，而不是测试里另写一份等价调用。
+ */
+function agentTeamChipRemoveHandler(context) {
+  const sourceText = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  const source = ts.createSourceFile("ChatInput.tsx", sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  function findChip(node) {
+    if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === "AgentTeamChip") {
+      const attr = node.attributes.properties.find(
+        (property) => ts.isJsxAttribute(property) && property.name.getText(source) === "onRemove",
+      );
+      if (attr && ts.isJsxAttribute(attr) && attr.initializer && ts.isJsxExpression(attr.initializer)) {
+        return attr.initializer.expression;
+      }
+    }
+    return ts.forEachChild(node, findChip);
+  }
+  return new Script(ts.transpileModule(findChip(source).getText(source), {
+    compilerOptions: { target: ts.ScriptTarget.ES2020 },
+  }).outputText).runInNewContext(context);
+}
+
+/**
+ * A5 回归（V1）：编辑重发路径的 armed 接线。
+ *
+ * 判据是真实的 `userMessageRequestsAgentTeam()`（ChatInput.tsx）→ `hasAgentTeamRequest()`
+ * （lib/agent-team-request.ts）→ `armAgentTeam()`（hooks/useAgentTeamsEnabled.ts），
+ * 不是「界面上有个 chip」。三个用例：
+ *   1) 编辑一条曾带 team 块的消息 → 重新 armed；
+ *   2) 编辑普通消息 → 不误 arm；
+ *   3) 编辑态点 chip 的 ✕ → armed 回 false。
+ */
+test("editing a message that carried an Agent Team block re-arms the next send (A5)", () => {
+  disarmAgentTeam();
+
+  const armedKeys = [];
+  const setValueCalls = [];
+  const handle = chatInputHandle({
+    textareaRef: { current: null },
+    value: "",
+    canRestoreUserMessage,
+    attachedImagesRef: { current: [] },
+    attachedFilesRef: { current: [] },
+    pendingImageCountRef: { current: 0 },
+    splitMessageForComposer,
+    getUserMessageText,
+    getUserMessageDraftImages,
+    draftImagesToAttachedImages: (images) => images.map((image) => ({ ...image, previewUrl: "" })),
+    userMessageRequestsAgentTeam,
+    // 真实状态层：arm 之外顺带记录会话键，验证接线传的是当前草稿键。
+    armAgentTeam(key) { armedKeys.push(key); armAgentTeam(key); },
+    draftKeyRef: { current: "session-a5-edit" },
+    valueRef: { current: "" },
+    setAttachedFiles() {},
+    setValue(next) { setValueCalls.push(next); },
+    setAtQuery() {},
+    setHashQuery() {},
+    setHistoryMenuOpen() {},
+    setAttachedImages() {},
+    revokeImagePreview() {},
+    requestAnimationFrame() {},
+  });
+
+  // ① 曾请求团队的消息：真实判定为 true，编辑后重新 armed。
+  const teamMessage = { role: "user", content: withAgentTeamRequest("拆一下这活") };
+  assert.equal(hasAgentTeamRequest(teamMessage.content), true, "the fixture really carries the block");
+  assert.equal(userMessageRequestsAgentTeam(teamMessage), true);
+  assert.equal(handle.replaceMessage(teamMessage), true);
+  assert.deepEqual(armedKeys, ["session-a5-edit"], "re-arms under the composer's own draft key");
+  assert.equal(isAgentTeamsArmed(), true, "the next send will re-wrap with the team block");
+  // 回填的是剥掉块之后的用户原文（否则重发会套两层）。
+  assert.deepEqual(setValueCalls, ["拆一下这活"]);
+
+  // ② 普通消息：不误 arm。
+  disarmAgentTeam();
+  armedKeys.length = 0;
+  const plainMessage = { role: "user", content: "普通消息" };
+  assert.equal(hasAgentTeamRequest(plainMessage.content), false);
+  assert.equal(userMessageRequestsAgentTeam(plainMessage), false);
+  assert.equal(handle.replaceMessage(plainMessage), true);
+  assert.deepEqual(armedKeys, [], "a plain message must not arm anything");
+  assert.equal(isAgentTeamsArmed(), false);
+
+  // ③ 编辑态点 ✕：走 ChatInput 里真实的 onRemove 接线，armed 回 false。
+  handle.replaceMessage(teamMessage);
+  assert.equal(isAgentTeamsArmed(), true);
+  const removeHandler = agentTeamChipRemoveHandler({ disarmAgentTeam, draftKey: "session-a5-edit" });
+  removeHandler();
+  assert.equal(isAgentTeamsArmed(), false, "the ✕ clears the arming for this edit");
+
+  disarmAgentTeam();
 });
 
 test("a missing workspace replaces the model error and disables Send", () => {

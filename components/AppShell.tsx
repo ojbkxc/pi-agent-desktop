@@ -18,6 +18,7 @@ import type { ChatScrollPosition } from "@/lib/chat-scroll-position";
 import { clearDraft } from "@/lib/draft-store";
 import { TabBar, type Tab } from "./TabBar";
 import { LazyTerminalPanel as TerminalPanel, preloadTerminalPanel } from "./LazyTerminalPanel";
+import { AgentTeamStrip } from "./AgentTeams/AgentTeamStrip";
 
 // Heavy, rarely-used surfaces are code-split out of the main bundle. The
 // config modals may never be opened at all; FileViewer drags in markdown +
@@ -36,6 +37,7 @@ import { UpdateReminder } from "./UpdateReminder";
 import { useTheme } from "@/hooks/useTheme";
 import { useFonts } from "@/hooks/useFonts";
 import { useI18n } from "@/hooks/useI18n";
+import { useActiveTeamStrip } from "@/hooks/useActiveTeamStrip";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useMenuNavigation } from "@/hooks/useMenuNavigation";
 import { APP_PREF_KEYS, getPrefBool, getPrefJson, setPref } from "@/lib/app-prefs";
@@ -207,6 +209,9 @@ export function AppShell() {
   const artifactsOpen = workspaceView === "artifacts";
   const teamsOpen = workspaceView === "teams";
   const pageOpen = workspaceView !== null;
+  // D2：从会话团队条点「打开」时记下要选中的团队（目录名），供工作台初始选中；
+  // 从侧栏入口打开时为 null，由工作台自选（最新创建的团队）。
+  const [openedTeamName, setOpenedTeamName] = useState<string | null>(null);
   // Read by restoreWorkspaceContext and handleSelectSession; those identities
   // must not change when a page opens.
   const pageOpenRef = useRef(pageOpen);
@@ -1401,10 +1406,27 @@ export function AppShell() {
       router.replace(`?view=${view}`, { scroll: false });
     }
   }, [isMobile, router]);
+  // D2「← 返回对话」：关闭当前页覆盖视图，清掉 URL 的 ?view=（镜像 openWorkspaceView）。
+  // 覆盖视图是叠加而非替换（对话不卸载，见 p0-recon），所以这里只收掉覆盖层。
+  const closeWorkspaceView = useCallback(() => {
+    setWorkspaceView(null);
+    if (new URLSearchParams(window.location.search).get("view") !== null) {
+      router.replace(window.location.pathname, { scroll: false });
+    }
+  }, [router]);
   const handleOpenTasks = useCallback(() => openWorkspaceView("tasks"), [openWorkspaceView]);
   const handleOpenScheduled = useCallback(() => openWorkspaceView("scheduled"), [openWorkspaceView]);
   const handleOpenArtifacts = useCallback(() => openWorkspaceView("artifacts"), [openWorkspaceView]);
-  const handleOpenTeams = useCallback(() => openWorkspaceView("teams"), [openWorkspaceView]);
+  // 侧栏「团队」入口：不指定团队，由工作台自选。
+  const handleOpenTeams = useCallback(() => {
+    setOpenedTeamName(null);
+    openWorkspaceView("teams");
+  }, [openWorkspaceView]);
+  // 会话团队条「打开」：带着该会话所属团队（目录名）打开，工作台初始即选中它。
+  const handleOpenTeamWorkbench = useCallback((teamName: string | null) => {
+    setOpenedTeamName(teamName);
+    openWorkspaceView("teams");
+  }, [openWorkspaceView]);
 
   // Validated and allow-listed like any project pick, which /api/models needs for the new folder.
   const handleBrowseScheduledFolder = useCallback(
@@ -1808,6 +1830,28 @@ export function AppShell() {
     activeNewSessionDraftKeyRef.current = newSessionDraftKey;
   }, [newSessionDraftKey]);
   const showChat = selectedSession !== null || effectiveNewSessionCwd !== null;
+  // 会话头部团队条（B1）：当前会话关联 Agent Team 时展示。
+  // refreshKey 取会话消息数——发消息后重拉一次，新团队及时出现、已完成的旧团队被替换。
+  const activeTeamStrip = useActiveTeamStrip(selectedSession?.id ?? null, selectedSession?.messageCount ?? 0);
+  // 离开团队工作台（含「← 返回对话」与选择会话）后清掉初始选中，下次从侧栏打开自选。
+  useEffect(() => {
+    if (!teamsOpen) setOpenedTeamName(null);
+  }, [teamsOpen]);
+  // W2：会话 token 用量摘要（↑输入 · ↓输出 · $费用 · ctx%），常驻在会话头部，
+  // 同时供「更多」菜单里的「会话统计」项复用。无任何数据时为空串 → 头部不渲染。
+  const usageSummary = useMemo(() => {
+    const fmt = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n);
+    const tokens = sessionStats?.tokens;
+    const cost = sessionStats?.cost ?? 0;
+    const parts: string[] = [];
+    if (tokens && tokens.input > 0) parts.push(`↑${fmt(tokens.input)}`);
+    if (tokens && tokens.output > 0) parts.push(`↓${fmt(tokens.output)}`);
+    if (cost > 0) parts.push(cost >= 0.01 ? `$${cost.toFixed(2)}` : "<$0.01");
+    if (contextUsage?.contextWindow && contextUsage.percent !== null) {
+      parts.push(`${contextUsage.percent.toFixed(1)}% ctx`);
+    }
+    return parts.join(" · ");
+  }, [sessionStats, contextUsage]);
   const projectTrustCwd = isChatWorkspaceActive
     ? null
     : selectedSession?.cwd ?? effectiveNewSessionCwd;
@@ -2270,6 +2314,39 @@ export function AppShell() {
             <span>{topBarTitle}</span>
             <small>{topBarSubtitle}</small>
           </div>
+          {/* 会话头部团队条（B1）：当前会话有所属 Agent Team 时常驻在标题右侧、
+              操作区之前；无团队 / 未进成员就取消的团队时组件渲染 null，不占位。
+              窄屏（移动端）走 compact 档。 */}
+          {showChat && !pageOpen && activeTeamStrip.phase !== "none" && (
+            <AgentTeamStrip
+              snapshot={activeTeamStrip.snapshot}
+              phase={activeTeamStrip.phase}
+              progress={activeTeamStrip.progress}
+              onOpen={() => handleOpenTeamWorkbench(activeTeamStrip.snapshot?.team.id ?? null)}
+              compact={isMobile}
+            />
+          )}
+          {/* W2：会话 token 用量常驻小字（无数据不渲染，不留空位）；完整文本走 title。 */}
+          {showChat && !pageOpen && usageSummary !== "" && (
+            <span className="app-topbar-usage" title={usageSummary}>{usageSummary}</span>
+          )}
+          {/* D2「← 返回对话」：任一页覆盖视图（tasks/teams/scheduled/artifacts）打开时，
+              顶部给出显式的返回入口。覆盖层是叠加的，返回即收掉覆盖、露出原对话。 */}
+          {pageOpen && (
+            <button
+              type="button"
+              className="app-topbar-back"
+              onClick={closeWorkspaceView}
+              title={translate("appshell.backToChat")}
+              aria-label={translate("appshell.backToChat")}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <line x1="19" y1="12" x2="5" y2="12" />
+                <polyline points="12 19 5 12 12 5" />
+              </svg>
+              <span>{translate("appshell.backToChat")}</span>
+            </button>
+          )}
           {showChat && !pageOpen && projectTrust?.requiresTrust && !projectTrust.trusted && (
             <button
               type="button"
@@ -2349,19 +2426,9 @@ export function AppShell() {
                     ? autoNameStatus.message
                     : translate("title.generateSession");
 
-                const statsSummary = (() => {
-                  const fmt = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n);
-                  const t = sessionStats?.tokens;
-                  const c = sessionStats?.cost ?? 0;
-                  const parts: string[] = [];
-                  if (t && t.input > 0) parts.push(`↑${fmt(t.input)}`);
-                  if (t && t.output > 0) parts.push(`↓${fmt(t.output)}`);
-                  if (c > 0) parts.push(c >= 0.01 ? `$${c.toFixed(2)}` : "<$0.01");
-                  if (contextUsage?.contextWindow && contextUsage.percent !== null) {
-                    parts.push(`${contextUsage.percent.toFixed(1)}% ctx`);
-                  }
-                  return parts.length > 0 ? parts.join(" · ") : translate("appshell.statsHint");
-                })();
+                // Reused from the body-level memo (W2): the persistent topbar line and
+                // this menu item must show the same figure. Empty → the menu's hint.
+                const statsSummary = usageSummary || translate("appshell.statsHint");
 
                 // Desktop shell: the same five actions as a native popup. A
                 // native item holds one line, so the DOM menu's caption is
@@ -2992,6 +3059,10 @@ export function AppShell() {
         )}
         {teamsOpen && (
           <AgentTeamsView
+            teamName={openedTeamName ?? undefined}
+            initialTeamName={openedTeamName ?? undefined}
+            sourceSessionId={selectedSession?.id ?? null}
+            onRequestClose={closeWorkspaceView}
             onOpenSession={(sessionId) => void handleOpenSession(sessionId)}
           />
         )}

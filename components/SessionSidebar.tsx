@@ -503,21 +503,18 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // running state; late /api/sessions responses must not overwrite it.
   const sseAuthoritativeRef = useRef(false);
   const detailsHydrationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Team member sessions from /api/teams, intersected with the live
-  // runningSessionIds to drive the teams-row badge. Roster changes arrive via
-  // refreshKey — no extra polling.
-  const [teamMemberSessionIds, setTeamMemberSessionIds] = useState<Set<string>>(() => new Set());
+  // Team member sessions from /api/teams, kept **grouped per team**. Grouping
+  // (rather than one flat set) is what lets us ask, per team, whether it has a
+  // running member — the per-session team-running dot below needs that.
+  // Roster changes arrive via refreshKey — no extra polling.
+  const [teamMemberSessionGroups, setTeamMemberSessionGroups] = useState<string[][]>(() => []);
   useEffect(() => {
     let cancelled = false;
     fetch("/api/teams", { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : null))
       .then((data: { teams?: { memberSessionIds?: string[] }[] } | null) => {
         if (cancelled || !Array.isArray(data?.teams)) return;
-        const ids = new Set<string>();
-        for (const team of data.teams) {
-          for (const id of team.memberSessionIds ?? []) ids.add(id);
-        }
-        setTeamMemberSessionIds(ids);
+        setTeamMemberSessionGroups(data.teams.map((team) => team.memberSessionIds ?? []));
       })
       .catch(() => {
         // Silent: the badge stays hidden until the next refresh.
@@ -527,10 +524,30 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     };
   }, [refreshKey]);
 
+  // Flattened member set — preserves the original aggregate badge口径.
+  const teamMemberSessionIds = useMemo(
+    () => new Set(teamMemberSessionGroups.flat()),
+    [teamMemberSessionGroups],
+  );
+
   const runningTeamMemberCount = useMemo(
     () => [...teamMemberSessionIds].filter((id) => runningSessionIds.has(id)).length,
     [teamMemberSessionIds, runningSessionIds],
   );
+
+  // 逐会话团队运行点（E1 缺口 3）：某团队只要有任一成员会话仍在跑，该团队即视为
+  // 「在跑」，其**全部**成员会话行都打点（lead 会话通常也在 memberSessionIds 里，
+  // 所以 lead 行同样能亮）。数据复用 /api/teams 的 memberSessionIds 与已有的
+  // runningSessionIds，不新开轮询。
+  const teamRunningSessionIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const group of teamMemberSessionGroups) {
+      if (group.some((id) => runningSessionIds.has(id))) {
+        for (const id of group) ids.add(id);
+      }
+    }
+    return ids;
+  }, [teamMemberSessionGroups, runningSessionIds]);
 
   // Overlay-style scrollbar: `is-scrolling` shows the thumb only while the
   // project tree is actually scrolling.
@@ -1465,6 +1482,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         familySessions={[family.root, ...family.subagents]}
         selectedSessionId={selectedSessionId}
         runningSessionIds={runningSessionIds}
+        teamRunningSessionIds={teamRunningSessionIds}
         unreadSessionIds={unreadSessionIds}
         onSelectSession={handleSelectSessionFromList}
         onRenamed={loadSessions}
@@ -1664,6 +1682,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 familySessions={nodeFamily ? [nodeFamily.root, ...nodeFamily.subagents] : undefined}
                 selectedSessionId={selectedSessionId}
                 runningSessionIds={runningSessionIds}
+                teamRunningSessionIds={teamRunningSessionIds}
                 unreadSessionIds={unreadSessionIds}
                 onSelectSession={handleSelectSessionFromList}
                 onRenamed={loadSessions}
@@ -1713,6 +1732,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                       familySessions={nodeFamily ? [nodeFamily.root, ...nodeFamily.subagents] : undefined}
                       selectedSessionId={selectedSessionId}
                       runningSessionIds={runningSessionIds}
+                      teamRunningSessionIds={teamRunningSessionIds}
                       unreadSessionIds={unreadSessionIds}
                       onSelectSession={handleSelectSessionFromList}
                       onRenamed={loadSessions}
@@ -1749,6 +1769,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             archiveActions={sessionArchiveActions(family.root.id)}
             selectedSessionId={selectedSessionId}
             runningSessionIds={runningSessionIds}
+            teamRunningSessionIds={teamRunningSessionIds}
             unreadSessionIds={unreadSessionIds}
             onSelectSession={handleSelectSessionFromList}
             onRenamed={loadSessions}
@@ -2330,6 +2351,7 @@ function SessionFamilyItem({
   selectedSessionId,
   runningSessionIds,
   unreadSessionIds,
+  teamRunningSessionIds,
   onSelectSession,
   onRenamed,
   onSessionDeleted,
@@ -2345,6 +2367,8 @@ function SessionFamilyItem({
   selectedSessionId: string | null;
   runningSessionIds: Set<string>;
   unreadSessionIds: Set<string>;
+  /** 逐会话团队运行点：包含该会话 id 时，其团队正在跑（见 teamRunningSessionIds）。 */
+  teamRunningSessionIds?: Set<string>;
   onSelectSession: (s: SessionInfo) => void;
   onRenamed?: () => void;
   onSessionDeleted?: (id: string) => void;
@@ -2377,6 +2401,9 @@ function SessionFamilyItem({
           isRunning={familySessions
             ? familySessions.some((session) => runningSessionIds.has(session.id))
             : runningSessionIds.has(node.session.id)}
+          isTeamRunning={familySessions
+            ? familySessions.some((session) => Boolean(teamRunningSessionIds?.has(session.id)))
+            : Boolean(teamRunningSessionIds?.has(node.session.id))}
           isUnread={unreadSessionIds.has(node.session.id)}
           onClick={() => onSelectSession(node.session)}
           onRenamed={onRenamed}
@@ -2400,6 +2427,7 @@ function SessionFamilyItem({
               selectedSessionId={selectedSessionId}
               runningSessionIds={runningSessionIds}
               unreadSessionIds={unreadSessionIds}
+              teamRunningSessionIds={teamRunningSessionIds}
               onSelectSession={onSelectSession}
               onRenamed={onRenamed}
               onSessionDeleted={onSessionDeleted}
@@ -2519,6 +2547,7 @@ function SessionItem({
   isSelected,
   isRunning,
   isUnread,
+  isTeamRunning,
   onClick,
   onRenamed,
   onDeleted,
@@ -2535,6 +2564,8 @@ function SessionItem({
   isSelected: boolean;
   isRunning?: boolean;
   isUnread?: boolean;
+  /** 该会话所属团队正在跑 → 行上打团队运行点（E1 缺口 3）。 */
+  isTeamRunning?: boolean;
   onClick: () => void;
   onRenamed?: () => void;
   onDeleted?: (id: string) => void;
@@ -2871,6 +2902,16 @@ function SessionItem({
               <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
             </svg>
           )}
+          {/* 团队运行点（E1 缺口 3）：该会话所属团队正在跑时的可见标记。与行首的
+              running 指示互补——它表达的是「这条会话背后的团队在跑」，不只是自身。 */}
+          {isTeamRunning && (
+            <span
+              className="session-item-team-dot"
+              role="img"
+              aria-label={t("sidebar.teamRunning")}
+              title={t("sidebar.teamRunning")}
+            />
+          )}
           <span
             className="session-item-title"
             title={subtitle ? `${title} · ${subtitle}` : title}
@@ -3103,7 +3144,9 @@ function SessionItem({
         <ChatConfirmDialog
           title={t("sidebar.deleteChatTitle")}
           subject={title}
-          body={t("sidebar.deleteChatBody")}
+          body={isTeamRunning
+            ? `${t("sidebar.deleteChatBody")} ${t("sidebar.deleteRunningTeamWarning")}`
+            : t("sidebar.deleteChatBody")}
           checkboxLabel={folderDeleteOpen ? t("sidebar.deleteChatFolder") : undefined}
           checkboxDefault
           confirmLabel={t("sidebar.delete")}

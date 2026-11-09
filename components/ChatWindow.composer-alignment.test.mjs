@@ -70,8 +70,8 @@ test("composer and message columns share one padding and one max width", () => {
   const maxWidth = "var(--chat-content-max-width, 820px)";
   assert.equal(
     source.split(maxWidth).length - 1,
-    2,
-    "message list and extension widgets share the appearance width",
+    3,
+    "message list, goal strip and extension widgets share the appearance width",
   );
   assert.equal(inputSource.split(maxWidth).length - 1, 1, "the composer shares the appearance width");
 });

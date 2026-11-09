@@ -54,6 +54,11 @@ export function ServerSection() {
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // 「下载 cloudflared」自己的状态：它是一次可能长达十几分钟的子进程下载，**不能**借用
+  // 全局 busy —— 那会把端口/模式/Token/Save 一起锁死，用户会以为整个设置页坏了（打包版
+  // 实际就是这个观感）。失败文案走本地化固定文案，原始 stderr 只进 title。
+  const [installing, setInstalling] = useState(false);
+  const [installDetail, setInstallDetail] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   // d5-1：start/stop 的 POST 只更新视图、从不续排轮询链——从非 live 态启动隧道时
   // 状态会永远停在 connecting。POST 成功后踢一次轮询 effect 重新探测。
@@ -148,6 +153,35 @@ export function ServerSection() {
     }
   }, []);
 
+  // 「下载 cloudflared」不走 call()：它自己的 installing 状态不锁其余控件，失败按
+  // 固定本地化文案提示（route 回 {error, code, detail}，detail 只进 title）。
+  const installBinary = useCallback(async () => {
+    setInstalling(true);
+    setError(null);
+    setNote(null);
+    setInstallDetail(null);
+    try {
+      const response = await fetch("/api/public-access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "install-binary" }),
+      });
+      const body = await response.json().catch(() => ({})) as { detail?: unknown };
+      if (!response.ok) {
+        setInstallDetail(typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`);
+        setError(t("publicAccess.binaryDownloadFailed"));
+        return;
+      }
+      setNote(t("publicAccess.binaryReady"));
+      setReloadKey((value) => value + 1);
+    } catch (caught) {
+      setInstallDetail(caught instanceof Error ? caught.message : String(caught));
+      setError(t("publicAccess.binaryDownloadFailed"));
+    } finally {
+      setInstalling(false);
+    }
+  }, [t]);
+
   const view = publicAccess?.view;
   const json = (body: unknown): RequestInit => ({
     method: "PUT",
@@ -239,16 +273,17 @@ export function ServerSection() {
           <div className="settings-option">
             <span className="settings-option-text">
               <span className="settings-option-title">{t("publicAccess.binary")}</span>
-              <span className="settings-option-hint" role="status">{t("publicAccess.binaryMissing")}</span>
+              <span className="settings-option-hint" role="status">
+                {installing ? t("publicAccess.downloading") : t("publicAccess.binaryMissing")}
+              </span>
             </span>
             <ConfigButton
               className="settings-option-action"
               variant="ghost"
-              disabled={!publicAccess.local || busy}
-              onClick={() => void action({ action: "install-binary" })
-                .then((ok) => { if (ok) { setNote(t("publicAccess.downloading")); setReloadKey((value) => value + 1); } })}
+              disabled={!publicAccess.local || installing}
+              onClick={() => void installBinary()}
             >
-              {t("publicAccess.download")}
+              {installing ? t("publicAccess.downloading") : t("publicAccess.download")}
             </ConfigButton>
           </div>
         )}
@@ -349,7 +384,11 @@ export function ServerSection() {
             </div>
           </>
         )}
-        {error && <span className="settings-option-hint" role="alert">{error}</span>}
+        {error && (
+          <span className="settings-option-hint" role="alert" title={installDetail ?? undefined}>
+            {error}
+          </span>
+        )}
       </div>
     </section>
   );

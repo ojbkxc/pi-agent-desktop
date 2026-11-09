@@ -123,7 +123,10 @@ function buildRosterEntry(input: AddMemberInput, agentId: string, now: number): 
     ...(input.prompt ? { prompt: input.prompt } : {}),
     ...(input.model ? { model: input.model } : {}),
     joinedAt: now,
-    cwd: process.cwd(),
+    // 不写 process.cwd()：打包版里那是 resources/server（脏数据），而团队真正在哪个项目
+    // 下跑由宿主 spawn 时的 parentContext 决定，没人读这个字段（见 pi-team-host.ts）。
+    // 与 agent-teams-swimlane-store 追加条目时的口径一致：不知道就写 ""。
+    cwd: "",
     subscriptions: [],
   };
 }

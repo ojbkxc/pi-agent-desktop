@@ -79,6 +79,11 @@ interface Props {
    * 编队带必须与任务泳道共用同一宽度与滚动容器，才真正填掉泳道上方那片空白。
    */
   formation?: (width: number) => ReactNode;
+  /**
+   * 点击任务卡（可选）：上层用它打开任务详情抽屉。传了才把卡片变成可聚焦的按钮，
+   * 未传时保持原样（指针/键盘语义不变，既有渲染断言不受影响）。
+   */
+  onSelectTask?: (ticketId: string) => void;
 }
 
 /**
@@ -86,7 +91,7 @@ interface Props {
  * 下半区按依赖深度分层，每层一条竖向泳道自左向右排列（根任务 → 中间层 → 收尾）。
  * 泳道底板与依赖连线画在同一个 SVG 里、且底板在连线之前，连线才不会被底板遮挡。
  */
-export function TaskBoardCanvas({ snapshot, requestedWidth = 0, formation }: Props) {
+export function TaskBoardCanvas({ snapshot, requestedWidth = 0, formation, onSelectTask }: Props) {
   const { t } = useI18n();
   const layout = useMemo(
     () => layoutTeamWorkbenchTasks(snapshot, requestedWidth),
@@ -202,8 +207,17 @@ export function TaskBoardCanvas({ snapshot, requestedWidth = 0, formation }: Pro
                 key={ticket.id}
                 className={`agent-teams-board-task ${taskToneClass(task.urgency)}${task.cycleId === null ? "" : " agent-teams-board-task--cycle"}`}
                 data-state={task.urgency}
+                data-ticket-id={ticket.id}
                 data-cycle={task.cycleId === null ? undefined : task.cycleId}
-                style={{ left: task.x, top: task.y, width: TASK_WIDTH, height: TASK_HEIGHT }}
+                role={onSelectTask ? "button" : undefined}
+                tabIndex={onSelectTask ? 0 : undefined}
+                onClick={onSelectTask ? () => onSelectTask(ticket.id) : undefined}
+                onKeyDown={onSelectTask ? (event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  onSelectTask(ticket.id);
+                } : undefined}
+                style={{ left: task.x, top: task.y, width: TASK_WIDTH, height: TASK_HEIGHT, cursor: onSelectTask ? "pointer" : undefined }}
               >
                 <span className="agent-teams-board-task-head">
                   <span className="agent-teams-board-task-id">#{ticket.id}</span>

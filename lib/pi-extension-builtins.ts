@@ -1,13 +1,13 @@
 /**
- * pi-agent-desktop 内置接线：把跨端扩展（lsp-mcp / pi-team / pi-purge）的工厂包成 `builtin:`
- * 扩展，交给普通会话的 extensionFactories。
+ * pi-agent-desktop 内置接线：把跨端扩展（lsp-mcp / pi-team / pi-purge / goal）的工厂包成
+ * `builtin:` 扩展，交给普通会话的 extensionFactories。
  *
  * 形态与 lib/builtin-extensions.ts 的 `builtin(name, factory)` 一致：`builtin: true`
  * 让 SDK 把它当 `builtin:<name>` 资源——默认加载，`-builtin:<name>` 或 `--no-extensions`
  * 可关闭。`replaceable: true` 允许用户用同名工具/命令的第三方扩展顶替。
  *
  * 接线到两处（都在 lib/rpc-manager.ts 与 lib/subagent-runtime.ts）：
- *   - **普通会话**：三个扩展全给（normal-session 分支）。
+ *   - **普通会话**：四个扩展全给（normal-session 分支）。
  *   - **团队成员（子会话）**：只给 pi-lsp 与 pi-team，且 pi-team **不带 controller** ——
  *     成员因此只有邮箱，派发在宿主层结构性抛错（见 lib/builtin-extensions.ts 的
  *     `createSubagentBuiltinExtensions`）。chat-only 与 workspace chat 仍然一个都不给：
@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { createPiTeamExtension } from "pi-team";
 import lspExtension from "lsp-mcp";
 import { createSubagentTeamHost, createUnavailableTeamHost } from "./pi-team-host";
+import { createGoalExtension } from "./goal/goal-extension";
 import { PI_EXTENSION_BUILTIN_NAMES } from "./pi-extension-names";
 import { isBuiltInSubagentsEnabled } from "./subagent-settings";
 import type { SubagentController } from "./subagent-runtime";
@@ -45,7 +46,7 @@ async function loadPiPurgeExtension(): Promise<(pi: ExtensionAPI) => void> {
   return mod.default;
 }
 
-const [LSP_BUILTIN_NAME, TEAM_BUILTIN_NAME, PURGE_BUILTIN_NAME] = PI_EXTENSION_BUILTIN_NAMES;
+const [LSP_BUILTIN_NAME, TEAM_BUILTIN_NAME, PURGE_BUILTIN_NAME, GOAL_BUILTIN_NAME] = PI_EXTENSION_BUILTIN_NAMES;
 
 function builtin(name: string, factory: (pi: ExtensionAPI) => void | Promise<void>): InlineExtension {
   return { name, factory, replaceable: true, builtin: true };
@@ -175,6 +176,15 @@ function purgeBuiltin(): InlineExtension {
   });
 }
 
+/**
+ * 目标模式扩展：注册 `/goal` 命令与 `goal_complete` 工具，每轮结束按双闸（默认 20 轮 /
+ * 10 分钟）自动续跑，触顶转 paused。**只给普通项目会话**——chat-only 与团队成员子会话都
+ * 不经这里（见文件顶部与 lib/builtin-extensions.ts 的分发口径）。
+ */
+function goalBuiltin(): InlineExtension {
+  return builtin(GOAL_BUILTIN_NAME, createGoalExtension());
+}
+
 export interface PiExtensionBuiltinsOptions {
   /** 既有 subagent controller；缺省（子 agent 被关闭）时团队桥降级为不可派发。 */
   subagentController?: SubagentController;
@@ -184,7 +194,7 @@ export interface PiExtensionBuiltinsOptions {
   include?: readonly string[];
 }
 
-/** 返回三个 `builtin:` 扩展，顺序与 PI_EXTENSION_BUILTIN_NAMES 一致。 */
+/** 返回四个 `builtin:` 扩展，顺序与 PI_EXTENSION_BUILTIN_NAMES 一致。 */
 export function createPiExtensionBuiltins(options: PiExtensionBuiltinsOptions = {}): InlineExtension[] {
   const include = options.include ? new Set(options.include) : undefined;
   const wants = (name: string) => !include || include.has(name);
@@ -194,6 +204,7 @@ export function createPiExtensionBuiltins(options: PiExtensionBuiltinsOptions = 
       ? [teamBuiltin(options.subagentController, options.teamIdentity)]
       : []),
     ...(wants(PURGE_BUILTIN_NAME) ? [purgeBuiltin()] : []),
+    ...(wants(GOAL_BUILTIN_NAME) ? [goalBuiltin()] : []),
   ];
 }
 

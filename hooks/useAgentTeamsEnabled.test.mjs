@@ -4,12 +4,15 @@ import { readFile } from "node:fs/promises";
 import { createJiti } from "jiti";
 
 /**
- * Agent Team 的 armed 语义：勾选 = 「下一条消息用团队」，带团队指令的消息发出后复位。
+ * A1：Agent Team 开关状态层的拆分。覆盖五件事：
+ * 1. 默认值 —— 全局可用性默认开、单条 armed 默认关；
+ * 2. 两态互不干扰 —— 改一个不动另一个；
+ * 3. 发送后复位 + 命令类豁免；
+ * 4. 会话切换重算；
+ * 5. 一次性发现引导的两态语义。
  *
- * 这里测两类东西：
- * 1. 纯函数 —— localStorage 值的解析、发送后是否消耗 armed；
- * 2. store 本身 —— 默认开、复位写入、只在 armed 时复位。
- *    React hook 需要 DOM，跑不动，改用文件末尾的接线断言钉住 hook 的读取方式。
+ * React hook 需要 DOM，跑不动；hook 的读取方式用文件末尾的接线断言钉住，其余都测纯函数
+ * 与内存 store（沿用既有测试的约定）。
  */
 
 const storage = new Map();
@@ -30,67 +33,154 @@ const {
   AGENT_TEAMS_ENABLED_DEFAULT,
   parseAgentTeamsEnabled,
   shouldDisarmAgentTeam,
+  shouldResetArmedOnSessionChange,
   setAgentTeamsEnabled,
-  disarmAgentTeam,
   useAgentTeamsEnabled,
+  setAgentTeamsArmed,
+  isAgentTeamsArmed,
+  armAgentTeam,
+  disarmAgentTeam,
+  useAgentTeamsArmed,
 } = await jiti.import("./useAgentTeamsEnabled.ts", { default: false });
+const { APP_PREF_KEYS, getPref } = await jiti.import("@/lib/app-prefs.ts", { default: false });
 const { withAgentTeamRequest } = await jiti.import("@/lib/agent-team-request.ts", { default: false });
+const guide = await jiti.import("@/lib/agent-teams-guide.ts", { default: false });
 
-test("first use defaults to armed; only an explicit true arms it", () => {
-  assert.equal(AGENT_TEAMS_ENABLED_DEFAULT, true);
-  assert.equal(parseAgentTeamsEnabled(null), true, "nothing stored yet → default armed");
+// 每个用例前把两套状态都归零，用例之间不互相污染。
+function resetAll() {
+  storage.clear();
+  setAgentTeamsEnabled(false);
+  disarmAgentTeam(null);
+  guide.resetAgentTeamGuide();
+}
+
+// ───────────────────────── 1. 默认值 ─────────────────────────
+
+test("全局可用性默认开；单条 armed 默认关", () => {
+  storage.clear();
+  assert.equal(AGENT_TEAMS_ENABLED_DEFAULT, true, "首次使用全局默认可用");
+  assert.equal(parseAgentTeamsEnabled(null), true, "没存过 → 全局默认开");
   assert.equal(parseAgentTeamsEnabled("true"), true);
-  assert.equal(parseAgentTeamsEnabled("false"), false, "the disarm write");
-  // Anything else is not an arming.
+  assert.equal(parseAgentTeamsEnabled("false"), false);
   for (const raw of ["", "0", "null", "off"]) {
     assert.equal(parseAgentTeamsEnabled(raw), false, `stored ${JSON.stringify(raw)}`);
   }
+  // armed 默认关：没勾过就是关。
+  disarmAgentTeam(null);
+  assert.equal(isAgentTeamsArmed(), false, "armed 默认关");
 });
 
-test("only a message that really carries the team block consumes the arming", () => {
+// ───────────────────────── 2. 两态互不干扰 ─────────────────────────
+
+test("全局可用性与单条 armed 互不干扰，且只有全局落盘", () => {
+  resetAll();
+  // 关掉全局，不该动 armed。
+  setAgentTeamsEnabled(false);
+  assert.equal(isAgentTeamsArmed(), false);
+  armAgentTeam("s1");
+  assert.equal(isAgentTeamsArmed(), true, "armed 与全局无关地打开");
+  assert.equal(getPref(APP_PREF_KEYS.agentTeamsEnabled), "false", "全局偏好仍是关");
+
+  // armed 不落盘：storage 里没有任何和 armed 有关的键。
+  const armedKeys = [...storage.keys()].filter((k) => k.includes("armed"));
+  assert.deepEqual(armedKeys, [], `armed 不该写 localStorage，实际写了 ${JSON.stringify(armedKeys)}`);
+  // 结构上也只有 guide 两态 + 全局可用性这几个 agent-teams 键。
+  assert.equal(APP_PREF_KEYS.agentTeamsEnabled, "pi-agent-teams-enabled");
+  assert.equal(APP_PREF_KEYS.agentTeamsGuideSeen, "pi-agent-teams-guide-seen");
+  assert.equal(APP_PREF_KEYS.agentTeamsGuideDismissed, "pi-agent-teams-guide-dismissed");
+
+  // 反过来：开关全局不影响 armed。
+  armAgentTeam("s1");
+  setAgentTeamsEnabled(true);
+  assert.equal(isAgentTeamsArmed(), true, "改全局不动 armed");
+  assert.equal(getPref(APP_PREF_KEYS.agentTeamsEnabled), "true");
+  assert.equal(typeof useAgentTeamsEnabled, "function");
+});
+
+// ───────────────────────── 3. 发送后复位 + 命令类豁免 ─────────────────────────
+
+test("只有真的带上团队块的消息才消耗 armed；命令类消息豁免", () => {
+  resetAll();
   const wrapped = withAgentTeamRequest("修一下登录");
-  assert.equal(shouldDisarmAgentTeam(true, wrapped), true, "armed plain message is consumed");
-  assert.equal(shouldDisarmAgentTeam(false, wrapped), false, "already disarmed: nothing to do");
-  assert.equal(shouldDisarmAgentTeam(true, "今天天气不错"), false, "unwrapped text never consumes");
-  // Commands stay unwrapped (they must keep their leading / or !), so they leave the arming alone.
+  assert.equal(shouldDisarmAgentTeam(true, wrapped), true, "armed 的普通消息被消耗");
+  assert.equal(shouldDisarmAgentTeam(false, wrapped), false, "已复位：无事可做");
+  assert.equal(shouldDisarmAgentTeam(true, "今天天气不错"), false, "没包装的文本从不消耗");
+  // 命令类消息（/、!）保持首字符，不被包装，也就不消耗这次 armed。
   assert.equal(shouldDisarmAgentTeam(true, withAgentTeamRequest("/compact")), false);
   assert.equal(shouldDisarmAgentTeam(true, "/compact"), false);
   assert.equal(shouldDisarmAgentTeam(true, "!npm test"), false);
+
+  // 端到端：arm → 发普通消息 → 复位。
+  armAgentTeam("s1");
+  assert.equal(isAgentTeamsArmed(), true);
+  disarmAgentTeam("s1");
+  assert.equal(isAgentTeamsArmed(), false, "一条带团队块的消息发出去后复位");
+  disarmAgentTeam("s1");
+  assert.equal(isAgentTeamsArmed(), false, "重复复位是 no-op");
 });
 
-test("setAgentTeamsEnabled persists the flag under the shared app-pref key", async () => {
-  const { APP_PREF_KEYS } = await jiti.import("@/lib/app-prefs.ts", { default: false });
-  assert.equal(APP_PREF_KEYS.agentTeamsEnabled, "pi-agent-teams-enabled");
-
-  setAgentTeamsEnabled(false);
-  assert.equal(storage.get("pi-agent-teams-enabled"), "false");
-  setAgentTeamsEnabled(true);
-  assert.equal(storage.get("pi-agent-teams-enabled"), "true");
+test("arm/disarm 的读写与幂等", () => {
+  resetAll();
+  setAgentTeamsArmed(true, "s1");
+  assert.equal(isAgentTeamsArmed(), true);
+  setAgentTeamsArmed(true, "s1");
+  assert.equal(isAgentTeamsArmed(), true, "重复 arm 保持真");
+  disarmAgentTeam("s1");
+  assert.equal(isAgentTeamsArmed(), false);
 });
 
-test("disarmAgentTeam turns an armed flag off and is idempotent", () => {
-  setAgentTeamsEnabled(true);
-  disarmAgentTeam();
-  assert.equal(storage.get("pi-agent-teams-enabled"), "false", "one sent team message disarms");
-  disarmAgentTeam();
-  assert.equal(storage.get("pi-agent-teams-enabled"), "false", "a second disarm is a no-op");
-  // It must not overwrite a deliberate arming later on.
-  setAgentTeamsEnabled(true);
-  assert.equal(storage.get("pi-agent-teams-enabled"), "true");
+// ───────────────────────── 4. 会话切换重算 ─────────────────────────
+
+test("会话键变化时 armed 需要重置；同键不动", () => {
+  assert.equal(shouldResetArmedOnSessionChange("A", "B"), true, "换会话 → 重置");
+  assert.equal(shouldResetArmedOnSessionChange(null, "A"), true, "新会话落地 → 重置");
+  assert.equal(shouldResetArmedOnSessionChange("A", null), true, "会话清空 → 重置");
+  assert.equal(shouldResetArmedOnSessionChange("A", "A"), false, "同一会话不动 armed");
+  assert.equal(shouldResetArmedOnSessionChange(null, null), false, "都没会话也不动");
 });
 
-test("a fresh module instance restores what localStorage kept", async () => {
-  storage.set("pi-agent-teams-enabled", "false");
-  // Read through the same parse path a cold-loaded store uses.
-  const { getPref } = await jiti.import("@/lib/app-prefs.ts", { default: false });
-  assert.equal(getPref("pi-agent-teams-enabled"), "false");
-  assert.equal(parseAgentTeamsEnabled(getPref("pi-agent-teams-enabled")), false, "disarmed state survives reloads");
+// ───────────────────────── 5. 一次性发现引导（两态） ─────────────────────────
+
+test("发现引导：既没看过也没拒绝过才展示；看过 / 拒绝两态可分开", () => {
+  resetAll();
+  assert.equal(guide.shouldShowAgentTeamGuide(), true, "首次进入需要展示引导");
+  assert.equal(guide.hasSeenAgentTeamGuide(), false);
+  assert.equal(guide.isAgentTeamGuideDismissed(), false);
+
+  // 只是看过：不再展示，但没有被拒绝。
+  guide.markAgentTeamGuideSeen();
+  assert.equal(guide.shouldShowAgentTeamGuide(), false);
+  assert.equal(guide.hasSeenAgentTeamGuide(), true);
+  assert.equal(guide.isAgentTeamGuideDismissed(), false, "看过 ≠ 拒绝");
+
+  // 被拒绝：看过 + 明确拒绝两态都立起来。
+  guide.resetAgentTeamGuide();
+  guide.dismissAgentTeamGuide();
+  assert.equal(guide.shouldShowAgentTeamGuide(), false);
+  assert.equal(guide.hasSeenAgentTeamGuide(), true);
+  assert.equal(guide.isAgentTeamGuideDismissed(), true, "拒绝态与看过态分开记录");
+
+  // 重置后重新可展示。
+  guide.resetAgentTeamGuide();
+  assert.equal(guide.shouldShowAgentTeamGuide(), true);
 });
 
-test("hook wiring keeps useSyncExternalStore and the default-true server snapshot", async () => {
+// ───────────────────────── 接线断言（hook 无法在无 DOM 下运行） ─────────────────────────
+
+test("hook 接线：两个独立 store、armed 默认 false、会话切换显式重置", async () => {
   const source = await readFile(new URL("./useAgentTeamsEnabled.ts", import.meta.url), "utf8");
-  assert.match(source, /useSyncExternalStore\(subscribe, getSnapshot, \(\) => AGENT_TEAMS_ENABLED_DEFAULT\)/);
-  assert.match(source, /export function disarmAgentTeam\(\)/);
-  assert.match(source, /if \(!getSnapshot\(\)\) return;/, "an already-disarmed flag is never rewritten");
+  // 全局可用性：默认开 + 服务端快照用默认常量。
+  assert.match(source, /useSyncExternalStore\(subscribeEnabled, enabledSnapshot, \(\) => AGENT_TEAMS_ENABLED_DEFAULT\)/);
+  // 单条 armed：默认 false + 内存 store。
+  assert.match(source, /useSyncExternalStore\(subscribeArmed, armedSnapshot, \(\) => false\)/);
+  // 会话切换：用纯函数判断键是否变化，变化时在 effect 里显式重置（不在渲染期赋模块变量）。
+  assert.match(source, /shouldResetArmedOnSessionChange\(previousKeyRef\.current, key\)/);
+  assert.match(source, /if \(keyChanged\) setAgentTeamsArmed\(false, key\)/);
+  // 切会话的第一帧直接读成关，避免闪一下上一条的 armed。
+  assert.match(source, /return keyChanged \? false : armedNow/);
   assert.equal(typeof useAgentTeamsEnabled, "function");
+  assert.equal(typeof useAgentTeamsArmed, "function");
+  assert.equal(typeof disarmAgentTeam, "function");
+  assert.equal(typeof shouldDisarmAgentTeam, "function");
+  assert.equal(typeof parseAgentTeamsEnabled, "function");
 });

@@ -34,8 +34,14 @@ import { ImagePreview } from "./ImagePreview";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useMenuNavigation } from "@/hooks/useMenuNavigation";
 import { useEnterSendMode } from "@/hooks/useEnterSendMode";
-import { useAgentTeamsEnabled, disarmAgentTeam, shouldDisarmAgentTeam } from "@/hooks/useAgentTeamsEnabled";
-import { withAgentTeamRequest, stripAgentTeamRequest } from "@/lib/agent-team-request";
+import { useAgentTeamsEnabled, useAgentTeamsArmed, armAgentTeam, disarmAgentTeam, shouldDisarmAgentTeam } from "@/hooks/useAgentTeamsEnabled";
+import { withAgentTeamRequest, stripAgentTeamRequest, hasAgentTeamRequest } from "@/lib/agent-team-request";
+import { shouldShowAgentTeamCostNotice } from "@/lib/agent-teams-notice";
+import { shouldShowAgentTeamGuide, markAgentTeamGuideSeen, dismissAgentTeamGuide } from "@/lib/agent-teams-guide";
+import { AgentTeamToggle, useLeanModeEnabled, type AgentTeamUnavailableReason } from "./AgentTeams/AgentTeamToggle";
+import { AgentTeamChip } from "./AgentTeams/AgentTeamChip";
+import { AgentTeamCostDialog } from "./AgentTeams/AgentTeamCostDialog";
+import { AgentTeamGuide } from "./AgentTeams/AgentTeamGuide";
 import { useI18n } from "@/hooks/useI18n";
 import type { ReactNode } from "react";
 import type { ContextUsage, SessionStatsInfo } from "@/lib/pi-types";
@@ -152,6 +158,10 @@ interface Props {
   cwd?: string | null;
   /** The hidden model-only chat workspace: images only, no file/shell mentions. */
   chatOnly?: boolean;
+  /** A subagent/member session: the Agent Team switch and chip are hidden entirely (A7). */
+  memberSession?: boolean;
+  /** Open Settings (used by the greyed Agent Team switch so it is never a dead button). */
+  onOpenSettings?: () => void;
   /** A chat's folder and computer access (null while unknown or for a legacy chat). */
   chatAccess?: ChatAccessControls | null;
   /** The user flipped "let this chat use my computer"; the parent confirms and applies it. */
@@ -604,6 +614,17 @@ export function getUserMessageText(message: UserMessage): string {
   return stripAgentTeamRequest(raw).content;
 }
 
+/** 这条历史消息当初是否请求了 Agent Team（编辑重发时用它决定要不要重新 armed，A5）。 */
+export function userMessageRequestsAgentTeam(message: UserMessage): boolean {
+  const raw = typeof message.content === "string"
+    ? message.content
+    : message.content
+        .filter((block): block is TextContent => block.type === "text")
+        .map((block) => block.text)
+        .join("\n");
+  return hasAgentTeamRequest(raw);
+}
+
 export function getUserMessageDraftImages(message: UserMessage): ChatDraftImage[] {
   if (typeof message.content === "string") return [];
   return message.content.flatMap((block) => {
@@ -862,6 +883,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   draftKey,
   cwd,
   chatOnly = false,
+  memberSession = false,
+  onOpenSettings,
   chatAccess = null,
   onToggleChatUnlocked,
   projectPath,
@@ -911,8 +934,53 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const isCompact = composerTier === "compact" || isNarrow;
 
   const enterSendMode = useEnterSendMode();
-  // Agent Team armed（默认开，一次性）：开启时发送的消息前置团队指令，气泡仍只显示用户原文。
-  const agentTeamsEnabled = useAgentTeamsEnabled();
+  // ── Agent Team：A1 把原来的一个布尔拆成「全局可用性」+「单条 armed」两态 ──
+  // 全局可用性（默认开、落 localStorage）：决定要不要在 composer 显示团队开关。
+  const teamEnabled = useAgentTeamsEnabled();
+  // 单条 armed（默认关、不落盘、按会话键隔离）：勾「下一条消息用团队」。
+  const armed = useAgentTeamsArmed(draftKey);
+  // 极简档（A7）：开启时隐藏开关并强制复位 armed。
+  const leanMode = useLeanModeEnabled();
+  // 可用性（A7 + cc-haha 对齐）：成员会话 / 极简档**整行隐藏**（前者不可能再起团队，
+  // 后者是刻意收敛能力的档）；chat-only 与「全局关掉」都**显示但置灰**，点击跳设置。
+  // 全局关掉时保留这一行是照 cc-haha：capabilityMenuModel 里那行仍渲染、不带开关，
+  // 点了去 Settings › General —— 不做成「整行消失」这种能力静默消失的形态。
+  const teamUnavailableReason: AgentTeamUnavailableReason | undefined =
+    memberSession ? "memberSession"
+      : leanMode ? "lean"
+        : !teamEnabled ? "disabled"
+          : chatOnly ? "chatOnly"
+            : undefined;
+  const showTeamToggle = !memberSession && !leanMode;
+  const teamAvailable = teamUnavailableReason === undefined;
+  const showTeamChip = teamEnabled && armed && teamAvailable;
+  // 一次性成本确认（A6）：首次勾起时弹一次；「不再提醒」由 lib/agent-teams-notice 记住。
+  const [teamCostDialogOpen, setTeamCostDialogOpen] = useState(false);
+  // 一次性发现引导（A9）：挂载后才读（shouldShowAgentTeamGuide 在服务端无 window 时返回
+  // true，渲染期读会水合不一致）。看过 / 拒绝过后永久不再出现。
+  const [showTeamGuide, setShowTeamGuide] = useState(false);
+  useEffect(() => {
+    setShowTeamGuide(shouldShowAgentTeamGuide());
+  }, []);
+  const handleTeamToggle = useCallback(() => {
+    if (armed) {
+      disarmAgentTeam(draftKey);
+      return;
+    }
+    if (shouldShowAgentTeamCostNotice()) {
+      setTeamCostDialogOpen(true);
+      return;
+    }
+    armAgentTeam(draftKey);
+  }, [armed, draftKey]);
+  // 极简档强制复位：进入 lean、或 lean 下残留的 armed，都清掉（A7）。
+  useEffect(() => {
+    if (leanMode && armed) disarmAgentTeam(draftKey);
+  }, [leanMode, armed, draftKey]);
+  // 包装条件是「全局可用 ∧ 本条 armed」。变量名沿用 agentTeamsEnabled，是为了不破坏
+  // components/ChatInput.test.mjs 对 handleSend 闭包的注入契约（它按这个名字喂值）；
+  // 它的值现在已经是「这一条消息是否带团队」，不再是旧的「全局开关」。
+  const agentTeamsEnabled = teamEnabled && armed;
   const [value, setValue] = useState(() => (draftKey ? getDraft(draftKey)?.value ?? "" : ""));
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [automationDropdownOpen, setAutomationDropdownOpen] = useState(false);
@@ -1021,6 +1089,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       const split = splitMessageForComposer(getUserMessageText(message));
       const restoredText = split.text;
       const restoredImages = draftImagesToAttachedImages(getUserMessageDraftImages(message));
+      // A5：编辑一条当初请求了团队的消息时，自动 arm 这条（重发会重新套团队块）；composer
+      // 上的 chip 就是它的可见形态，点 ✕ 撤销（= 这次重发不套团队块）。不弹成本确认——
+      // 用户已在编辑团队消息，不需要再被告知一次。
+      if (userMessageRequestsAgentTeam(message)) armAgentTeam(draftKeyRef.current);
       valueRef.current = restoredText;
       attachedImagesRef.current = restoredImages;
       attachedFilesRef.current = split.files;
@@ -2270,6 +2342,25 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             />
           );
         })()}
+        {/* A9: one-time discovery guide (above the composer, below real error banners).
+            Mounted-only read; Enable arms the team, Dismiss is final. Compact is the quote
+            popover's text-only composer: it has no team switch, so no guide either. */}
+        {!compact && showTeamGuide && showTeamToggle && teamAvailable && (
+          <div className="agent-team-guide-row" style={{ marginBottom: 8 }}>
+            <AgentTeamGuide
+              onEnable={() => {
+                markAgentTeamGuideSeen();
+                setShowTeamGuide(false);
+                if (shouldShowAgentTeamCostNotice()) setTeamCostDialogOpen(true);
+                else armAgentTeam(draftKey);
+              }}
+              onDismiss={() => {
+                dismissAgentTeamGuide();
+                setShowTeamGuide(false);
+              }}
+            />
+          </div>
+        )}
         {/* Queued steering / follow-up messages (delivered by pi on upcoming turns) */}
         {((queuedMessages?.steering.length ?? 0) + (queuedMessages?.followUp.length ?? 0)) > 0 && (
           <div style={{
@@ -2475,6 +2566,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 </button>
               </span>
             ))}
+          </div>
+        )}
+
+        {/* A3/A5: Agent Team armed chip — "the next message uses a team". Removable: the
+            ✕ just disarms, so the next send goes out as a plain message. Compact (quote
+            popover) composers share the global armed state, so they never show it. */}
+        {!compact && showTeamChip && (
+          <div className="composer-teams-chip-row">
+            <AgentTeamChip onRemove={() => disarmAgentTeam(draftKey)} touch={isMobile} />
           </div>
         )}
 
@@ -3009,6 +3109,18 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 onSelectProject={onSelectProject}
               />
             )}
+            {/* A2: Agent Team switch. Hidden when the feature is off globally, in a
+                subagent/member session, or under Lean mode; greyed (click → Settings) in a
+                chat-only session. */}
+            {showTeamToggle && (
+              <AgentTeamToggle
+                armed={armed}
+                available={teamAvailable}
+                disabledReason={teamUnavailableReason}
+                onToggle={handleTeamToggle}
+                onOpenSettings={onOpenSettings ? () => onOpenSettings() : undefined}
+              />
+            )}
             {/* Model selector — visible always, disabled during streaming */}
             {(modelOptions.length > 0 || model || modelError) && onModelChange && (
               <ModelSelector
@@ -3364,6 +3476,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         </div>}
         </div>
       </div>
+      {/* A6: one-time cost confirmation before the first arm. */}
+      <AgentTeamCostDialog
+        open={teamCostDialogOpen}
+        onConfirm={() => { setTeamCostDialogOpen(false); armAgentTeam(draftKey); }}
+        onCancel={() => setTeamCostDialogOpen(false)}
+      />
     </fieldset>
   );
 });

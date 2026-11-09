@@ -28,6 +28,8 @@ import { CodemodeCallList } from "./CodemodeToolView";
 import { imageSource, resultImageFileName } from "@/lib/result-image";
 import { mcpToolLabel, prettyMcpResultText } from "@/lib/mcp-tool-display";
 import { stripAgentTeamRequest } from "@/lib/agent-team-request";
+import { AgentTeamChip } from "./AgentTeams/AgentTeamChip";
+import { AGENT_TEAM_CREATE_TOOL_NAME, AGENT_TEAM_DELETE_TOOL_NAME, AgentTeamDeleteCard, AgentTeamInlineCard } from "./AgentTeams/AgentTeamInlineCard";
 import type {
   AgentMessage,
   UserMessage,
@@ -342,6 +344,19 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
     && prev.compactError === next.compactError;
 });
 
+/**
+ * 打开「团队」工作台页。AppShell 是通过 URL 的 `?view=teams` 进入该页的
+ * （`parseWorkspaceView(searchParams.get("view"))`）；MessageView 拿不到 AppShell 的
+ * `setWorkspaceView`，只能走整页导航——这是本仓既有的入口方式（同 SettingsPanel 的
+ * `window.location.replace("/login")`）。团队内联卡的「打开 ›」用它作为默认行为。
+ */
+function openTeamsWorkspace(): void {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  url.searchParams.set("view", "teams");
+  window.location.assign(url.toString());
+}
+
 function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, onEditContent, editDisabled, onCancelEdit, isEditing }: {
   message: UserMessage;
   cwd?: string;
@@ -371,14 +386,17 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
   // message and existing model context retain the exact original data.
   // The Agent Team switch wraps a message for the model (`lib/agent-team-request.ts`);
   // the bubble shows only what the user typed, so the block is stripped here too.
-  const content = userImageDisplayText(stripAgentTeamRequest((
+  // `requested` 记下这条消息当初是否请求了团队，气泡据此显示只读标记（模型可能没建成功，
+  // 所以文案是「已请求团队」而不是「使用了团队」）。
+  const { content: strippedUserText, requested: agentTeamRequested } = stripAgentTeamRequest((
     typeof message.content === "string"
       ? message.content
       : message.content
           .filter((b): b is TextContent => b.type === "text")
           .map((b) => b.text)
           .join("\n")
-  ).replace(/\r\n?/g, "\n")).content, imageBlocks.length);
+  ).replace(/\r\n?/g, "\n"));
+  const content = userImageDisplayText(strippedUserText, imageBlocks.length);
 
   // Files attached in a chat travel inside the text; show them as chips, not a wall of text.
   const { text: bodyText, files: attachedFiles } = splitAttachedFiles(content);
@@ -448,6 +466,14 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
             overflowY: "auto",
           }}
         >
+          {/* 这条消息当初请求了团队 → 气泡上给一个只读标记（历史重载也生效，因为团队块
+              写在消息正文里）。只读：不传 onRemove。用「已请求团队」而非中性的「Agent Team」——
+              模型可能没真建成功，不能让标记暗示团队一定建成了。 */}
+          {agentTeamRequested && (
+            <div style={{ marginBottom: content ? 6 : 0 }}>
+              <AgentTeamChip variant="message" label={t("chat.agentTeam.requested")} />
+            </div>
+          )}
           {commandText ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
               {imageBlocksNode}
@@ -994,8 +1020,37 @@ function BlockView({ block, searchTarget, toolResults, isStreaming, streamingDur
   }
   if (block.type === "toolCall") {
     const tc = block as ToolCallContent;
-    const result = toolResults?.get(tc.toolCallId);
-    const duration = toolCallDurations?.get(tc.toolCallId);
+    // 空工具名 = provider 把流式 tool_call 的**分片**各自成了一块（实测「蓝星APi」在
+    // auto / spark / qwen 上都会这样），SDK 忠实保留，于是这里会渲染出一排没有标题的
+    // 空卡片。它们没有工具名、没有可用输入，也没有可配对的结果——直接不渲染，别把这堆
+    // 噪声当成「回复」展示给用户。
+    if (!tc.toolName.trim()) return null;
+    // 空 toolCallId 不能拿去查表：所有空 id 共用 "" 这一个键，会互相串结果与时长
+    // （历史故障：67 张空卡全显示会话最后一条结果的 863s）。没有 id 就当没有结果。
+    const callId = tc.toolCallId.trim() ? tc.toolCallId : null;
+    const result = callId ? toolResults?.get(callId) : undefined;
+    const duration = callId ? toolCallDurations?.get(callId) : undefined;
+    // team_create 在消息里渲染一张内联团队卡（团队名/阶段/成员数/进度 + 打开），
+    // 替代普通工具行——对齐 cc-haha 在同一位置的团队卡。快照由卡片自己按会话 id 拉取，
+    // 拿不到时它渲染 disabled 占位，不在这里编造数据。
+    if (tc.toolName === AGENT_TEAM_CREATE_TOOL_NAME) {
+      return (
+        <AgentTeamInlineCard
+          sessionId={sessionId}
+          isError={result?.isError}
+          hasResult={!!result}
+          onOpen={sessionId ? openTeamsWorkspace : undefined}
+        />
+      );
+    }
+    // team_delete 也走团队卡形态：删除是终态，不该裸露一行原始工具 JSON。删除成功后
+    // 团队目录被移除、快照路由会 404，所以这张卡只表达终态、不拉数据源；团队名优先取
+    // 工具入参 team_name（取不到就不显示名，绝不编造）。
+    if (tc.toolName === AGENT_TEAM_DELETE_TOOL_NAME) {
+      const rawName = (tc.input as { team_name?: unknown } | undefined)?.team_name;
+      const deletedName = typeof rawName === "string" && rawName.trim() ? rawName : undefined;
+      return <AgentTeamDeleteCard teamName={deletedName} isError={result?.isError} hasResult={!!result} />;
+    }
     // A loaded (non-streaming) message whose toolCall has no paired result
     // means the run was interrupted before the tool finished — render that
     // honestly instead of the success styling.

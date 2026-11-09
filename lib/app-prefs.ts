@@ -27,10 +27,15 @@ export const APP_PREF_KEYS = {
   /** "1" while the sidebar Chats section is folded. */
   collapsedChats: "pi-web:collapsed-chats",
   /**
-   * Agent Team 的 armed 开关（composer 的「用团队处理」）。**一次性**：勾选表示「下一条
-   * 消息用团队」，带团队指令的消息发出后自动复位；首次使用（没存过）默认开。
+   * Agent Team 的**全局可用性**开关（Settings › General › Chat），默认 `true`。
+   * 注意它已不是「下一条消息用团队」的单条 armed —— 那个是内存态、不落盘，由
+   * `hooks/useAgentTeamsEnabled.ts` 的 `useAgentTeamsArmed()` 管理。
    */
   agentTeamsEnabled: "pi-agent-teams-enabled",
+  /** Agent Team 一次性发现引导：`"1"` = 引导已展示过（用户看过 / 走完）。 */
+  agentTeamsGuideSeen: "pi-agent-teams-guide-seen",
+  /** Agent Team 一次性发现引导：`"1"` = 用户主动关闭 / 拒绝过这份引导。 */
+  agentTeamsGuideDismissed: "pi-agent-teams-guide-dismissed",
   /** Additional five-chat pages shown past the Chats preview cap. */
   chatSessionPages: "pi-web:chat-session-pages",
   /** Chat session ids pinned to the top of the Chats section. */

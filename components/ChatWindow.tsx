@@ -14,6 +14,11 @@ import { MessageView } from "./MessageView";
 import { useReportDesktopReady } from "./desktop";
 import { MarkdownBody } from "./MarkdownBody";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
+import { AgentTeamPlanCard } from "./AgentTeams/AgentTeamPlanCard";
+import { GoalStrip } from "./AgentTeams/GoalStrip";
+import { useTeamPlan } from "@/hooks/useTeamPlan";
+import { useGoalState } from "@/hooks/useGoalState";
+import { isPlanCardVisible } from "@/lib/agent-teams-plan";
 import { NewSessionWelcome } from "./NewSessionWelcome";
 import { ConversationNavigator, type ConversationTurnLocation } from "./ConversationNavigator";
 import { ExtensionWidgets } from "./ExtensionWidgets";
@@ -929,10 +934,17 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
   // skip re-rendering on every message_update event. An inline `new Map()`
   // here used to defeat MessageView's memo() on each streamed chunk.
   const toolResultsMap = useMemo(() => {
-    const map = new Map(activeToolResults);
+    // 空 toolCallId 是「provider 把流式 tool_call 分片各自成块」留下的残渣：多张卡片共用
+    // "" 这个键，后写入的结果覆盖先写入的，于是所有同会话卡片显示同一条结果与时长。
+    // 空 id 一律不入表，让这些卡片按「无结果」渲染，而不是互相串结果。
+    const map = new Map<string, ToolResultMessage>();
+    for (const [id, result] of activeToolResults) {
+      if (id.trim()) map.set(id, result);
+    }
     for (const msg of messages) {
       if (msg.role === "toolResult") {
-        map.set((msg as ToolResultMessage).toolCallId, msg as ToolResultMessage);
+        const result = msg as ToolResultMessage;
+        if (result.toolCallId?.trim()) map.set(result.toolCallId, result);
       }
     }
     return map;
@@ -1172,6 +1184,50 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
     }));
   }, [messages.length, scrollContainerRef]);
 
+  // B3 计划卡的数据源一：团队名。plan 路由按**团队名**读盘，所以先从会话 id 反查团队。
+  // 只做一次性探测（跟随会话 id 与消息数变化），**不引入第二条 workbench 轮询** —— 持续
+  // 刷新由 useTeamPlan 自己的 2s 轮询负责。取团队目录名（`team.id`）而不是显示名：目录名
+  // 是 sanitize 后的稳定 id，查表幂等；中文团队名走显示名会变成一串横线。
+  // 同一会话内不清空（避免卡片闪一下）：只在 sessionId 变化时才重算，读取时比对 sessionId。
+  const teamProbeSessionId = session?.id ?? null;
+  const [teamProbe, setTeamProbe] = useState<{ sessionId: string | null; name: string | null }>({
+    sessionId: null,
+    name: null,
+  });
+  useEffect(() => {
+    if (!teamProbeSessionId) {
+      setTeamProbe({ sessionId: null, name: null });
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(
+          `/api/teams/session/${encodeURIComponent(teamProbeSessionId)}/workbench`,
+          { cache: "no-store" },
+        );
+        if (cancelled) return;
+        if (!response.ok) {
+          setTeamProbe({ sessionId: teamProbeSessionId, name: null });
+          return;
+        }
+        const snapshot = await response.json() as { team?: { id?: unknown } };
+        if (cancelled) return;
+        const id = typeof snapshot.team?.id === "string" && snapshot.team.id ? snapshot.team.id : null;
+        setTeamProbe({ sessionId: teamProbeSessionId, name: id });
+      } catch {
+        if (!cancelled) setTeamProbe({ sessionId: teamProbeSessionId, name: null });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [teamProbeSessionId, messages.length]);
+  // 只在探测结果属于当前会话时才采用，防止切会话后拿上一条会话的团队名去查计划。
+  const teamName = teamProbe.sessionId === teamProbeSessionId ? teamProbe.name : null;
+  const teamPlan = useTeamPlan(teamName);
+  // G2 目标进度条数据源：只在 status=active 时 2s 轮询；用 messages.length 作 refreshKey，
+  // 让会话推进（新消息）时把随后新建/变化的目标补拉回来。
+  const goalState = useGoalState(session?.id ?? null, messages.length);
+
   const chatInputElement = (
     <ChatInput
       ref={chatInputRef}
@@ -1237,6 +1293,8 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
       projectOptions={chatOnly ? [] : projectOptions}
       onProjectChange={chatOnly ? undefined : onProjectChange}
       chatOnly={chatOnly}
+      memberSession={session?.relation?.kind === "subagent"}
+      onOpenSettings={onOpenSettings ? () => onOpenSettings("general") : undefined}
       chatAccess={chatAccess}
       onToggleChatUnlocked={handleToggleChatUnlocked}
       onSessionStatsPanelOpen={onSessionStatsPanelOpen}
@@ -1374,6 +1432,15 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
           <ExtensionCustomPanel key={extensionCustomUi.id} request={extensionCustomUi} waitingCount={waitingExtensionCustomUiCount} onInput={sendExtensionCustomInput} />
         )}
         {!isEmptyNew && <>
+        <div style={{ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, flex: 1, overflow: "hidden" }}>
+        {/* G2 目标进度条：常驻在消息列表上方（照 cc-haha ActiveSession 的 header 位）。包一层 column
+            让条位于列表之上，**不改** chatContentRegion 的 row（ConversationNavigator 仍是它的同行
+            子项）。无目标时 GoalStrip 自己返回 null，不留空位；这里只负责与消息列一致的居中内边距。 */}
+        <div style={{ flexShrink: 0, padding: `0 ${CHAT_COLUMN_PADDING}px` }}>
+          <div style={{ width: "100%", maxWidth: "var(--chat-content-max-width, 820px)", margin: "0 auto" }}>
+            <GoalStrip goal={goalState.goal} isRunning={sessionRunning} compact={isMobile} />
+          </div>
+        </div>
         <div
           ref={scrollContainerRef}
           // The message list is the one place long output has to be dragged through,
@@ -1635,6 +1702,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
             </div>
           </div>
         </div>
+        </div>
           <ConversationNavigator
             turns={conversationTurns}
             scrollContainerRef={scrollContainerRef}
@@ -1787,6 +1855,20 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
             cwd={newSessionCwd}
             isChat={chatOnly}
           />
+        )}
+        {/* B3: plan card dock above the composer. The outer wrapper is gated on the same
+            predicate the card uses, so an invisible card never leaves an empty 8px gap in
+            the composer column. `error` is not part of the gate: the card only renders it
+            alongside a plan (`AgentTeamPlanCard` returns null when `plan` is null). */}
+        {isPlanCardVisible(teamPlan.plan) && (
+          <div style={{ maxHeight: "min(45dvh, 440px)", overflowY: "auto", marginBottom: 8, flexShrink: 0 }}>
+            <AgentTeamPlanCard
+              plan={teamPlan.plan}
+              busy={teamPlan.busy}
+              error={teamPlan.error}
+              onApprove={() => void teamPlan.approve()}
+            />
+          </div>
         )}
         {chatInputElement}
         {(belowEditorWidgets.length > 0 || hasExtensionStatus) && (

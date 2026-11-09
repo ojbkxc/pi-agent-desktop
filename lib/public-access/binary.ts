@@ -2,17 +2,20 @@
  * cloudflared 二进制的定位（服务端专用）。
  *
  * 查找顺序（第一个存在且可执行的胜出）：
- *   1. `PI_WEB_CLOUDFLARED` —— 显式绝对路径覆盖
- *   2. `PI_DESKTOP_RESOURCE_DIR/cloudflared/<name>` —— 桌面壳注入的 resources 目录
- *   3. `<cwd>/vendor/cloudflared/<name>` —— scripts/prepare-cloudflared.mjs 的产物
+ *   1. `PI_WEB_CLOUDFLARED` —— 显式绝对路径覆盖（打包/自托管要旁挂二进制时走这条）
+ *   2. `~/.pi/agent/bin/cloudflared/<name>` —— 设置页「下载」的落点。放用户目录而不是
+ *      仓库/打包目录：打包后的 resources 可能只读（macOS .app、Program Files），而且
+ *      每次升级都会重建，装进去等于白装。
+ *   3. `<cwd>/vendor/cloudflared/<name>` —— `npm run prepare:cloudflared` 的产物
  *   4. PATH 上的 `cloudflared`
  *
  * 找不到不抛错，返回 null，由调用方（隧道启动器 / 设置页）决定怎么提示。
  */
 import { accessSync, constants, statSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
+import { userHome } from "../user-home.ts";
 
-export type CloudflaredSource = "env" | "desktop" | "vendor" | "path";
+export type CloudflaredSource = "env" | "user" | "vendor" | "path";
 
 export interface CloudflaredBinary {
   path: string;
@@ -40,6 +43,14 @@ export function bundledCloudflaredName(
 /** 项目内 vendor 目录（prepare-cloudflared.mjs 的落点）。 */
 export function vendorCloudflaredDir(cwd = process.cwd()): string {
   return join(cwd, "vendor", "cloudflared");
+}
+
+/**
+ * 设置页「下载」的落点：用户目录下（`PI_AGENT_HOME` 可覆盖，见 lib/user-home.ts）。
+ * 与 `vendorCloudflaredDir` 分开，是为了让打包后的桌面端也能装、且升级后还在。
+ */
+export function userCloudflaredDir(): string {
+  return join(userHome(), ".pi", "agent", "bin", "cloudflared");
 }
 
 function isExecutableFile(candidate: string): boolean {
@@ -75,11 +86,8 @@ export function resolveCloudflaredBinary(
     if (isExecutableFile(candidate)) return { path: candidate, source: "env" };
   }
 
-  const resourceDir = env.PI_DESKTOP_RESOURCE_DIR?.trim();
-  if (resourceDir) {
-    const candidate = join(resourceDir, "cloudflared", name);
-    if (isExecutableFile(candidate)) return { path: candidate, source: "desktop" };
-  }
+  const userDir = join(userCloudflaredDir(), name);
+  if (isExecutableFile(userDir)) return { path: userDir, source: "user" };
 
   const vendored = join(vendorCloudflaredDir(cwd), name);
   if (isExecutableFile(vendored)) return { path: vendored, source: "vendor" };

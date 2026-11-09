@@ -713,3 +713,37 @@ test("memo 比较器必须比较 editDisabled（运行中编辑按钮即时失�
   // 传入点仍在（ChatWindow 的 editDisabled={sessionBusy} 语义在消费侧保持）。
   assert.match(messageViewSource, /editBlocked = canEdit && editDisabled;/);
 });
+
+// 用户报障回归（满屏空标题卡 + 全部 863s）：provider 把流式 tool_call 的分片各自成块，
+// SDK 忠实保留，于是每片都成了一个 toolName="" 的块；又因为所有空块共用 toolCallId=""，
+// 查结果表时全命中同一条结果（会话最后一条），67 张卡一律显示 863s。
+test("空工具名的 toolCall 块不渲染（provider 分片不当作回复展示）", () => {
+  const message = { role: "assistant", content: [
+    { type: "text", text: "before" },
+    { type: "toolCall", toolCallId: "", toolName: "", input: {} },
+    { type: "toolCall", toolCallId: "", toolName: "   ", input: { path: "/tmp/x" } },
+  ] };
+  const html = renderMessage(message);
+  assert.match(html, /before/, "同一消息里的正常文本照常渲染");
+  // 工具卡会渲染出工具名与输入预览；空块连自己的输入都不该出现在页面上。
+  assert.doesNotMatch(html, /\/tmp\/x/, "空块不该渲染出工具卡（会带出输入预览）");
+  assert.doesNotMatch(html, /Cancelled|cancelled|toolCancelled/, "空块不该渲染出取消态徽标");
+});
+
+test("空 toolCallId 不与其它结果配对：不再把别人的时长挂到自己的卡片上", () => {
+  const message = {
+    role: "assistant",
+    timestamp: 1_000_000,
+    content: [
+      { type: "toolCall", toolCallId: "real-1", toolName: "read", input: { path: "/tmp/real" } },
+      { type: "toolCall", toolCallId: "   ", toolName: "read", input: { path: "/tmp/blank" } },
+    ],
+  };
+  // 唯一一条结果：从 assistant 时间戳到结果时间戳正好 863s。
+  const result = { role: "toolResult", toolCallId: "real-1", timestamp: 1_000_000 + 863_000, content: [] };
+  const html = renderMessage(message, { toolResults: new Map([["real-1", result]]) });
+  assert.match(html, /863s/, "有真实 id 的卡片照常显示自己的时长");
+  assert.equal((html.match(/863s/g) ?? []).length, 1, "空 id 的卡片不得蹭到同一条结果的时长");
+  // 空 id 的卡片也不能被当成「已完成」：没有可配对结果就是 aborted（取消）态。
+  assert.match(html, /chat\.toolCancelled|Cancelled|cancelled/i);
+});

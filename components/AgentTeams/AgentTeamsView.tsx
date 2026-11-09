@@ -9,15 +9,20 @@ import {
   EVENT_WIDTH,
   LANE_LABEL_WIDTH,
   type MemberStatus,
+  type TeamWorkbenchSnapshot,
   type SwimlaneEventType,
 } from "@/lib/agent-teams-swimlane";
 import { AppSelect } from "@/components/AppSelect";
+import type { TranslationParams } from "@/lib/i18n/types";
 import { TaskBoardCanvas, countTaskStates } from "@/components/AgentTeams/TaskBoardCanvas";
 import { FormationBand } from "@/components/AgentTeams/FormationBand";
 import { TeamMemberModelPanel } from "@/components/AgentTeams/TeamMemberModelPanel";
 import { DispatchPanel } from "@/components/AgentTeams/DispatchPanel";
 import { TeamLifecycleActions } from "@/components/AgentTeams/TeamLifecycleActions";
 import { FallbackSettings } from "@/components/AgentTeams/FallbackSettings";
+import { AgentTeamsMemberInspector } from "@/components/AgentTeams/AgentTeamsMemberInspector";
+import { AgentTeamTaskDetail } from "@/components/AgentTeams/AgentTeamTaskDetail";
+import { AgentTeamsCommunicationFeed } from "@/components/AgentTeams/AgentTeamsCommunicationFeed";
 import { formationNaturalWidth } from "@/lib/agent-teams-formation-layout";
 import { deriveMemberWorkloads, idleMemberIds } from "./member-workload";
 import { formatTeamActivityDate, formatTeamBytes, hasDisplayableUsage, shouldNoticeIdleTeam } from "./team-usage-display";
@@ -60,19 +65,120 @@ function roleLabelKey(role: string): string {
   return `teams.role.${role}`;
 }
 
+/** 毫秒 → HH:MM:SS（>1h）或 MM:SS；负值夹到 0（C9 已用时长）。 */
+function formatDuration(valueMs: number): string {
+  const seconds = Math.max(0, Math.round(valueMs / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return hours > 0 ? `${pad(hours)}:${pad(minutes)}:${pad(rest)}` : `${pad(minutes)}:${pad(rest)}`;
+}
+
+/** ISO → 本地 HH:MM:SS（C9 会话时钟）；不可解析回退 --:--:--。 */
+function formatClock(iso: string, locale: string): string {
+  const time = Date.parse(iso);
+  if (!Number.isFinite(time)) return "--:--:--";
+  try {
+    return new Date(time).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  } catch {
+    return "--:--:--";
+  }
+}
+
+/** C9 Live 指示的纯派生输入（全部来自快照 + 时钟，无副作用）。 */
+export interface LiveIndicatorInput {
+  /** snapshot.team.status。 */
+  teamStatus: string;
+  /** 运行中的成员数（不含队长）。 */
+  workingCount: number;
+  /** 是否实时跟随（回放时 elapsed/clock 冻结到当前帧）。 */
+  isLive: boolean;
+  /** 团队创建时间（ISO）。 */
+  createdAt: string;
+  /** 当前帧生成时间（ISO）。 */
+  generatedAt: string;
+  /** 当前毫秒时间戳（仅实时跟随时每秒推进）。 */
+  now: number;
+}
+
+export interface LiveIndicator {
+  /** forming / running / waiting 三态提示。 */
+  hint: string;
+  /** 已用时长（团队创建 → 现在，或回放时的当前帧）。 */
+  elapsed: string;
+  /** 会话时钟（实时=now，回放=帧时间）。 */
+  clock: string;
+}
+
+/**
+ * C9：把 Live 指示需要的三样（三态 hint / 已用时长 / 会话时钟）从快照与时钟纯派生出来。
+ * 抽成模块级纯函数是为了能在没有 DOM 的测试里直接覆盖三态与时长/时钟的边界
+ * （工作台视图本身 SSR 时 snapshot 为 null，起不到断言作用）。
+ */
+export function deriveLiveIndicator(
+  input: LiveIndicatorInput,
+  t: (key: string, params?: TranslationParams) => string,
+  locale: string,
+): LiveIndicator {
+  const hint = input.teamStatus === "forming"
+    ? t("teams.live.formingHint")
+    : input.workingCount > 0
+      ? t("teams.live.runningHint", { count: input.workingCount })
+      : t("teams.live.waitingHint");
+  const startMs = Date.parse(input.createdAt);
+  const frameMs = Date.parse(input.generatedAt);
+  const start = Number.isFinite(startMs) ? startMs : Number.isFinite(frameMs) ? frameMs : input.now;
+  const end = input.isLive ? input.now : Number.isFinite(frameMs) ? frameMs : input.now;
+  const clock = input.isLive
+    ? formatClock(new Date(input.now).toISOString(), locale)
+    : formatClock(input.generatedAt, locale);
+  return { hint, elapsed: formatDuration(end - start), clock };
+}
+
+/** 工作台（整页视图）：左侧泳道/任务板/成员区，右侧成员检查器/通信流/收起导轨。 */
+interface Props {
+  /** 指定团队名（硬钉）；缺省时自动挑选本机最新创建的团队。 */
+  teamName?: string;
+  /**
+   * 初始选中的团队名（来源会话所属的部门）。仅在名册里确实存在时才采用，
+   * 且优先于「名册里最新创建的团队」——否则从会话 A 的部门点进来会显示 B 的团队。
+   */
+  initialTeamName?: string | null;
+  /** 来源会话 id（返回链标识，透传到根节点 data 属性）。 */
+  sourceSessionId?: string | null;
+  /** 请求关闭本视图（返回链，由上层提供）。 */
+  onRequestClose?: () => void;
+  /** 打开某成员会话（可选）。 */
+  onOpenSession?: (sessionId: string) => void;
+}
+
 /**
  * 泳道图页面（pi-web 专属）：每成员一条泳道（y=成员，x=时间），成员事件节点 +
  * 跨泳道流向，上方是任务依赖。数据来自 GET /api/teams/[team]/workbench。
  */
-export function AgentTeamsView({ teamName, onOpenSession }: Props) {
+export function AgentTeamsView({
+  teamName,
+  initialTeamName,
+  sourceSessionId,
+  onRequestClose,
+  onOpenSession,
+}: Props) {
   const { t, locale } = useI18n();
   const [teams, setTeams] = useState<TeamSummary[]>([]);
-  const [selected, setSelected] = useState<string | null>(teamName ?? null);
+  // 初始选中：硬钉 teamName 优先；否则来源会话的 initialTeamName（乐观），名册加载后再校正。
+  const [selected, setSelected] = useState<string | null>(teamName ?? initialTeamName ?? null);
   const [listFailed, setListFailed] = useState(false);
   const [listLoading, setListLoading] = useState(!teamName);
   // 生命周期操作（停止/回收）成功后重拉团队名册的触发键（见 handleLifecycleDone）。
   const [teamsReloadKey, setTeamsReloadKey] = useState(0);
   const [modelPanel, setModelPanel] = useState<{ mode: "single" | "batch"; memberIds: string[] } | null>(null);
+  // C7 成员检查器 / C8 任务详情抽屉 / C11 通信列表面板的选择态。
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
+  const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
+  const [commOpen, setCommOpen] = useState(false);
+  // C9 会话时钟：仅在实时跟随时每秒更新（回放时冻结）。
+  const [now, setNow] = useState(() => Date.now());
   const timeline = useTeamTimeline(selected);
   const rootRef = useRef<HTMLElement>(null);
 
@@ -109,9 +215,11 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
 
   useEffect(() => { rootRef.current?.focus({ preventScroll: true }); }, []);
 
-  // 解析团队：显式 prop 优先，否则取名册里最新创建的一个。
+  // 解析团队：硬钉 teamName > 名册里仍有效的当前选中 > initialTeamName（来源会话的
+  // 部门）> 名册里最新创建的团队。修掉「从会话 A 的部门点进来却显示 B 的团队」。
+  // 注意：即便硬钉了 teamName 也照常拉名册——团队下拉与占用行需要名册，否则从会话
+  // 头部团队条进来时 picker/占用行会消失。
   useEffect(() => {
-    if (teamName) { setSelected(teamName); return; }
     let cancelled = false;
     (async () => {
       try {
@@ -120,7 +228,15 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
         const data = await response.json() as { teams: TeamSummary[] };
         if (cancelled) return;
         setTeams(data.teams);
-        setSelected((current) => current ?? [...data.teams].sort((a, b) => (b.createdAt < a.createdAt ? -1 : 1))[0]?.name ?? null);
+        const inRoster = (name: string | null | undefined): name is string =>
+          Boolean(name && data.teams.some((team) => team.name === name));
+        const latest = [...data.teams].sort((a, b) => (b.createdAt < a.createdAt ? -1 : 1))[0]?.name ?? null;
+        setSelected((current) => {
+          if (teamName) return teamName;
+          if (inRoster(current)) return current;
+          if (inRoster(initialTeamName)) return initialTeamName;
+          return latest;
+        });
       } catch {
         if (!cancelled) { setListFailed(true); setListLoading(false); }
       } finally {
@@ -128,7 +244,7 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
       }
     })();
     return () => { cancelled = true; };
-  }, [teamName, teamsReloadKey]);
+  }, [teamName, initialTeamName, teamsReloadKey]);
 
   // d5-3：生命周期操作成功后的收尾（TeamLifecycleActions.onDone）。回收删除了团队
   // 目录——重拉名册，且若删的正是当前选中团队则放开选中，让它回落到名册里其余
@@ -146,6 +262,20 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
   useEffect(() => {
     setModelPanel(null);
   }, [selected]);
+
+  // 切换团队时清掉成员检查器/任务抽屉的选择，避免带着上一团队的 id 指向新团队。
+  useEffect(() => {
+    setSelectedMemberId(null);
+    setSelectedTicketId(null);
+  }, [selected]);
+
+  // C9 会话时钟：仅在实时跟随时每秒跳动（回放时冻结，改为显示帧时间）。
+  useEffect(() => {
+    if (!timeline.isLive) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [timeline.isLive]);
 
   const layout = useMemo(() => (snapshot ? layoutSwimlanes(snapshot) : null), [snapshot]);
 
@@ -173,11 +303,69 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
   const currentDisplayName = currentTeam?.displayName ?? selected ?? "";
   const currentMemberCount = currentTeam?.memberCount ?? snapshot?.members.length ?? 0;
 
+  // C7：当前选中的成员（名册首位为队长，队长也允许查看详情）。
+  const selectedMember = useMemo(
+    () => (snapshot && selectedMemberId ? snapshot.members.find((member) => member.id === selectedMemberId) ?? null : null),
+    [snapshot, selectedMemberId],
+  );
+  const selectedMemberIsLead = Boolean(
+    selectedMember && snapshot && snapshot.members[0]?.id === selectedMember.id,
+  );
+  // 右列是否展开（检查器或通信流面板占用时）：任务抽屉据此避让。
+  const dockOpen = Boolean(selectedMember) || commOpen;
+  // C9：运行中的成员数（不含队长，队长恒 running）与三态提示。
+  const workingCount = useMemo(
+    () => (snapshot ? snapshot.members.slice(1).filter((member) => member.status === "running").length : 0),
+    [snapshot],
+  );
+  // C9：Live 指示（三态 hint / 已用时长 / 会话时钟）由纯函数派生，便于无 DOM 测试覆盖。
+  const liveIndicator = useMemo(
+    () => (!snapshot
+      ? null
+      : deriveLiveIndicator({
+          teamStatus: snapshot.team.status,
+          workingCount,
+          isLive: timeline.isLive,
+          createdAt: snapshot.team.createdAt,
+          generatedAt: snapshot.generatedAt,
+          now,
+        }, t, locale)),
+    [snapshot, workingCount, timeline.isLive, now, t, locale],
+  );
+  // C11：通信流收起导轨上的消息计数（messages = 邮箱消息投影，见 lib/agent-teams-swimlane）。
+  const messageCount = snapshot?.messages.length ?? 0;
+
+  // C7：点成员 → 打开检查器并展开右列。
+  const openMemberInspector = useCallback((memberId: string) => {
+    setSelectedTicketId(null);
+    setSelectedMemberId(memberId);
+    setCommOpen(true);
+  }, []);
+
   return (
-    <main ref={rootRef} tabIndex={-1} className="scheduled-view agent-teams-view" aria-label={t("teams.title")}>
-      <div className="scheduled-shell agent-teams-shell">
+    <main
+      ref={rootRef}
+      tabIndex={-1}
+      className="scheduled-view agent-teams-view"
+      aria-label={t("teams.title")}
+      data-source-session-id={sourceSessionId ?? undefined}
+      style={{ overflow: "hidden" }}
+    >
+      {/* 左右分栏：左=既有整页工作台（自身滚动），右=成员检查器/通信流/导轨（C7/C11）。 */}
+      <div className="agent-teams-workbench-row" style={{ display: "flex", height: "100%", minHeight: 0 }}>
+      <div className="scheduled-shell agent-teams-shell" style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
         <header className="scheduled-header agent-teams-header">
           <div>
+            {onRequestClose && (
+              <button
+                type="button"
+                className="agent-teams-timeline-button"
+                onClick={onRequestClose}
+                style={{ marginBottom: 6 }}
+              >
+                ← {t("teams.view.back")}
+              </button>
+            )}
             <h2 className="scheduled-title">{t("teams.title")}</h2>
             <p className="scheduled-subtitle">{t("teams.subtitle")}</p>
           </div>
@@ -208,6 +396,31 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
                   <span className="agent-teams-board-stat-value">{counts.failed}</span>
                 </div>
               </div>
+              {/* C9 Live 指示：仅在实时跟随时显示 following 徽标 + 三态提示 + 已用时长 + 会话时钟。
+                  live/replay 切换本身由上方时间轴负责，这里只补额外视觉信息。 */}
+              {timeline.isLive && liveIndicator && (
+                <div
+                  className="agent-teams-live"
+                  data-testid="agent-teams-live-controls"
+                  style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
+                >
+                  <span className="agent-teams-timeline-state agent-teams-timeline-state--live">
+                    <span className="agent-teams-timeline-dot agent-teams-timeline-dot--live" aria-hidden="true" />
+                    {t("teams.live.following")}
+                  </span>
+                  <span className="agent-teams-live-hint" style={{ color: "var(--text-muted)", fontSize: "var(--fs-small)" }}>
+                    {liveIndicator.hint}
+                  </span>
+                  <span className="agent-teams-live-stat" style={{ display: "inline-flex", flexDirection: "column", gap: 2 }}>
+                    <span className="agent-teams-member-role" style={{ fontSize: "var(--fs-micro)" }}>{t("teams.live.elapsed")}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}>{liveIndicator.elapsed}</span>
+                  </span>
+                  <span className="agent-teams-live-stat" style={{ display: "inline-flex", flexDirection: "column", gap: 2 }}>
+                    <span className="agent-teams-member-role" style={{ fontSize: "var(--fs-micro)" }}>{t("teams.live.sessionClock")}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}>{liveIndicator.clock}</span>
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </header>
@@ -362,8 +575,8 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
                     <button
                       type="button"
                       className="agent-teams-member-chip"
-                      disabled={!member.sessionId || !onOpenSession}
-                      onClick={() => member.sessionId && onOpenSession?.(member.sessionId)}
+                      aria-pressed={selectedMemberId === member.id}
+                      onClick={() => openMemberInspector(member.id)}
                     >
                       <span className={`agent-teams-dot agent-teams-dot--${member.status}`} aria-hidden="true" />
                       <span className="agent-teams-member-name">{member.name}</span>
@@ -452,7 +665,14 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
               <TaskBoardCanvas
                 snapshot={snapshot}
                 requestedWidth={boardWidth}
-                formation={(width) => <FormationBand snapshot={snapshot} width={width} />}
+                onSelectTask={(ticketId) => setSelectedTicketId(ticketId)}
+                formation={(width) => (
+                  <FormationBand
+                    snapshot={snapshot}
+                    width={width}
+                    onSelectMember={(memberId) => openMemberInspector(memberId)}
+                  />
+                )}
               />
             </section>
 
@@ -477,6 +697,127 @@ export function AgentTeamsView({ teamName, onOpenSession }: Props) {
           <FallbackSettings />
         </section>
       </div>
+
+      {/* 右列：成员检查器（C7）→ 通信流面板（C11，含注入槽位）→ 收起导轨（点击展开）。 */}
+      {snapshot && (
+        <div className="agent-teams-right-dock" style={{ display: "flex", flex: "none", minHeight: 0 }}>
+          {selectedMember ? (
+            <AgentTeamsMemberInspector
+              snapshot={snapshot}
+              member={selectedMember}
+              isLead={selectedMemberIsLead}
+              onBack={() => setSelectedMemberId(null)}
+              onOpenSession={onOpenSession}
+            />
+          ) : commOpen ? (
+            <aside
+              className="agent-teams-comm-panel"
+              data-testid="agent-teams-communication-pane"
+              aria-label={t("teams.communication.title")}
+              style={{
+                width: 380,
+                flex: "none",
+                minHeight: 0,
+                height: "100%",
+                display: "flex",
+                flexDirection: "column",
+                borderLeft: "var(--hairline) solid var(--border)",
+                background: "var(--bg-panel)",
+              }}
+            >
+              <div
+                style={{
+                  flex: "none",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  padding: "10px 12px",
+                  borderBottom: "var(--hairline) solid var(--border)",
+                }}
+              >
+                <span style={{ fontWeight: "var(--fw-semibold)" }}>{t("teams.communication.title")}</span>
+                <button
+                  type="button"
+                  className="agent-teams-timeline-button"
+                  onClick={() => setCommOpen(false)}
+                  aria-label={t("teams.communication.close")}
+                >
+                  ✕
+                </button>
+              </div>
+              <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+                <AgentTeamsCommunicationFeed
+                  snapshot={snapshot}
+                  fill
+                  onFocusTask={(taskId) => setSelectedTicketId(taskId)}
+                />
+              </div>
+            </aside>
+          ) : (
+            <button
+              type="button"
+              className="agent-teams-comm-rail"
+              data-testid="agent-teams-communication-rail"
+              aria-label={t("teams.communication.open")}
+              onClick={() => setCommOpen(true)}
+              style={{
+                width: 56,
+                flex: "none",
+                height: "100%",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 12,
+                padding: "12px 0",
+                borderLeft: "var(--hairline) solid var(--border)",
+                background: "var(--bg-panel)",
+                color: "var(--text)",
+                cursor: "pointer",
+              }}
+            >
+              <span style={{ fontSize: 14, color: "var(--text-dim)" }} aria-hidden="true">‹</span>
+              <span
+                style={{
+                  writingMode: "vertical-rl",
+                  fontSize: "var(--fs-micro)",
+                  fontWeight: "var(--fw-semibold)",
+                  color: "var(--text-muted)",
+                }}
+              >
+                {t("teams.communication.title")}
+              </span>
+              <span
+                style={{
+                  padding: "1px 6px",
+                  borderRadius: "var(--radius-lg)",
+                  background: "var(--bg-hover)",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: "var(--fs-micro)",
+                }}
+              >
+                {messageCount}
+              </span>
+              <span
+                className={`agent-teams-timeline-dot${timeline.isLive ? " agent-teams-timeline-dot--live" : ""}`}
+                aria-hidden="true"
+              />
+            </button>
+          )}
+        </div>
+      )}
+      </div>
+
+      {/* C8 任务详情抽屉：点任务卡打开，浮于右下角。 */}
+      {snapshot && selectedTicketId && (
+        <AgentTeamTaskDetail
+          snapshot={snapshot}
+          ticketId={selectedTicketId}
+          onClose={() => setSelectedTicketId(null)}
+          onSelectMember={openMemberInspector}
+          dockOpen={dockOpen}
+        />
+      )}
     </main>
   );
 }

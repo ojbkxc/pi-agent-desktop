@@ -77,7 +77,22 @@ async function buildView(context: RequestContext): Promise<EnabledModelsView> {
  * file, so it goes through the same allow-list as `/api/files`.
  */
 async function resolveCwd(raw: string | null): Promise<{ cwd: string } | { error: Response }> {
-  if (!raw) return { cwd: process.cwd() };
+  // 不带 ?cwd：退回进程 cwd —— 但**同样要过白名单**。以前这里直接返回、绕过了检查：
+  // 打包版下进程 cwd 是安装包内部（`resources/server`），于是它会去读一份不存在的项目
+  // 设置，静默给出**错误的**「全局值有没有被项目覆盖」的答案。宁可明确报错，也不要错答。
+  if (!raw) {
+    const fallback = process.cwd();
+    const allowedRoots = await getAllowedFileRoots();
+    if (!isExistingFilePathAllowed(fallback, allowedRoots)) {
+      return {
+        error: Response.json(
+          { error: "Access denied: no ?cwd given, and this process's working directory is not an allowed project folder" },
+          { status: 400 },
+        ),
+      };
+    }
+    return { cwd: fallback };
+  }
   const cwd = resolve(raw);
   let cwdStat;
   try {
