@@ -28,6 +28,30 @@ that catalog installs npm/git packages as extensions, this page installs a
 - skillhub has no description body on its detail endpoint, so the detail page
   fetches `SKILL.md` separately for the overview tab.
 
+## Catalog snapshot (default scope)
+
+The page's default scope is **`catalog`**: a bundled editorial snapshot, not a
+live query. `lib/skill-market/catalog/` holds `curation.json` (the human-edited
+list: source + slug + owner + category + Chinese summary + tags + featured) and
+`skills.json` (`{ version, generatedAt, categories, skills }` — 398 entries
+across 13 categories, `generatedAt` = 2026-10-01). Both are copied verbatim from
+cc-haha (`src/server/services/market/catalog/`). The upstream registries have no
+category or "featured" concept, so this list cannot be derived from them.
+
+- `catalog.ts` (server / data layer) — `fold()` (NFKC + lowercase) and
+  `filterCatalog()` (category/source filter; a query term matches `name slug`
+  first, then `summary summaryEn tags owner`), `catalogCategories()` (editorial
+  order, `count > 0`), `catalogEntryFor()` / `catalogEntryToSkill()`, plus the
+  `total` / `catalogUpdatedAt` constants. **It imports the 355 KB JSON**, so only
+  server code may import it.
+- `catalog-locale.ts` — the client-safe locale helpers (see Server modules).
+
+`scope=catalog` never touches the network: it filters the snapshot, annotates
+install state from the local skills directory, and pages with a `catalog:<offset>`
+cursor. `scope=live` keeps the pre-existing two-registry behaviour. The bundled
+date is fixed; nothing refreshes it automatically (same as cc-haha), and no
+refresh script ships here.
+
 ## Server modules (`lib/skill-market/`)
 
 - `types.ts` — the normalized shapes both providers project into, the install
@@ -46,6 +70,12 @@ that catalog installs npm/git packages as extensions, this page installs a
   at 200 entries, on `globalThis`) holds details; a source that fails only
   removes its own results and is reported in `sourceErrors`.
 - `install-service.ts` — the only writer.
+- `catalog-locale.ts` — pure locale helpers (`isChineseLocale()` / `skillSummary()`
+  / `visibleTags()` / `categoryLabel()` / `resolveCategory()`), ported from
+  cc-haha's desktop `catalogLocale.ts`. Split out from `catalog.ts` so the UI can
+  pick Chinese vs English copy **without** pulling the snapshot into the client
+  bundle. It treats `zh`, `zh-CN` and `zh-TW` as Chinese (the fork's locale value
+  is `zh-CN`, cc-haha's is `zh`).
 
 ## Install / uninstall
 
@@ -71,7 +101,7 @@ slug at a time is enforced in-process (409 `install-in-progress`).
 
 | Route | Method | Notes |
 | --- | --- | --- |
-| `/api/market/skills` | GET | list or search (`q`), `cursor`, `limit`, `source`, `installed=1` |
+| `/api/market/skills` | GET | `scope=catalog\|live` (default `catalog`), `q`, `cursor`, `limit`, `source`, `category`, `security`, `installed` (install-state filter) or `installed=1` (legacy installed list); catalog responses also carry `total` / `categories` / `catalogUpdatedAt` |
 | `/api/market/skills/[id]` | GET | `id` = `<source>:<slug>`, `owner` query; detail + install state |
 | `/api/market/skills/[id]/file` | GET | `path` + `owner`; preview, truncated past 300 KB |
 | `/api/market/installed` | GET | marker-scanned list + skill root |
@@ -84,8 +114,14 @@ from `sanitizeDirName()`.
 
 ## UI (`components/skill-market/`)
 
-`SkillMarketView` (page: tabs browse/installed, debounced search, source filter,
-card grid, cursor "load more") → `SkillMarketCard` (one card) and
+`SkillMarketView` (page: tabs browse/installed, debounced search, a filter bar —
+source / security state / install state, all via `AppSelect` — a category chip bar
+with per-category counts, a result-summary line (`共 N 个精选技能` + `清单更新于
+<date>` in catalog scope, live count otherwise), skeleton cards, and
+**IntersectionObserver infinite scroll** that re-observes the sentinel after each
+page, stops auto-loading after a failed page, drops stale responses by request
+sequence, and falls back to a "load more" button where IO is unavailable) →
+`SkillMarketCard` (one card) and
 `SkillMarketDetail` (overview / files / security tabs, install confirm dialog
 that names source, author, version, size and scan verdict before the button).
 `MarketSidebarRow` is the sidebar entry; it sits where the removed Teams row
@@ -97,8 +133,6 @@ All fork CSS lives in `app/native-theme.css` under the "Skill market" section;
 
 ## What is deliberately not here
 
-- No curated/featured catalog snapshot (cc-haha ships one); the list is whatever
-  the registries serve, sorted by downloads.
 - No cross-source dedupe: skillhub mirrors some clawhub skills, and the mirrored
   copy's file set can differ, so both appear and the card names its source.
 - No plugin (extension package) installation here; that stays in Settings ›

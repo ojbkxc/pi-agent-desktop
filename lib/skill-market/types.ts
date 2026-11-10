@@ -11,10 +11,46 @@ export type MarketSource = "clawhub" | "skillhub";
 
 export const MARKET_SOURCES: readonly MarketSource[] = ["clawhub", "skillhub"];
 
+/**
+ * 市场列表的两个来源面：
+ * - `catalog`：随包发布的精选快照（398 条、13 分类），**不发网络请求**；
+ * - `live`：两个上游注册表的实时列表 / 搜索。
+ * 默认 catalog（对齐 cc-haha 首页形态）。
+ */
+export type MarketScope = "catalog" | "live";
+
+export const MARKET_SCOPES: readonly MarketScope[] = ["catalog", "live"];
+
 /** 安全扫描结论。unknown = 上游没给扫描结果（不等于安全）。 */
 export type SecurityStatus = "verified" | "benign" | "unknown" | "flagged";
 
+/** 安全筛选（UI 三筛选之一）：`all` 不筛，其余精确匹配 securityStatus。 */
+export type MarketSecurityFilter = "all" | SecurityStatus;
+
+export const MARKET_SECURITY_FILTERS: readonly MarketSecurityFilter[] = [
+  "all",
+  "verified",
+  "benign",
+  "unknown",
+  "flagged",
+];
+
 export type InstallState = "installed" | "installable" | "not-installable";
+
+/** 安装筛选（UI 三筛选之一）：`installable` = 本机尚未安装的。 */
+export type MarketInstallFilter = "all" | "installed" | "installable";
+
+export const MARKET_INSTALL_FILTERS: readonly MarketInstallFilter[] = ["all", "installed", "installable"];
+
+/** 分类栏条目（catalog 路径）：整库静态计数，不随筛选变化。 */
+export interface MarketCategory {
+  key: string;
+  /** zh-CN 显示名。 */
+  name: string;
+  nameEn: string;
+  /** 该分类在**整个**精选库中的技能数。 */
+  count: number;
+}
 
 export type SourceHealthStatus = "ok" | "degraded" | "failed" | "cached";
 
@@ -57,6 +93,18 @@ export interface NormalizedSkill {
   iconUrl?: string;
   securityStatus: SecurityStatus;
   securityReports?: SecurityReport[];
+  /** 精选目录的编辑器推荐位（列表里排前面并加标记）。仅 catalog 路径会带上。 */
+  featured?: boolean;
+  /** 精选目录的英文摘要（`summary` 是中文时给非中文读者）；live 结果不带。 */
+  summaryEn?: string;
+  /** 该条来自（或命中）精选快照；为 true 时 `category` 是目录分类 key。 */
+  curated?: boolean;
+  /** 需要配置 API key 才能使用（卡片上提示）。 */
+  requiresApiKey?: boolean;
+  /** 许可证（快照直接给出时；否则只在详情页的 SKILL.md 里）。 */
+  license?: string;
+  /** 安全结论非 clean 时，精选目录给出的放行说明。 */
+  securityNote?: string;
   /** 该技能页在注册源网站上的地址（只用于展示与「去来源看看」）。 */
   pageUrl?: string;
   installState: InstallState;

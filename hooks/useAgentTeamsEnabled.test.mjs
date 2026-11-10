@@ -72,6 +72,18 @@ test("全局可用性默认开；单条 armed 默认关", () => {
 
 // ───────────────────────── 2. 两态互不干扰 ─────────────────────────
 
+test("旧键 pi-agent-teams-enabled 的遗留值不再被读取（迁移到 -v2）", () => {
+  // 注意：这里**不能**走 resetAll()——它会 setAgentTeamsEnabled(false)，往**新键**写 "false"。
+  // 迁移用例要的是一个干净 storage 里只有旧键的遗留值。
+  storage.clear();
+  // 旧语义（「下一条消息用团队」）在每次发送后把旧键写回 "false"；升级后这些遗留值绝不能
+  // 把全局功能静默关掉，否则 composer 开关会置灰、点击跳设置。
+  storage.set("pi-agent-teams-enabled", "false");
+  assert.equal(getPref(APP_PREF_KEYS.agentTeamsEnabled), null, "新键没写过 → 读成 null");
+  assert.equal(parseAgentTeamsEnabled(getPref(APP_PREF_KEYS.agentTeamsEnabled)), true, "遗留的旧 false 必须回到默认开");
+  assert.notEqual(APP_PREF_KEYS.agentTeamsEnabled, "pi-agent-teams-enabled", "新键必须与旧键不同名，否则遗留 false 会被误读");
+});
+
 test("全局可用性与单条 armed 互不干扰，且只有全局落盘", () => {
   resetAll();
   // 关掉全局，不该动 armed。
@@ -85,7 +97,7 @@ test("全局可用性与单条 armed 互不干扰，且只有全局落盘", () =
   const armedKeys = [...storage.keys()].filter((k) => k.includes("armed"));
   assert.deepEqual(armedKeys, [], `armed 不该写 localStorage，实际写了 ${JSON.stringify(armedKeys)}`);
   // 结构上也只有 guide 两态 + 全局可用性这几个 agent-teams 键。
-  assert.equal(APP_PREF_KEYS.agentTeamsEnabled, "pi-agent-teams-enabled");
+  assert.equal(APP_PREF_KEYS.agentTeamsEnabled, "pi-agent-teams-enabled-v2");
   assert.equal(APP_PREF_KEYS.agentTeamsGuideSeen, "pi-agent-teams-guide-seen");
   assert.equal(APP_PREF_KEYS.agentTeamsGuideDismissed, "pi-agent-teams-guide-dismissed");
 

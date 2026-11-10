@@ -3109,9 +3109,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 onSelectProject={onSelectProject}
               />
             )}
-            {/* A2: Agent Team switch. Hidden when the feature is off globally, in a
-                subagent/member session, or under Lean mode; greyed (click → Settings) in a
-                chat-only session. */}
+            {/* A2: Agent Team switch. Hidden only in a subagent/member session or under
+                Lean mode (whole row gone); greyed and leading to Settings when the feature
+                is off globally or the session is chat-only. */}
             {showTeamToggle && (
               <AgentTeamToggle
                 armed={armed}

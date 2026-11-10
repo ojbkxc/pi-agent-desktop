@@ -6,14 +6,30 @@ const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconf
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { SkillMarketCard } = await jiti.import("./SkillMarketCard.tsx");
+const { MarketSecurityTab } = await jiti.import("./SkillMarketDetail.tsx");
 const { MarketSidebarRow } = await jiti.import("./MarketSidebarRow.tsx");
+const {
+  MarketFilterBar,
+  MarketCategoryBar,
+  MarketResultSummary,
+  MarketSkeleton,
+  MarketLoadMore,
+  MarketDisclaimer,
+} = await jiti.import("./SkillMarketView.tsx");
 const helpers = await jiti.import("./market-helpers.ts");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 
-const render = (element) => renderToStaticMarkup(
-  React.createElement(I18nProvider, { initialLocale: "en" }, element),
+const renderWith = (locale, element) => renderToStaticMarkup(
+  React.createElement(I18nProvider, { initialLocale: locale }, element),
 );
-const text = (html) => html.replace(/<[^>]*>/g, "");
+const render = (element) => renderWith("en", element);
+// React 会把文本里的 < > & " ' 转义成 HTML 实体,断言前先解码回字面量。
+const text = (html) => html.replace(/<[^>]*>/g, "")
+  .replace(/&#x27;|&#39;/g, "'")
+  .replace(/&quot;/g, '"')
+  .replace(/&lt;/g, "<")
+  .replace(/&gt;/g, ">")
+  .replace(/&amp;/g, "&");
 
 const item = {
   id: "clawhub:demo",
@@ -94,4 +110,214 @@ test("工具函数：下载量 / 字节数 / 徽标色调 / 文件排序", () =>
     { path: "z.md" }, { path: "SKILL.md" }, { path: "a/b.md" },
   ]);
   assert.deepEqual(sorted.map((file) => file.path), ["SKILL.md", "a/b.md", "z.md"]);
+});
+
+test("工具函数：紧凑计数 / ISO 日期 / 筛选 i18n 键映射 / 页大小", () => {
+  assert.equal(helpers.formatCount(0), "0");
+  assert.equal(helpers.formatCount(999), "999");
+  assert.equal(helpers.formatCount(1500), "1.5k");
+  assert.equal(helpers.formatCount(482069), "482.1k");
+  assert.equal(helpers.formatCount(1_000_000), "1.0M");
+  assert.equal(helpers.formatCount(2_500_000), "2.5M");
+
+  assert.equal(helpers.formatIsoDate(undefined), "");
+  assert.equal(helpers.formatIsoDate(Number.NaN), "");
+  assert.equal(helpers.formatIsoDate(Date.UTC(2026, 0, 5)), "2026-01-05");
+
+  assert.equal(helpers.sourceFilterLabelKey("all"), "market.source.all");
+  assert.equal(helpers.sourceFilterLabelKey("clawhub"), "market.source.clawhub");
+  assert.equal(helpers.securityFilterLabelKey("all"), "market.security.all");
+  assert.equal(helpers.securityFilterLabelKey("flagged"), "market.security.flagged");
+  assert.equal(helpers.installedFilterLabelKey("all"), "market.installedFilter.all");
+  assert.equal(helpers.installedFilterLabelKey("installable"), "market.installedFilter.installable");
+
+  assert.equal(helpers.securityHintKey("benign"), "market.securityHint.benign");
+  assert.equal(helpers.securityHintKey(undefined), "market.securityHint.unknown");
+  assert.equal(helpers.MARKET_PAGE_SIZE, 24);
+});
+
+test("工具函数：语言选择（zh-CN 归一化）与标签可见性", () => {
+  assert.equal(helpers.isChineseLocale("zh-CN"), true);
+  assert.equal(helpers.isChineseLocale("zh-TW"), true);
+  assert.equal(helpers.isChineseLocale("en"), false);
+
+  assert.equal(helpers.skillSummary({ summary: "中", summaryEn: "EN" }, "en"), "EN");
+  assert.equal(helpers.skillSummary({ summary: "中", summaryEn: "EN" }, "zh-CN"), "中");
+  assert.equal(helpers.skillSummary({ summary: "中" }, "en"), "中");
+
+  assert.equal(helpers.categoryLabel({ name: "文档", nameEn: "Documents" }, "en"), "Documents");
+  assert.equal(helpers.categoryLabel({ name: "文档", nameEn: "Documents" }, "zh-CN"), "文档");
+
+  assert.deepEqual(helpers.visibleTags({ tags: ["x"], curated: true }, "en"), []);
+  assert.deepEqual(helpers.visibleTags({ tags: ["x"], curated: true }, "zh-CN"), ["x"]);
+  assert.deepEqual(helpers.visibleTags({ tags: ["x"], curated: true }, "zh-TW"), ["x"]);
+  assert.deepEqual(helpers.visibleTags({ tags: ["x"], curated: false }, "en"), ["x"]);
+  assert.deepEqual(helpers.visibleTags({ tags: ["x"] }, "en"), ["x"]);
+});
+
+test("卡片：标签按 visibleTags 规则展示与折叠", () => {
+  const shown = render(React.createElement(SkillMarketCard, {
+    item: { ...item, tags: ["a", "b", "c", "d"], curated: false },
+    installed: false, active: false, onOpen: () => {},
+  }));
+  const shownBody = text(shown);
+  assert.ok(shown.includes('data-testid="market-card-tags"'));
+  assert.ok(shownBody.includes("a") && shownBody.includes("b") && shownBody.includes("c"));
+  assert.ok(shownBody.includes("+1"), "超出的标签折叠为 +N");
+  assert.ok(!shownBody.includes("market."), "不得渲染裸 i18n 键");
+
+  const hidden = render(React.createElement(SkillMarketCard, {
+    item: { ...item, tags: ["中文标签"], curated: true },
+    installed: false, active: false, onOpen: () => {},
+  }));
+  assert.ok(!hidden.includes('data-testid="market-card-tags"'), "精选 + 非中文语不显示标签");
+
+  const zhShown = renderWith("zh-CN", React.createElement(SkillMarketCard, {
+    item: { ...item, tags: ["中文标签"], curated: true },
+    installed: false, active: false, onOpen: () => {},
+  }));
+  assert.ok(text(zhShown).includes("中文标签"), "中文语言显示精选标签");
+});
+
+test("筛选栏：三筛选渲染默认文案，不泄漏 i18n 键", () => {
+  const html = render(React.createElement(MarketFilterBar, {
+    source: "all", security: "all", installed: "all",
+    onSourceChange: () => {}, onSecurityChange: () => {}, onInstalledChange: () => {},
+  }));
+  const body = text(html);
+  assert.ok(html.includes('data-testid="market-filter-bar"'));
+  assert.ok(body.includes("All sources"), "来源筛选默认文案");
+  assert.ok(body.includes("All security states"), "安全筛选默认文案");
+  assert.ok(body.includes("All skills"), "安装筛选默认文案");
+  assert.ok(!body.includes("market."), "不得渲染裸 i18n 键");
+});
+
+test("筛选栏：非默认选中把枚举映射到各语言文案", () => {
+  const html = render(React.createElement(MarketFilterBar, {
+    source: "clawhub", security: "flagged", installed: "installable",
+    onSourceChange: () => {}, onSecurityChange: () => {}, onInstalledChange: () => {},
+  }));
+  const body = text(html);
+  assert.ok(body.includes("ClawHub"));
+  assert.ok(body.includes("Flagged"));
+  assert.ok(body.includes("Not installed"));
+  assert.ok(!body.includes("market."));
+});
+
+test("分类栏：全部 + 分类名（按语言取 name/nameEn）+ 计数；空分类不渲染", () => {
+  const categories = [
+    { key: "docs", name: "文档", nameEn: "Documents", count: 12 },
+    { key: "data", name: "数据", nameEn: "Data", count: 3 },
+  ];
+  const en = render(React.createElement(MarketCategoryBar, { categories, value: "docs", onChange: () => {} }));
+  const enBody = text(en);
+  assert.ok(en.includes('data-testid="market-category-bar"'));
+  assert.ok(enBody.includes("All"), "全部 chip");
+  assert.ok(enBody.includes("Documents"), "英文语言用 nameEn");
+  assert.ok(enBody.includes("12") && enBody.includes("3"), "分类计数");
+  assert.ok(en.includes("is-active"), "选中分类高亮");
+  assert.ok(!enBody.includes("文档"), "英文语言不显示简中名");
+  assert.ok(!enBody.includes("market."), "不得渲染裸 i18n 键");
+
+  const zh = renderWith("zh-CN", React.createElement(MarketCategoryBar, { categories, value: "all", onChange: () => {} }));
+  assert.ok(text(zh).includes("文档"), "中文语言用 name");
+
+  const empty = render(React.createElement(MarketCategoryBar, { categories: [], value: "all", onChange: () => {} }));
+  assert.equal(empty, "");
+});
+
+test("计数行：catalog 读精选计数与更新日期，live 读实时结果数", () => {
+  const catalog = render(React.createElement(MarketResultSummary, {
+    scope: "catalog", total: 42, loadedCount: 24, catalogUpdatedAt: Date.UTC(2026, 0, 5),
+  }));
+  const catalogBody = text(catalog);
+  assert.ok(catalogBody.includes("42 curated skills"), "精选总数文案");
+  assert.ok(catalogBody.includes("Catalog updated 2026-01-05"), "清单更新日期");
+
+  const fallback = render(React.createElement(MarketResultSummary, {
+    scope: "catalog", total: null, loadedCount: 5,
+  }));
+  assert.ok(text(fallback).includes("5 skills"), "无总数时回退已加载条数");
+
+  const live = render(React.createElement(MarketResultSummary, {
+    scope: "live", total: null, loadedCount: 7,
+  }));
+  const liveBody = text(live);
+  assert.ok(liveBody.includes("7 live results"), "实时结果数");
+  assert.ok(liveBody.includes("Not curated"), "live 的未精选标记");
+  assert.ok(!liveBody.includes("market."));
+});
+
+test("骨架：加载态给形状卡片而不是一行文字", () => {
+  const html = render(React.createElement(MarketSkeleton, { label: "Loading skills…" }));
+  assert.ok(html.includes('data-testid="market-skeleton"'));
+  assert.equal((html.match(/is-skeleton/g) || []).length, 8, "默认 8 张骨架卡");
+  assert.ok(html.includes("market-skeleton-line"));
+  assert.ok(text(html).includes("Loading skills…"), "骨架带无障碍加载文案");
+});
+
+test("免责声明：首屏渲染标题与正文且不泄漏 i18n 键", () => {
+  const html = render(React.createElement(MarketDisclaimer));
+  const body = text(html);
+  assert.ok(html.includes('data-testid="market-disclaimer"'));
+  assert.ok(body.includes("Third-party skills"), "免责声明标题");
+  assert.ok(body.includes("does not audit"), "免责声明正文");
+  assert.ok(!body.includes("market."), "不得渲染裸 i18n 键");
+});
+
+test("详情安全页签：有 securityNote 时展示「精选说明」，浏览路径可消费快照回填字段", () => {
+  // O1：catalog 详情命中快照时服务端回填 securityNote；详情消费侧必须把它渲染出来。
+  const html = render(React.createElement(MarketSecurityTab, {
+    securityNote: "该技能读取剪贴板，已由编辑复核。",
+    reports: [{ vendor: "ClawHub", status: "flagged", statusText: "Flagged by scanner" }],
+  }));
+  const body = text(html);
+  assert.ok(html.includes('data-testid="market-security-note"'));
+  assert.ok(body.includes("Editor's note"), "精选说明标题");
+  assert.ok(body.includes("该技能读取剪贴板，已由编辑复核。"), "精选说明正文");
+  assert.ok(body.includes("Flagged by scanner"), "扫描报告仍在");
+  assert.ok(!body.includes("market."), "不得渲染裸 i18n 键");
+
+  const withoutNote = render(React.createElement(MarketSecurityTab, { reports: [] }));
+  assert.ok(!withoutNote.includes('data-testid="market-security-note"'), "无 securityNote 时不渲染区块");
+  assert.ok(text(withoutNote).includes("No security scan reported"), "无报告时的兜底文案");
+});
+
+test("详情镜像类型：securityNote/curated/featured/license/summaryEn 均在 MarketListItem 上", () => {
+  // 类型层面（tsc）已保证；这里以运行期样例确认消费侧字段名与契约一致，防拼写漂移。
+  const sample = {
+    ...item,
+    curated: true,
+    featured: true,
+    summaryEn: "EN summary",
+    license: "MIT",
+    securityNote: "编辑说明",
+  };
+  const html = render(React.createElement(SkillMarketCard, { item: sample, installed: false, active: false, onOpen: () => {} }));
+  assert.ok(text(html).includes("Featured"), "featured 驱动精选徽标");
+  assert.ok(text(html).includes("EN summary"), "summaryEn 供非中文语言取摘要");
+});
+
+test("无限滚动：哨兵始终存在，无 observer 回退按钮，失败停自动加载", () => {
+  const sentinel = { current: null };
+
+  const noObserver = render(React.createElement(MarketLoadMore, {
+    canAutoLoad: false, loadingMore: false, loadMoreError: null, onLoadMore: () => {}, sentinelRef: sentinel,
+  }));
+  assert.ok(noObserver.includes('data-testid="market-load-more-sentinel"'), "哨兵存在");
+  assert.ok(text(noObserver).includes("Load more"), "无 observer 时的回退按钮");
+
+  const withObserver = render(React.createElement(MarketLoadMore, {
+    canAutoLoad: true, loadingMore: false, loadMoreError: null, onLoadMore: () => {}, sentinelRef: sentinel,
+  }));
+  assert.ok(withObserver.includes('data-testid="market-load-more-sentinel"'));
+  assert.ok(!text(withObserver).includes("Load more"), "有 observer 时不显示回退按钮");
+
+  const failed = render(React.createElement(MarketLoadMore, {
+    canAutoLoad: true, loadingMore: false, loadMoreError: "boom", onLoadMore: () => {}, sentinelRef: sentinel,
+  }));
+  const failedBody = text(failed);
+  assert.ok(failedBody.includes("Couldn't load more skills"), "翻页失败文案");
+  assert.ok(failedBody.includes("boom"), "展示失败详情");
+  assert.ok(failedBody.includes("Load more"), "失败时给手动重试");
 });

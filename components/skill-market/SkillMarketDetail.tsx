@@ -10,6 +10,7 @@ import {
   sortMarketFiles,
   type MarketFileMeta,
   type MarketListItem,
+  type MarketSecurityReport,
   type MarketSkillDetail,
 } from "./market-helpers";
 
@@ -24,6 +25,52 @@ import {
  */
 
 type Tab = "overview" | "files" | "security";
+
+export interface MarketSecurityTabProps {
+  /** 精选技能带风险结论时编辑给出的说明；有就展示「精选说明」区块。 */
+  securityNote?: string;
+  /** 上游扫描报告（来源方提供时才有）。 */
+  reports?: MarketSecurityReport[];
+}
+
+/**
+ * 详情「安全报告」页签的正文（从 SkillMarketDetail 抽出以便单测）。
+ *
+ * 精选技能的 `securityNote` 必须在这条路径上渲染：catalog 详情命中快照时，服务端会回填
+ * `securityStatus` / `securityNote` 等字段（见 O1），所以浏览路径必须消费它，否则「精选说明」
+ * 区块就永远不可达。注意这里**只**读 `securityNote`，不吃 `securityReports` 之外的字段。
+ */
+export function MarketSecurityTab({ securityNote, reports }: MarketSecurityTabProps) {
+  const { t } = useI18n();
+  return (
+    <div className="market-detail-body">
+      {securityNote && (
+        <div className="market-security-note" data-testid="market-security-note">
+          <p className="market-section-title">{t("market.detail.securityNote")}</p>
+          <p className="scheduled-hint">{securityNote}</p>
+        </div>
+      )}
+      {reports && reports.length > 0 ? (
+        <ul className="market-security-list">
+          {reports.map((report) => (
+            <li key={`${report.vendor}-${report.status}`}>
+              <span className={`market-badge ${securityBadgeClass(report.status)}`}>{report.vendor}</span>
+              <span className="market-security-text">{report.statusText}</span>
+              {report.summary && <p className="scheduled-hint">{report.summary}</p>}
+              {report.reportUrl && (
+                <a className="market-detail-link" href={report.reportUrl} target="_blank" rel="noopener noreferrer">
+                  {t("market.openReport")}
+                </a>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="scheduled-hint">{t("market.noSecurityReports")}</p>
+      )}
+    </div>
+  );
+}
 
 interface Props {
   selectedId: string | null;
@@ -362,26 +409,7 @@ export function SkillMarketDetail({
           )}
 
           {tab === "security" && (
-            <div className="market-detail-body">
-              {skill.securityReports && skill.securityReports.length > 0 ? (
-                <ul className="market-security-list">
-                  {skill.securityReports.map((report) => (
-                    <li key={`${report.vendor}-${report.status}`}>
-                      <span className={`market-badge ${securityBadgeClass(report.status)}`}>{report.vendor}</span>
-                      <span className="market-security-text">{report.statusText}</span>
-                      {report.summary && <p className="scheduled-hint">{report.summary}</p>}
-                      {report.reportUrl && (
-                        <a className="market-detail-link" href={report.reportUrl} target="_blank" rel="noopener noreferrer">
-                          {t("market.openReport")}
-                        </a>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="scheduled-hint">{t("market.noSecurityReports")}</p>
-              )}
-            </div>
+            <MarketSecurityTab securityNote={skill.securityNote} reports={skill.securityReports} />
           )}
         </>
       )}

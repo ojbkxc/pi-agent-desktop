@@ -12205,6 +12205,52 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   line-height: 1.5;
 }
 
+/* 顶部免责声明（可关闭，状态持久化）。 */
+.market-disclaimer {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--warning) 10%, var(--bg-panel));
+  color: var(--text);
+}
+
+.market-disclaimer-text {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--fs-caption);
+  line-height: 1.45;
+}
+
+.market-disclaimer-text strong { font-weight: var(--fw-semibold); }
+
+.market-disclaimer-dismiss {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.market-disclaimer-dismiss:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.market-disclaimer-dismiss:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 .market-tabs {
   display: flex;
   gap: 4px;
@@ -12266,6 +12312,8 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+  /* 列向 flex 容器（.market-browse）里的行必须不被压扁。 */
+  flex: none;
 }
 
 .market-search {
@@ -12276,6 +12324,193 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .market-source-filter {
   flex: 0 0 auto;
   min-width: 140px;
+}
+
+/* 三筛选（来源 / 安全状态 / 安装状态）：统一 AppSelect，随搜索行换行。 */
+.market-filter-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: nowrap;
+  /* `flex: none`：搜索框是 `flex: 1 1 240px`，会吃掉全部剩余宽度，把它压成
+     「每个下拉各占一行」的单列；筛选栏按内容宽度固定，空间不够时整栏换行。 */
+  flex: none;
+}
+
+/* `width:100%` 来自 AppSelect 触发器本身；这里给固定内容宽度、且不参与收缩，
+   否则窄容器（例如详情面板打开后）会把每个下拉压成单独一行。 */
+.market-filter-select {
+  flex: none;
+  width: auto;
+  min-width: 140px;
+}
+
+/* 分类 chip（全部 + 各分类名 + 计数），横向可滚动。 */
+.market-category-bar {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+  /* 列向 flex 容器里的行必须按内容高度固定，否则会被压成一条细线。 */
+  flex: none;
+}
+
+.market-category-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 4px 10px;
+  border: var(--hairline) solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.market-category-chip:hover {
+  border-color: var(--text-dim);
+  color: var(--text);
+}
+
+.market-category-chip.is-active {
+  border-color: var(--accent);
+  background: var(--bg-selected);
+  color: var(--text);
+}
+
+.market-category-chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.market-category-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--fw-regular);
+  opacity: 0.6;
+}
+
+/* 计数行：catalog「共 N 个精选技能 / 清单更新于 date」，live 实时结果数。 */
+.market-result-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 0;
+  flex: none;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
+  color: var(--text);
+}
+
+.market-result-updated {
+  font-weight: var(--fw-regular);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+
+.market-not-curated {
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-regular);
+}
+
+/* 作用域切换提示（catalog ⇄ live）。 */
+.market-scope-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 0;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+
+.market-scope-switch {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--fs-micro);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.market-scope-switch:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* 无限滚动哨兵：紧贴网格底边的一像素，用于量取预取间距。 */
+.market-sentinel {
+  height: 1px;
+  width: 100%;
+}
+
+.market-load-more-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+}
+
+/* 骨架卡片：加载态给形状而不是一行文字。 */
+.market-skeleton { pointer-events: none; }
+
+.market-skeleton .market-card.is-skeleton { gap: 10px; }
+
+.market-skeleton-line {
+  display: block;
+  height: 10px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-hover);
+  animation: market-skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+.market-skeleton-line.is-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.market-skeleton-line.is-title {
+  width: 60%;
+  height: 12px;
+}
+
+.market-skeleton-line.is-short { width: 40%; }
+
+.market-card-featured {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-size: var(--fs-micro);
+}
+
+/* 精选说明（详情安全页签）。 */
+.market-security-note {
+  padding: 10px 12px;
+  border: var(--hairline) solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+
+@keyframes market-skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .market-skeleton-line { animation: none; }
 }
 
 .market-grid {
@@ -12379,6 +12614,25 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   font-size: var(--fs-micro);
   color: var(--text-dim);
 }
+
+.market-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 20px;
+  overflow: hidden;
+}
+
+.market-card-tag {
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+
+.market-card-tag.is-more { color: var(--text-muted); }
 
 .market-source-tag {
   padding: 1px 6px;

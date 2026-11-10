@@ -8,13 +8,15 @@ import { useI18n } from "@/hooks/useI18n";
  *
  * 语义是「**下一条**消息用团队处理」的单条 armed（一次性）：点一下勾上，发出去即复位。
  * 全局可用性（`hooks/useAgentTeamsEnabled.ts` 的 `useAgentTeamsEnabled`）**不决定显不显示**，
- * 只决定这一行能不能勾 —— 与 cc-haha 一致：全局关掉时那行仍然在，但**没有开关**，点击去设置
+ * 只决定这一行能不能勾 —— 与 cc-haha 一致：全局关掉时那行仍然在，但**不是开关**，点击去设置
  * （`capabilityMenuModel.ts:391-408`：the row leads there instead of arming a mode the
  * session would not honour）。只有成员会话 / 极简档才整行隐藏。
  *
- * - `available === true`：可点，点击 → `onToggle()`；armed 时高亮并 `aria-pressed`。
+ * - `available === true`：**真开关**（`role="switch"` + `aria-checked`），点击 → `onToggle()`；
+ *   armed 时高亮。用户口径：「聊天页这个应该是个开关，打开后当前发送的就带着」。
  * - `available === false`：置灰（不做死按钮）——鼠标悬停用 tooltip 说明原因，点击跳设置
- *   （`onOpenSettings`）。原因由 `disabledReason` 决定（chatOnly / disabled / lean / memberSession）。
+ *   （`onOpenSettings`）。这一档只是一个**去设置的动作行**，不冒充开关，所以不落 role /
+ *   aria-checked。原因由 `disabledReason` 决定（chatOnly / disabled / lean / memberSession）。
  */
 
 export type AgentTeamUnavailableReason = "chatOnly" | "disabled" | "lean" | "memberSession";
@@ -70,17 +72,22 @@ export function AgentTeamToggle({ armed, available, disabledReason, onToggle, on
     ? t(REASON_KEY[disabledReason])
     : t("chat.agentTeam.toggleHint");
 
-  const className = `composer-teams-toggle${armed && available ? " is-armed" : ""}${available ? "" : " is-unavailable"}`;
+  // 「显示为已勾」只在真正可用时成立：全局关掉后残留的 armed 不再高亮。
+  const shownArmed = available && armed;
+  const className = `composer-teams-toggle${shownArmed ? " is-armed" : ""}${available ? "" : " is-unavailable"}`;
 
   return (
     <button
       type="button"
       className={className}
       data-agent-team-toggle
-      data-armed={armed || undefined}
+      data-armed={shownArmed || undefined}
       data-disabled-reason={disabledReason}
-      // 不可用时不落 aria-pressed（它只在真正可切换时有意义），但仍可聚焦、可点击跳设置。
-      aria-pressed={available ? armed : undefined}
+      // 真开关语义（用户要求）：可用时按 `role="switch"` + `aria-checked` 暴露 armed 状态。
+      // 不可用时它只是个「去设置」的动作行，不冒充开关，因此既不落 role 也不落 aria-checked；
+      // 仍可聚焦、可点击跳设置。
+      role={available ? "switch" : undefined}
+      aria-checked={available ? armed : undefined}
       aria-label={label}
       title={available ? label : reasonText}
       onClick={() => {

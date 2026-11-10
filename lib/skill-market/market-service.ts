@@ -12,10 +12,16 @@
 
 import { clawhubProvider } from "./clawhub-provider";
 import { skillhubProvider } from "./skillhub-provider";
+import { catalogCategories, catalogEntryToSkill, catalogUpdatedAt, filterCatalog } from "./catalog";
+import { annotateInstallState } from "./install-service";
 import {
   MARKET_LIMITS,
   MARKET_SOURCES,
   MarketUpstreamError,
+  type MarketCategory,
+  type MarketInstallFilter,
+  type MarketScope,
+  type MarketSecurityFilter,
   type MarketProvider,
   type MarketSource,
   type NormalizedSkill,
@@ -59,10 +65,38 @@ export function decodeCursor(raw: string | null | undefined): MergedCursor | und
 export interface MarketListResult {
   items: NormalizedSkill[];
   nextCursor: string | null;
-  /** 本次没给出结果的来源与原因（部分失败仍返回其余来源的结果）。 */
+  /** 本次没给出结果的来源与原因（部分失败仍返回其余来源的结果）。catalog 路径恒为空。 */
   sourceErrors: Array<{ source: MarketSource; message: string }>;
+  /** catalog 路径：过滤后的**总数**（供「共 N 个精选技能」）。 */
+  total?: number;
+  /** catalog 路径：分类栏条目（整库静态计数）。 */
+  categories?: MarketCategory[];
+  /** catalog 路径：快照生成时间（epoch 毫秒）。 */
+  catalogUpdatedAt?: number;
 }
 
+/**
+ * 一次市场列表 / 搜索的入参。
+ *
+ * `scope` 缺省 `catalog`（首页精选快照，不发网络）；`cursor` 是**原始字符串**——
+ * catalog 用自编的 `catalog:<offset>`，live 用既有 base64url 双源游标（内部再 decode）。
+ */
+export interface MarketListParams {
+  scope?: MarketScope;
+  q?: string;
+  /** catalog 专用：目录分类 key。 */
+  category?: string;
+  /** 单一来源筛选（`all` = 两个源都取）。 */
+  source?: "all" | MarketSource;
+  /** 兼容旧调用点的来源数组；与 `source` 同时给出时以 `sources` 为准。 */
+  sources?: MarketSource[];
+  security?: MarketSecurityFilter;
+  installed?: MarketInstallFilter;
+  cursor?: string;
+  limit: number;
+}
+
+/** live 路径内部用：已 decode 的双源游标。 */
 interface QueryOptions {
   cursor?: MergedCursor;
   limit: number;
@@ -121,9 +155,78 @@ async function listSource(
     : provider.list({ cursor, limit: perSourceLimit(options.limit) });
 }
 
-/** 一页市场列表（或搜索结果）。某个源挂了不影响另一个源的结果。 */
-export async function listMarketSkills(options: QueryOptions): Promise<MarketListResult> {
-  const sources = options.sources?.length ? options.sources : [...MARKET_SOURCES];
+/** 安全筛选：`all`/缺省不筛，其余精确匹配 securityStatus。 */
+function filterBySecurity(items: NormalizedSkill[], security?: MarketSecurityFilter): NormalizedSkill[] {
+  if (!security || security === "all") return items;
+  return items.filter((item) => item.securityStatus === security);
+}
+
+/** 安装筛选：按已标注的 installState 过滤（调用前必须先 annotateInstallState）。 */
+function filterByInstalled(items: NormalizedSkill[], installed?: MarketInstallFilter): NormalizedSkill[] {
+  if (!installed || installed === "all") return items;
+  return items.filter((item) =>
+    installed === "installed" ? item.installState === "installed" : item.installState !== "installed",
+  );
+}
+
+/** 从入参解析出单一来源筛选项（兼容旧的 `sources` 数组）。 */
+function resolveCatalogSource(params: MarketListParams): "all" | MarketSource {
+  if (params.source && params.source !== "all") return params.source;
+  if (params.sources?.length === 1) return params.sources[0]!;
+  return "all";
+}
+
+/** 一页市场列表（或搜索结果）。默认走精选快照；`scope: "live"` 才打上游注册表。 */
+export async function listMarketSkills(params: MarketListParams): Promise<MarketListResult> {
+  return params.scope === "live" ? listLiveMarketSkills(params) : listCatalogSkills(params);
+}
+
+/** catalog 游标形如 `catalog:<offset>`；与 live 的 base64url 双源游标互不干扰。 */
+const CATALOG_CURSOR_PREFIX = "catalog:";
+
+/**
+ * 精选快照的一页。整条链路本地完成，**不发任何网络请求**。
+ *
+ * 所有筛选（安全、安装）都在分页之前跑：只要还有数据，每页都是满的，无限滚动不会卡在
+ * 「被筛掉的一页」上。安装筛选需要本机安装态，统一复用 install-service 的标注。
+ */
+async function listCatalogSkills(params: MarketListParams): Promise<MarketListResult> {
+  let items: NormalizedSkill[] = await annotateInstallState(
+    filterCatalog({ q: params.q, category: params.category, source: resolveCatalogSource(params) })
+      .map(catalogEntryToSkill),
+  );
+  items = filterBySecurity(items, params.security);
+  items = filterByInstalled(items, params.installed);
+
+  const raw = params.cursor?.startsWith(CATALOG_CURSOR_PREFIX)
+    ? params.cursor.slice(CATALOG_CURSOR_PREFIX.length)
+    : "";
+  const offset = Math.max(0, Number.parseInt(raw, 10) || 0);
+  const end = offset + params.limit;
+
+  return {
+    items: items.slice(offset, end),
+    nextCursor: end < items.length ? `${CATALOG_CURSOR_PREFIX}${end}` : null,
+    sourceErrors: [],
+    total: items.length,
+    categories: catalogCategories(),
+    catalogUpdatedAt,
+  };
+}
+
+/** live 路径：两个源交错翻页，部分失败仍返回其余来源的结果。 */
+async function listLiveMarketSkills(params: MarketListParams): Promise<MarketListResult> {
+  const sources = params.sources?.length
+    ? params.sources
+    : params.source && params.source !== "all"
+      ? [params.source]
+      : [...MARKET_SOURCES];
+  const options: QueryOptions = {
+    cursor: decodeCursor(params.cursor),
+    limit: params.limit,
+    q: params.q,
+    sources,
+  };
   const settled = await Promise.allSettled(sources.map((source) => listSource(source, options)));
 
   const sourceErrors: MarketListResult["sourceErrors"] = [];
@@ -140,18 +243,22 @@ export async function listMarketSkills(options: QueryOptions): Promise<MarketLis
   });
 
   if (pages.length === 0 && sourceErrors.length > 0) {
-    throw sourceErrors[0]!.source
-      ? new MarketUpstreamError(sourceErrors[0]!.source, "sourceUnavailable", sourceErrors[0]!.message)
-      : new Error(sourceErrors[0]!.message);
+    throw new MarketUpstreamError(sourceErrors[0]!.source, "sourceUnavailable", sourceErrors[0]!.message);
   }
 
   const merged = interleaveAndDedupe(pages);
+  let items = params.q
+    ? [...merged].sort((a, b) => b.stats.downloads - a.stats.downloads).slice(0, MARKET_LIMITS.searchResultCap)
+    : merged.slice(0, MARKET_LIMITS.maxPageSize);
+
+  // 安装筛选需要本机安装态；纯列表也顺带标注，让下游不用再扫一遍目录。
+  items = await annotateInstallState(items);
+  items = filterBySecurity(items, params.security);
+  items = filterByInstalled(items, params.installed);
+
   return {
-    // 搜索无分页：合并后按下载量降序，再截上限。
-    items: options.q
-      ? [...merged].sort((a, b) => b.stats.downloads - a.stats.downloads).slice(0, MARKET_LIMITS.searchResultCap)
-      : merged.slice(0, MARKET_LIMITS.maxPageSize),
-    nextCursor: options.q ? null : encodeCursor(nextCursor),
+    items,
+    nextCursor: params.q ? null : encodeCursor(nextCursor),
     sourceErrors,
   };
 }

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withCatalogMetadata } from "@/lib/skill-market/catalog";
 import { clawhubProvider } from "@/lib/skill-market/clawhub-provider";
 import { installStateFor } from "@/lib/skill-market/install-service";
 import { detailCacheKey, readCache, writeCache } from "@/lib/skill-market/market-service";
@@ -47,9 +48,12 @@ export async function GET(
       detail = await providers[parsed.source].detail(parsed.slug, owner);
       writeCache(cacheKey, detail);
     }
+    // 快照覆盖放在缓存读取**之后**：缓存里存 provider 原始详情，命中目录项时才叠加编辑性字段，
+    // 这样改一次快照立即生效，不必等 5 分钟 TTL 过期（详情页与列表 scope=catalog 口径一致）。
+    const curated = withCatalogMetadata(detail, owner);
     const installState = await installStateFor(parsed.source, parsed.slug);
     return NextResponse.json(
-      { skill: { ...detail, ...installState } },
+      { skill: { ...curated, ...installState } },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {

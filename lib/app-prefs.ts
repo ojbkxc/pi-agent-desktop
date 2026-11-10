@@ -28,10 +28,17 @@ export const APP_PREF_KEYS = {
   collapsedChats: "pi-web:collapsed-chats",
   /**
    * Agent Team 的**全局可用性**开关（Settings › General › Chat），默认 `true`。
-   * 注意它已不是「下一条消息用团队」的单条 armed —— 那个是内存态、不落盘，由
-   * `hooks/useAgentTeamsEnabled.ts` 的 `useAgentTeamsArmed()` 管理。
+   *
+   * 键名带 `-v2` 是一次语义迁移：旧键 `pi-agent-teams-enabled` 的语义是「下一条消息用团队」
+   * 的单条 armed，旧代码每次发送后都会把它写回 `"false"`（`disarmAgentTeam()`），用户勾/取消
+   * 那个旧开关也会落 `"false"`。升级后新代码把同一个键读成「功能是否**全局可用**」，那些遗留的
+   * `"false"` 就会把功能静默关掉，composer 上的团队开关随之置灰、点击跳设置——这正是
+   * 「点一下就跳到设置」的根因。语义变了就必须换键：旧值一律作废，新键没存过 → 回到默认开。
+   *
+   * 注意单条 armed 现在是**内存态、不落盘**，由 `hooks/useAgentTeamsEnabled.ts` 的
+   * `useAgentTeamsArmed()` 管理；只有这个全局可用性偏好落盘。
    */
-  agentTeamsEnabled: "pi-agent-teams-enabled",
+  agentTeamsEnabled: "pi-agent-teams-enabled-v2",
   /** Agent Team 一次性发现引导：`"1"` = 引导已展示过（用户看过 / 走完）。 */
   agentTeamsGuideSeen: "pi-agent-teams-guide-seen",
   /** Agent Team 一次性发现引导：`"1"` = 用户主动关闭 / 拒绝过这份引导。 */
