@@ -130,6 +130,7 @@ jobs:
             - **The composer's Agent Team switch used to jump to Settings when clicked.** The old preference key meant "use a team for the next message" and old sends wrote `"false"` into it; once the same key was read as "is the feature available at all", that leftover disabled the feature, greyed the switch and sent its click to Settings. Migrated to a new key (old value void, default on) and made the switch a real switch: one click arms this message, send clears it, the first arming asks once about cost, and only a globally-off feature leads to Settings.
             - A curated skill could be flagged "at risk" in the list but reported "no risk found" on its detail page; the detail now takes the curated verdict while keeping the upstream file list and scan reports.
             - The market's filter row and category rail could be squeezed flat in a narrow column.
+            - Two list APIs answered with a single row when the page size was omitted: `Number(null)` is `0`, and `0` is finite, so the "did the caller pass a limit?" check let a missing limit through as a 1-row page. The market list and the skill search now require an explicitly positive value and fall back to their documented defaults (12 and 50).
 
             Bundled components: pi 1.5.0, pi-web 0.10.0.
 
@@ -151,6 +152,7 @@ jobs:
             - **聊天页的 Agent 团队开关曾经点一下就跳到设置。** 旧偏好键的语义是「下一条消息用团队」，旧版本每次发送都往里写 `"false"`；同一个键改读成「功能是否可用」之后，那些遗留值把功能静默关闭，开关变灰、点击被引到设置。已迁移到新键（旧值作废、默认开启），并把入口做成真正的开关：点一下勾选本条消息，发送后自动复位，首次开启有一次成本提示，只有功能被全局关闭时才引导去设置。
             - 精选技能可能在列表里标为「存在风险」、详情页却显示「未发现风险」；详情页现在以精选清单的审核结论为准，同时保留下游的文件清单与扫描明细。
             - 市场筛选栏与分类栏在窄列下会被压扁的布局问题。
+            - 两个列表接口在缺省分页大小时只回一行：`Number(null)` 是 `0`，而 `0` 是有限数，于是「调用方传没传 limit」的判断把缺省当成了「每页 1 条」。市场列表与技能搜索现在要求显式大于 0，缺省分别回落 12 与 50。
 
             内置组件版本：pi 1.5.0、pi-web 0.10.0。
 
