@@ -114,6 +114,48 @@ jobs:
           tagName: v__VERSION__
           releaseName: pi-agent-desktop v__VERSION__
           releaseBody: |
+            ## Pi Agent Desktop 0.8.2 (fork) — 2026-11-11
+
+            Incremental update to the same 0.8.2 build (same version number, re-published).
+
+            ### New
+
+            - **The skill market now matches cc-haha end to end.** Search plus three filters (source / security state / install state), a 13-category rail with per-category counts, a "398 curated skills · list updated 2026-10-01" summary line, skeleton cards and infinite scroll. The curated list ships as a bundled snapshot (browsing works offline); the live two-registry search is still there.
+            - **Detail: "Before you install — what this skill does."** Rules read the `SKILL.md` and the file list and report running commands, registering hooks, needing secrets, reaching the network, writing files, or depending on local binaries, each with the evidence and a risk level.
+            - **Detail: a Changelog tab**, shown when upstream provides one.
+            - **Market: a source health bar** — each registry shows ok / degraded / unavailable / cached.
+
+            ### Fixed
+
+            - **The composer's Agent Team switch used to jump to Settings when clicked.** The old preference key meant "use a team for the next message" and old sends wrote `"false"` into it; once the same key was read as "is the feature available at all", that leftover disabled the feature, greyed the switch and sent its click to Settings. Migrated to a new key (old value void, default on) and made the switch a real switch: one click arms this message, send clears it, the first arming asks once about cost, and only a globally-off feature leads to Settings.
+            - A curated skill could be flagged "at risk" in the list but reported "no risk found" on its detail page; the detail now takes the curated verdict while keeping the upstream file list and scan reports.
+            - The market's filter row and category rail could be squeezed flat in a narrow column.
+
+            Bundled components: pi 1.5.0, pi-web 0.10.0.
+
+            ---
+
+            ## Pi Agent Desktop 0.8.2（fork）— 2026-11-11
+
+            同一 0.8.2 构建的增量更新（版本号不变，重新发布）。
+
+            ### 新增
+
+            - **技能市场补齐到 cc-haha 的完整形态。** 搜索加三个筛选（来源 / 安全状态 / 安装状态）、13 类分类栏与各类计数、「共 398 个精选技能 · 清单更新于 2026-10-01」、骨架卡片与滚动加载。精选清单以打包快照随应用发布（离线可浏览）；实时双源检索仍在。
+            - **详情新增「安装前请了解：这个技能会做什么」。** 按规则读取 `SKILL.md` 与文件清单，报告 执行命令 / 注册 Hook / 需要密钥 / 访问网络 / 写入文件 / 依赖本地命令，每条附证据与风险等级。
+            - **详情新增「更新日志」页签**，上游提供时出现。
+            - **市场新增来源健康状态条** —— 每个注册源显示 正常 / 降级 / 不可用 / 缓存。
+
+            ### 修复
+
+            - **聊天页的 Agent 团队开关曾经点一下就跳到设置。** 旧偏好键的语义是「下一条消息用团队」，旧版本每次发送都往里写 `"false"`；同一个键改读成「功能是否可用」之后，那些遗留值把功能静默关闭，开关变灰、点击被引到设置。已迁移到新键（旧值作废、默认开启），并把入口做成真正的开关：点一下勾选本条消息，发送后自动复位，首次开启有一次成本提示，只有功能被全局关闭时才引导去设置。
+            - 精选技能可能在列表里标为「存在风险」、详情页却显示「未发现风险」；详情页现在以精选清单的审核结论为准，同时保留下游的文件清单与扫描明细。
+            - 市场筛选栏与分类栏在窄列下会被压扁的布局问题。
+
+            内置组件版本：pi 1.5.0、pi-web 0.10.0。
+
+            ---
+
             ## Pi Agent Desktop 0.8.2 (fork)
 
             This is the **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2.
