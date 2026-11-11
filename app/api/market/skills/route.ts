@@ -45,9 +45,11 @@ export async function GET(request: Request) {
   const q = searchParams.get("q")?.trim() ?? "";
   const category = searchParams.get("category")?.trim() || undefined;
   const cursor = searchParams.get("cursor") ?? undefined;
-  const limitParam = Number(searchParams.get("limit"));
-  const limit = Number.isFinite(limitParam)
-    ? Math.min(MARKET_LIMITS.maxPageSize, Math.max(1, Math.floor(limitParam)))
+  // 注意 `Number(null)` / `Number("")` 都是 0（有限数），直接用 `Number.isFinite` 判断会把
+  // 「没传 limit」当成 0，再被 `Math.max(1, …)` 变成每页 **1 条**。必须显式要求 > 0 才采信。
+  const rawLimit = Number(searchParams.get("limit"));
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0
+    ? Math.min(MARKET_LIMITS.maxPageSize, Math.floor(rawLimit))
     : 12;
   const requestedSource = searchParams.get("source");
   const source: "all" | MarketSource = MARKET_SOURCES.includes(requestedSource as MarketSource)
