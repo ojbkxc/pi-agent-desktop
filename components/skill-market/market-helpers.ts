@@ -118,6 +118,21 @@ export interface MarketSkillDetail extends MarketListItem {
   changelog?: { version?: string; text: string; publishedAt?: number };
 }
 
+/**
+ * 来源健康状态：与状态条上四种展示一一对应。服务端目前只会写入 ok / failed，
+ * degraded / cached 预留给上游将来可能返回的语义（无记录的来源一律不渲染 chip）。
+ */
+export type MarketSourceStatus = "ok" | "degraded" | "failed" | "cached";
+
+/** `GET /api/market/skills` 响应里 `health[source]` 的形状（镜像服务端 SourceHealth）。 */
+export interface MarketSourceHealth {
+  status: MarketSourceStatus;
+  /** 该记录的时间（epoch 毫秒）；status=cached 时作为缓存时间展示。 */
+  at?: number;
+  /** 失败时的简因（chip 的 title）。 */
+  message?: string;
+}
+
 export interface MarketListResponse {
   items: MarketListItem[];
   nextCursor: string | null;
@@ -128,6 +143,8 @@ export interface MarketListResponse {
   categories?: MarketCategory[];
   /** catalog 作用域：快照背后的上游读取时间（epoch 毫秒）。 */
   catalogUpdatedAt?: number;
+  /** 各来源最近一次请求结果；无记录的来源为 undefined（状态条不渲染该 chip）。 */
+  health?: Record<string, MarketSourceHealth | undefined>;
 }
 
 /** 下载量的紧凑写法：491656 → 491.7K。 */

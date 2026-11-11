@@ -25,6 +25,7 @@ import {
   type MarketListResponse,
   type MarketSecurityFilter,
   type MarketSourceFilter,
+  type MarketSourceHealth,
 } from "./market-helpers";
 
 /**
@@ -213,6 +214,53 @@ export function MarketResultSummary({ scope, total, loadedCount, catalogUpdatedA
   );
 }
 
+/** 缓存时间的本地化展示；无效时间返回空串（调用方回退到不显示时间）。 */
+function formatSourceTime(timestamp: number): string {
+  try {
+    return new Date(timestamp).toLocaleTimeString();
+  } catch {
+    return "";
+  }
+}
+
+export interface MarketSourceStatusBarProps {
+  /** `GET /api/market/skills` 响应里的 health；只渲染有记录的来源。 */
+  sources: Record<string, MarketSourceHealth | undefined>;
+}
+
+/**
+ * 来源状态条：每个有记录的注册源一个 chip（正常 / 降级 / 不可用 / 缓存于时间）。
+ * 没有记录的来源直接跳过——编造一个「未知」状态等于给出它并不掌握的信息。
+ * 一个来源都没记录时整条不渲染。
+ */
+export function MarketSourceStatusBar({ sources }: MarketSourceStatusBarProps) {
+  const { t } = useI18n();
+  const present = SKILL_MARKET_SOURCES.filter((source) => sources[source]);
+  if (present.length === 0) return null;
+  return (
+    <div className="market-source-status" data-testid="market-source-status">
+      {present.map((source) => {
+        const info = sources[source]!;
+        const label = info.status === "cached" && info.at
+          ? t("market.sourceStatus.cachedAt", { time: formatSourceTime(info.at) })
+          : t(`market.sourceStatus.${info.status}`);
+        return (
+          <span
+            key={source}
+            className="market-source-status-item"
+            data-testid={`market-source-status-${source}`}
+            title={info.message || undefined}
+          >
+            <span className={`market-source-dot is-${info.status}`} aria-hidden="true" />
+            <span className="market-source-status-name">{t(`market.source.${source}`)}</span>
+            <span className="market-source-status-text">{label}</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 /** 骨架卡片网格：加载态给形状而不是一行文字。 */
 export function MarketSkeleton({ count = MARKET_SKELETON_COUNT, label }: { count?: number; label: string }) {
   return (
@@ -302,6 +350,7 @@ export function SkillMarketView({ onRevealInstalled }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [sourceErrors, setSourceErrors] = useState<Array<{ source: string; message: string }>>([]);
+  const [health, setHealth] = useState<Record<string, MarketSourceHealth | undefined>>({});
   const [selected, setSelected] = useState<string | null>(null);
   const [installed, setInstalled] = useState<MarketListItem[]>([]);
   const [installedRoot, setInstalledRoot] = useState<string>("");
@@ -357,6 +406,7 @@ export function SkillMarketView({ onRevealInstalled }: Props) {
       setNextCursor(data.nextCursor ?? null);
       setTotal(typeof data.total === "number" ? data.total : null);
       setSourceErrors(data.sourceErrors ?? []);
+      setHealth(data.health ?? {});
       if (data.categories) setCategories(data.categories);
       if (data.catalogUpdatedAt !== undefined) setCatalogUpdatedAt(data.catalogUpdatedAt);
       setError(null);
@@ -385,6 +435,7 @@ export function SkillMarketView({ onRevealInstalled }: Props) {
       });
       setNextCursor(data.nextCursor ?? null);
       setSourceErrors(data.sourceErrors ?? []);
+      if (data.health) setHealth(data.health);
     } catch (err) {
       if (generation === listSeqRef.current) {
         setLoadMoreError(err instanceof Error ? err.message : String(err));
@@ -505,12 +556,15 @@ export function SkillMarketView({ onRevealInstalled }: Props) {
             )}
 
             {tab === "browse" && showCountRow && (
-              <MarketResultSummary
-                scope={scope}
-                total={total}
-                loadedCount={items.length}
-                catalogUpdatedAt={catalogUpdatedAt}
-              />
+              <>
+                <MarketResultSummary
+                  scope={scope}
+                  total={total}
+                  loadedCount={items.length}
+                  catalogUpdatedAt={catalogUpdatedAt}
+                />
+                <MarketSourceStatusBar sources={health} />
+              </>
             )}
 
             {tab === "browse" && committedQuery && (

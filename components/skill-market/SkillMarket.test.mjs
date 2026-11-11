@@ -6,7 +6,12 @@ const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconf
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { SkillMarketCard } = await jiti.import("./SkillMarketCard.tsx");
-const { MarketSecurityTab } = await jiti.import("./SkillMarketDetail.tsx");
+const {
+  MarketSecurityTab,
+  CapabilityPanel,
+  MarketChangelogTab,
+  detailTabKeys,
+} = await jiti.import("./SkillMarketDetail.tsx");
 const { MarketSidebarRow } = await jiti.import("./MarketSidebarRow.tsx");
 const {
   MarketFilterBar,
@@ -15,8 +20,10 @@ const {
   MarketSkeleton,
   MarketLoadMore,
   MarketDisclaimer,
+  MarketSourceStatusBar,
 } = await jiti.import("./SkillMarketView.tsx");
 const helpers = await jiti.import("./market-helpers.ts");
+const insights = await jiti.import("./skill-insights.ts");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 
 const renderWith = (locale, element) => renderToStaticMarkup(
@@ -320,4 +327,135 @@ test("无限滚动：哨兵始终存在，无 observer 回退按钮，失败停�
   assert.ok(failedBody.includes("Couldn't load more skills"), "翻页失败文案");
   assert.ok(failedBody.includes("boom"), "展示失败详情");
   assert.ok(failedBody.includes("Load more"), "失败时给手动重试");
+});
+
+/* ── 来源状态条（任务 1） ─────────────────────────────────────────────── */
+
+test("来源状态条：有记录的来源各一个 chip，状态文案正确", () => {
+  const html = render(React.createElement(MarketSourceStatusBar, {
+    sources: {
+      clawhub: { status: "ok", at: Date.UTC(2026, 0, 5, 3, 4, 5) },
+      skillhub: { status: "failed", message: "HTTP 503" },
+    },
+  }));
+  assert.ok(html.includes('data-testid="market-source-status"'));
+  assert.ok(html.includes('data-testid="market-source-status-clawhub"'));
+  assert.ok(html.includes('data-testid="market-source-status-skillhub"'));
+  const body = text(html);
+  assert.ok(body.includes("ClawHub") && body.includes("Online"), "ok 源显示正常");
+  assert.ok(body.includes("SkillHub") && body.includes("Unavailable"), "failed 源显示不可用");
+  assert.ok(html.includes('title="HTTP 503"'), "失败详情进 title");
+  assert.ok(!body.includes("market."), "不得渲染裸 i18n 键");
+});
+
+test("来源状态条：降级 / 缓存（含时间）文案", () => {
+  const degraded = render(React.createElement(MarketSourceStatusBar, {
+    sources: { clawhub: { status: "degraded" } },
+  }));
+  assert.ok(text(degraded).includes("Degraded"), "degraded 文案");
+
+  const cached = render(React.createElement(MarketSourceStatusBar, {
+    sources: { skillhub: { status: "cached", at: Date.UTC(2026, 0, 5, 3, 4, 5) } },
+  }));
+  const cachedBody = text(cached);
+  assert.ok(cachedBody.includes("Cached"), "缓存状态带时间前缀");
+  assert.equal((cachedBody.match(/Cached/g) || []).length, 1, "缓存文案只出现一次");
+});
+
+test("来源状态条：无记录的来源不渲染，整条为空时不渲染", () => {
+  const one = render(React.createElement(MarketSourceStatusBar, {
+    sources: { skillhub: { status: "ok" } },
+  }));
+  assert.ok(one.includes('data-testid="market-source-status-skillhub"'));
+  assert.ok(!one.includes('data-testid="market-source-status-clawhub"'), "无记录来源不渲染 chip");
+
+  assert.equal(render(React.createElement(MarketSourceStatusBar, { sources: {} })), "");
+  assert.equal(render(React.createElement(MarketSourceStatusBar, { sources: { clawhub: undefined } })), "");
+});
+
+/* ── 更新日志页签（任务 2） ───────────────────────────────────────────── */
+
+test("更新日志：有 changelog 才多出页签，无则只有三页签", () => {
+  assert.deepEqual(detailTabKeys(true), ["overview", "files", "security", "changelog"]);
+  assert.deepEqual(detailTabKeys(false), ["overview", "files", "security"]);
+});
+
+test("更新日志页签：版本 / 日期 / 正文正确", () => {
+  const html = render(React.createElement(MarketChangelogTab, {
+    changelog: { version: "1.2.0", text: "Fixed a thing.", publishedAt: Date.UTC(2026, 0, 5) },
+  }));
+  assert.ok(html.includes('data-testid="market-changelog-tab"'));
+  const body = text(html);
+  assert.ok(body.includes("v1.2.0"), "版本加 v 前缀");
+  assert.ok(body.includes("2026-01-05"), "发布日期");
+  assert.ok(body.includes("Fixed a thing."), "更新说明正文");
+  assert.ok(!body.includes("market."), "不得渲染裸 i18n 键");
+});
+
+test("更新日志页签：无自述版本时用技能版本兜底；缺 changelog 时给兜底文案", () => {
+  const fallback = render(React.createElement(MarketChangelogTab, {
+    changelog: { text: "No version here." }, version: "2.0.0",
+  }));
+  assert.ok(text(fallback).includes("v2.0.0"), "无自述版本用技能版本兜底");
+
+  const empty = render(React.createElement(MarketChangelogTab, {}));
+  assert.ok(!empty.includes('data-testid="market-changelog-tab"'), "缺 changelog 不出正文块");
+  assert.ok(text(empty).includes("Upstream has no release note"), "缺 changelog 的兜底文案");
+});
+
+/* ── 能力面板（任务 3） ───────────────────────────────────────────────── */
+
+const fence = "```";
+const CAP_MD = [
+  "# Demo",
+  "Set DEMO_API_TOKEN before running.",
+  "",
+  `${fence}bash`,
+  "mkdir -p ./out",
+  "curl https://api.acme-tools.dev/v1/report",
+  fence,
+  "",
+  "Use when (1) you need a report, (2) the data is ready.",
+].join("\n");
+const CAP_INPUT = {
+  markdown: CAP_MD,
+  frontmatter: { metadata: { requires: { bins: ["jq"], env: ["DEMO_API_TOKEN"] } } },
+  files: [{ path: "scripts/setup.sh" }],
+};
+
+test("能力识别：规则命中出对应几类，级别与证据正确", () => {
+  const caps = insights.detectCapabilities(CAP_INPUT);
+  assert.deepEqual(
+    caps.map((capability) => capability.kind),
+    ["shell", "secrets", "network", "writes", "binaries"],
+    "命中类别按固定顺序",
+  );
+  const shell = caps.find((capability) => capability.kind === "shell");
+  assert.equal(shell.level, "high", "shell 为 high");
+  assert.ok(shell.evidence.includes("scripts/setup.sh"), "脚本文件进证据");
+  assert.deepEqual(caps.find((capability) => capability.kind === "network").evidence, ["api.acme-tools.dev"]);
+  assert.ok(caps.find((capability) => capability.kind === "secrets").evidence.includes("DEMO_API_TOKEN"));
+  assert.deepEqual(caps.find((capability) => capability.kind === "binaries").evidence, ["jq"]);
+});
+
+test("能力识别：无规则命中时返回空（面板不许给出「没有风险」的结论）", () => {
+  const caps = insights.detectCapabilities({ markdown: "Just a plain description.", files: [{ path: "README.md" }] });
+  assert.deepEqual(caps, []);
+});
+
+test("能力面板：有命中时渲染标题 / 证据 / 级别 / 免责说明", () => {
+  const caps = insights.detectCapabilities(CAP_INPUT);
+  const html = render(React.createElement(CapabilityPanel, { capabilities: caps }));
+  assert.ok(html.includes('data-testid="market-capability-panel"'));
+  assert.ok(html.includes('data-testid="market-capability-shell"'));
+  const body = text(html);
+  assert.ok(body.includes("Before installing"), "面板标题");
+  assert.ok(body.includes("scripts/setup.sh"), "证据来源进正文");
+  assert.ok(body.includes("High"), "shell 级别徽标");
+  assert.ok(body.includes("Detected by rules"), "底部免责说明");
+  assert.ok(!body.includes("market."), "不得渲染裸 i18n 键");
+});
+
+test("能力面板：无命中时整块不渲染", () => {
+  assert.equal(render(React.createElement(CapabilityPanel, { capabilities: [] })), "");
 });

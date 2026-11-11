@@ -12421,6 +12421,43 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   font-weight: var(--fw-regular);
 }
 
+/* 来源状态条：每个有记录的注册源一个 chip（正常 / 降级 / 不可用 / 缓存于时间）。 */
+.market-source-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  flex: none;
+  font-size: var(--fs-caption);
+  color: var(--text-muted);
+}
+
+.market-source-status-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.market-source-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.market-source-dot.is-ok { background: var(--success); }
+.market-source-dot.is-degraded { background: var(--warning); }
+.market-source-dot.is-failed { background: var(--danger); }
+.market-source-dot.is-cached { background: var(--text-dim); }
+
+.market-source-status-name {
+  color: var(--text);
+  font-weight: var(--fw-medium);
+}
+
+.market-source-status-text { color: var(--text-dim); }
+
 /* 作用域切换提示（catalog ⇄ live）。 */
 .market-scope-hint {
   display: flex;
@@ -12761,6 +12798,145 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   font-size: var(--fs-caption);
   font-weight: var(--fw-semibold);
   color: var(--text-muted);
+}
+
+/* 能力面板（概览页签顶部）：安装前请了解这个技能会做什么。 */
+.market-cap {
+  /* 详情体（.market-detail-body）是列向 flex 容器：卡片类区块必须 `flex: none`，
+     否则内容超出视口时会被压成一条细线（同类问题在分类栏踩过一次）。 */
+  flex: none;
+  overflow: hidden;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+
+.market-cap-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: var(--hairline) solid var(--border);
+}
+
+.market-cap-icon {
+  flex: none;
+  color: var(--warning);
+  font-size: var(--fs-body);
+}
+
+.market-cap-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+  color: var(--text);
+}
+
+.market-cap-report {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--fs-micro);
+  cursor: pointer;
+}
+
+.market-cap-report:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.market-cap-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.market-cap-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 12px;
+}
+
+.market-cap-row + .market-cap-row { border-top: var(--hairline) solid var(--border); }
+
+.market-cap-text {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.market-cap-kind {
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+  color: var(--text);
+}
+
+.market-cap-detail {
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.market-cap-level {
+  flex: none;
+  margin-top: 1px;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+
+.market-cap-level.is-high {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.market-cap-level.is-medium {
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+}
+
+.market-cap-note {
+  margin: 0;
+  padding: 8px 12px;
+  border-top: var(--hairline) solid var(--border);
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+/* 更新日志页签。 */
+.market-changelog-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.market-changelog-date {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+
+.market-changelog-text {
+  margin: 0;
+  font-size: var(--fs-body);
+  line-height: 1.7;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .market-file-list {

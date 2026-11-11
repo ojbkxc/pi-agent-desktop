@@ -6,6 +6,7 @@ import { MarkdownBody } from "@/components/MarkdownBody";
 import {
   formatBytes,
   formatDownloads,
+  formatIsoDate,
   securityBadgeClass,
   sortMarketFiles,
   type MarketFileMeta,
@@ -13,18 +14,25 @@ import {
   type MarketSecurityReport,
   type MarketSkillDetail,
 } from "./market-helpers";
+import { detectCapabilities, type Capability } from "./skill-insights";
 
 /**
  * 市场详情 + 安装确认。
  *
- * 三个页签（概览 / 文件 / 安全报告）都是从 `/api/market/skills/[id]` 一份详情里切的；
- * 文件页签点某个文件才按需拉 `/api/market/skills/[id]/file`，不把整包推给浏览器。
+ * 页签（概览 / 文件 / 安全报告，更新日志有才出现）都是从 `/api/market/skills/[id]`
+ * 一份详情里切的；文件页签点某个文件才按需拉 `/api/market/skills/[id]/file`，
+ * 不把整包推给浏览器。
  *
  * 安装前一定先给确认面板：它会写明来源、作者、版本、大小与安全结论。安装本身只 POST
  * `{ id, owner }`，落盘位置由服务端按 slug 生成。
  */
 
-type Tab = "overview" | "files" | "security";
+type Tab = "overview" | "files" | "security" | "changelog";
+
+/** 详情页签顺序：更新日志页签只在有 changelog 时追加到末尾（只能说出「这里什么都没有」的页签不值得占位）。 */
+export function detailTabKeys(hasChangelog: boolean): Tab[] {
+  return hasChangelog ? ["overview", "files", "security", "changelog"] : ["overview", "files", "security"];
+}
 
 export interface MarketSecurityTabProps {
   /** 精选技能带风险结论时编辑给出的说明；有就展示「精选说明」区块。 */
@@ -72,6 +80,91 @@ export function MarketSecurityTab({ securityNote, reports }: MarketSecurityTabPr
   );
 }
 
+/**
+ * 能力面板（概览页签顶部）：「安装前请了解：这个技能会做什么」。
+ *
+ * 每条能力都列出证据来源（文件名 / 命令 / 变量 / 主机名），读者可以自己去核对，
+ * 而不必相信这句结论。没有规则命中时整块不渲染——一块空的「这里没有风险」面板
+ * 是这些规则给不出的结论。
+ */
+export function CapabilityPanel({
+  capabilities,
+  onViewReport,
+}: {
+  capabilities: readonly Capability[];
+  /** 表头链接；省略时不渲染（面板已嵌在报告里时用）。 */
+  onViewReport?: () => void;
+}) {
+  const { t } = useI18n();
+  if (capabilities.length === 0) return null;
+  return (
+    <section className="market-cap" aria-labelledby="market-cap-title" data-testid="market-capability-panel">
+      <header className="market-cap-head">
+        <span className="market-cap-icon" aria-hidden="true">⚠</span>
+        <h3 id="market-cap-title" className="market-cap-title">{t("market.cap.title")}</h3>
+        {onViewReport && (
+          <button type="button" className="market-cap-report" data-testid="market-capability-view-report" onClick={onViewReport}>
+            {t("market.cap.viewReport")}
+          </button>
+        )}
+      </header>
+      <ul className="market-cap-list">
+        {capabilities.map((capability) => {
+          // shell 用斜杠连命令（更像命令行），其余用顿号连路径/变量（更像列表）。
+          const evidence = capability.evidence.join(capability.kind === "shell" ? " / " : "、");
+          return (
+            <li key={capability.kind} className="market-cap-row" data-testid={`market-capability-${capability.kind}`}>
+              <span className="market-cap-text">
+                <span className="market-cap-kind">{t(`market.cap.${capability.kind}`)}</span>
+                <span className="market-cap-detail">{t(`market.cap.${capability.kind}.detail`, { evidence })}</span>
+              </span>
+              <span className={`market-cap-level is-${capability.level}`}>{t(`market.cap.level.${capability.level}`)}</span>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="market-cap-note">{t("market.cap.note")}</p>
+    </section>
+  );
+}
+
+/**
+ * 详情「更新日志」页签的正文（从 SkillMarketDetail 抽出以便单测）。
+ * changelog 不存在时页签本身不会出现（见调用处），这里的兜底文案覆盖边界情形。
+ */
+export function MarketChangelogTab({
+  changelog,
+  version,
+}: {
+  changelog?: MarketSkillDetail["changelog"];
+  /** 上游更新说明没写版本号时，用技能当前版本兜底。 */
+  version?: string;
+}) {
+  const { t } = useI18n();
+  if (!changelog) {
+    return (
+      <div className="market-detail-body">
+        <p className="scheduled-hint">{t("market.detail.noChangelog")}</p>
+      </div>
+    );
+  }
+  const releaseVersion = changelog.version || version;
+  const published = formatIsoDate(changelog.publishedAt);
+  return (
+    <div className="market-detail-body" data-testid="market-changelog-tab">
+      <div className="market-changelog-head">
+        {releaseVersion && (
+          <span className="market-badge is-unknown">
+            {releaseVersion.startsWith("v") ? releaseVersion : `v${releaseVersion}`}
+          </span>
+        )}
+        {published && <span className="market-changelog-date">{published}</span>}
+      </div>
+      <p className="market-changelog-text">{changelog.text}</p>
+    </div>
+  );
+}
+
 interface Props {
   selectedId: string | null;
   /** 「已安装」页签里那一行（没有详情接口的上下文时兜底展示）。 */
@@ -80,7 +173,6 @@ interface Props {
   onInstalled: () => void;
   onRevealInstalled?: (path: string) => void;
 }
-
 interface DetailState {
   id: string;
   status: "loading" | "ready" | "error";
@@ -226,11 +318,25 @@ export function SkillMarketDetail({
 
   const files = useMemo(() => sortMarketFiles(detail?.skill?.files ?? []), [detail?.skill?.files]);
 
+  // 能力识别吃的是这份详情自己的 SKILL.md 正文 + frontmatter + 文件清单，纯函数、无副作用。
+  const capabilities = useMemo<Capability[]>(() => {
+    const current = detail?.skill;
+    if (!current) return [];
+    return detectCapabilities({
+      markdown: current.description,
+      frontmatter: current.descriptionFrontmatter,
+      files: current.files,
+    });
+  }, [detail?.skill]);
+
   if (!selectedId) return null;
 
   const skill = detail?.status === "ready" ? detail.skill : undefined;
   const installed = skill?.installState === "installed";
   const installedPath = skill?.installedInfo?.dirName;
+
+  // 更新日志页签只在有 changelog 时出现：只能说出「这里什么都没有」的页签不值得占一个位置。
+  const detailTabs: Tab[] = detailTabKeys(Boolean(skill?.changelog));
 
   return (
     <aside className="market-detail" aria-label={t("market.detailLabel")}>
@@ -333,7 +439,7 @@ export function SkillMarketDetail({
           )}
 
           <div className="market-tabs market-detail-tabs" role="tablist" aria-label={t("market.detailTabsLabel")}>
-            {(["overview", "files", "security"] as const).map((value) => (
+            {detailTabs.map((value) => (
               <button
                 key={value}
                 type="button"
@@ -342,13 +448,16 @@ export function SkillMarketDetail({
                 className={`market-tab${tab === value ? " is-active" : ""}`}
                 onClick={() => setTab(value)}
               >
-                {t(`market.tab.${value}`, value === "files" ? { count: files.length } : undefined)}
+                {value === "changelog"
+                  ? t("market.changelog")
+                  : t(`market.tab.${value}`, value === "files" ? { count: files.length } : undefined)}
               </button>
             ))}
           </div>
 
           {tab === "overview" && (
             <div className="market-detail-body">
+              <CapabilityPanel capabilities={capabilities} onViewReport={() => setTab("security")} />
               {skill.descriptionFrontmatter && Object.keys(skill.descriptionFrontmatter).length > 0 && (
                 <div className="market-frontmatter">
                   <p className="market-section-title">{t("market.frontmatter")}</p>
@@ -361,12 +470,6 @@ export function SkillMarketDetail({
                 </div>
               ) : (
                 <p className="scheduled-hint">{t("market.noDescription")}</p>
-              )}
-              {skill.changelog && (
-                <div className="market-frontmatter">
-                  <p className="market-section-title">{t("market.changelog")}</p>
-                  <p className="scheduled-hint">{skill.changelog.text}</p>
-                </div>
               )}
             </div>
           )}
@@ -410,6 +513,10 @@ export function SkillMarketDetail({
 
           {tab === "security" && (
             <MarketSecurityTab securityNote={skill.securityNote} reports={skill.securityReports} />
+          )}
+
+          {tab === "changelog" && (
+            <MarketChangelogTab changelog={skill.changelog} version={skill.version} />
           )}
         </>
       )}
