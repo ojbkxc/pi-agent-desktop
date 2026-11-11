@@ -24,7 +24,9 @@ interface SkillsApiResponse {
 
 function parseLimit(value: unknown): number {
   const num = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(num)) return DEFAULT_LIMIT;
+  // Number(null) / Number("") 都是 0（有限数）：缺省或空值不能当成「用户给了 0」，
+  // 否则会被下面的 MIN_LIMIT 夹成每页 1 条。必须显式要求 > 0 才采信，否则回落默认值。
+  if (!Number.isFinite(num) || num <= 0) return DEFAULT_LIMIT;
   return Math.min(MAX_LIMIT, Math.max(MIN_LIMIT, Math.floor(num)));
 }
 
