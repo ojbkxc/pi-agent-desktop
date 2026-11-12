@@ -114,89 +114,26 @@ jobs:
           tagName: v__VERSION__
           releaseName: pi-agent-desktop v__VERSION__
           releaseBody: |
-            ## Pi Agent Desktop 0.8.2 (fork) — 2026-11-12
-
-            Incremental update to the same 0.8.2 build (same version number, re-published).
-
-            ### New
-
-            - **Two test-case-generation skills are built in.** `generate-test-cases-skill` (turns a requirement document into test-case XMind files, with a persistent memory and a self-learning loop) and `testcase-playbook` (a 10-method design playbook with a flowchart node-coverage matrix, quality gates, Excel / XMind output and copy-paste prompt templates) now ship with the app and are usable in any project session without installing anything. Settings › Skills lists them under a **built-in** group, read-only: the switch is greyed out on purpose, because their files live in the app's resource directory and every upgrade rebuilds them.
-            - **Network proxy for session traffic** (Settings › General). Node's `fetch` does not read the system proxy, and every model request leaves from the local server — so until now a system proxy made no difference here. Pick **direct** (the default: nothing changes), **system** (Windows registry / macOS network preferences) or **manual** with a URL. It applies at once, without a restart, and to the skill market and downloads too. It deliberately does not cover the app's own update checks, which run in the desktop shell.
-
-            Bundled components: pi 1.5.0, pi-web 0.10.0.
-
-            ---
-
-            ## Pi Agent Desktop 0.8.2（fork）— 2026-11-12
-
-            同一 0.8.2 构建的增量更新（版本号不变，重新发布）。
-
-            ### 新增
-
-            - **内置两个测试用例生成技能。** `generate-test-cases-skill`（从需求文档生成测试用例 XMind，带持久化记忆与自学习闭环）与 `testcase-playbook`（10 种测试设计方法 + 流程图节点覆盖矩阵 + 质量门禁 + Excel / XMind 输出 + 可复制的提示词模板）随应用一起打包，任意项目会话开箱可用，不需要安装。设置 › 技能 里它们自成一类「内置」、只读：开关是刻意置灰的 —— 它们的文件在应用资源目录里，每次升级都会重建。
-            - **会话流量的网络代理**（设置 › 通用）。node 的 `fetch` 不读系统代理，而所有模型请求都由本机服务端发出 —— 所以在此之前，系统代理对本应用没有任何作用。可选 **直连**（默认，行为不变）、**跟随系统**（Windows 注册表 / macOS 网络偏好）或**手动**填地址；改完立即生效、无需重启，技能市场与各类下载同样走它。它刻意不覆盖应用自身的更新检查（那条路在桌面壳里）。
-
-            内置组件版本：pi 1.5.0、pi-web 0.10.0。
-
-            ---
-
-            ## Pi Agent Desktop 0.8.2 (fork) — 2026-11-11
-
-            Incremental update to the same 0.8.2 build (same version number, re-published).
-
-            ### New
-
-            - **The skill market now matches cc-haha end to end.** Search plus three filters (source / security state / install state), a 13-category rail with per-category counts, a "398 curated skills · list updated 2026-10-01" summary line, skeleton cards and infinite scroll. The curated list ships as a bundled snapshot (browsing works offline); the live two-registry search is still there.
-            - **Detail: "Before you install — what this skill does."** Rules read the `SKILL.md` and the file list and report running commands, registering hooks, needing secrets, reaching the network, writing files, or depending on local binaries, each with the evidence and a risk level.
-            - **Detail: a Changelog tab**, shown when upstream provides one.
-            - **Market: a source health bar** — each registry shows ok / degraded / unavailable / cached.
-
-            ### Fixed
-
-            - **The composer's Agent Team switch used to jump to Settings when clicked.** The old preference key meant "use a team for the next message" and old sends wrote `"false"` into it; once the same key was read as "is the feature available at all", that leftover disabled the feature, greyed the switch and sent its click to Settings. Migrated to a new key (old value void, default on) and made the switch a real switch: one click arms this message, send clears it, the first arming asks once about cost, and only a globally-off feature leads to Settings.
-            - A curated skill could be flagged "at risk" in the list but reported "no risk found" on its detail page; the detail now takes the curated verdict while keeping the upstream file list and scan reports.
-            - The market's filter row and category rail could be squeezed flat in a narrow column.
-            - Two list APIs answered with a single row when the page size was omitted: `Number(null)` is `0`, and `0` is finite, so the "did the caller pass a limit?" check let a missing limit through as a 1-row page. The market list and the skill search now require an explicitly positive value and fall back to their documented defaults (12 and 50).
-
-            Bundled components: pi 1.5.0, pi-web 0.10.0.
-
-            ---
-
-            ## Pi Agent Desktop 0.8.2（fork）— 2026-11-11
-
-            同一 0.8.2 构建的增量更新（版本号不变，重新发布）。
-
-            ### 新增
-
-            - **技能市场补齐到 cc-haha 的完整形态。** 搜索加三个筛选（来源 / 安全状态 / 安装状态）、13 类分类栏与各类计数、「共 398 个精选技能 · 清单更新于 2026-10-01」、骨架卡片与滚动加载。精选清单以打包快照随应用发布（离线可浏览）；实时双源检索仍在。
-            - **详情新增「安装前请了解：这个技能会做什么」。** 按规则读取 `SKILL.md` 与文件清单，报告 执行命令 / 注册 Hook / 需要密钥 / 访问网络 / 写入文件 / 依赖本地命令，每条附证据与风险等级。
-            - **详情新增「更新日志」页签**，上游提供时出现。
-            - **市场新增来源健康状态条** —— 每个注册源显示 正常 / 降级 / 不可用 / 缓存。
-
-            ### 修复
-
-            - **聊天页的 Agent 团队开关曾经点一下就跳到设置。** 旧偏好键的语义是「下一条消息用团队」，旧版本每次发送都往里写 `"false"`；同一个键改读成「功能是否可用」之后，那些遗留值把功能静默关闭，开关变灰、点击被引到设置。已迁移到新键（旧值作废、默认开启），并把入口做成真正的开关：点一下勾选本条消息，发送后自动复位，首次开启有一次成本提示，只有功能被全局关闭时才引导去设置。
-            - 精选技能可能在列表里标为「存在风险」、详情页却显示「未发现风险」；详情页现在以精选清单的审核结论为准，同时保留下游的文件清单与扫描明细。
-            - 市场筛选栏与分类栏在窄列下会被压扁的布局问题。
-            - 两个列表接口在缺省分页大小时只回一行：`Number(null)` 是 `0`，而 `0` 是有限数，于是「调用方传没传 limit」的判断把缺省当成了「每页 1 条」。市场列表与技能搜索现在要求显式大于 0，缺省分别回落 12 与 50。
-
-            内置组件版本：pi 1.5.0、pi-web 0.10.0。
-
-            ---
-
             ## Pi Agent Desktop 0.8.2 (fork)
 
-            This is the **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2.
+            The **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2. Same version number, re-published with the additions below.
 
-            ### New
+            ### In this build
 
-            - **Skill market.** A full page that browses two registries (ClawHub and SkillHub), searches them, previews a skill's `SKILL.md`, file list and security reports, and installs it into `~/.pi/agent/skills/`. Installation verifies every file against the registry checksum and only ever writes directories it can remove again; a skill you placed there by hand is never touched.
-            - **The sidebar entry that used to open Teams now opens the market** — the team workbench is reached from the session header strip, as in cc-haha.
+            - **Skill market.** A full page over two registries (ClawHub + SkillHub): search, source / security / install-state filters, a 13-category rail with counts, a bundled 398-skill curated snapshot (browsing works offline), skeleton cards, infinite scroll, detail with file preview, install safety checks and a "what this skill does" panel. Installs verify every file against the registry checksum and only ever write directories they can remove again.
+            - **Agent Teams.** Your messages can ask for a team; teammates are real agents with the same built-in extensions a normal session gets (codemode / tool-search / MCP / LSP) plus a team mailbox, and a read-only teammate stays read-only through MCP. Workload is visible and assignable, teams can be stopped and reclaimed explicitly, and a plan needs your approval before members launch.
+            - **Two test-case-generation skills are built in.** `generate-test-cases-skill` (requirement document → test-case XMind, with persistent memory) and `testcase-playbook` (10 design methods + flowchart node-coverage matrix + quality gates + Excel / XMind output). Usable in any project session, no install. Settings › Skills lists them as read-only **built-in**.
+            - **Network proxy for session traffic** (Settings › General). Node's `fetch` ignores the system proxy, so before this a system proxy had no effect on model requests. Choose direct (default) / system / manual; it applies at once and covers the skill market and downloads too. The app's own update checks run in the desktop shell and are unaffected.
+            - **Remote access.** Configurable listener port, a Cloudflare tunnel (quick or named, `cloudflared` pinned and SHA-256 verified), plus Tailscale and the end-to-end encrypted relay.
+            - **Lean mode** (Settings › General): a project session loads no extensions, skills, prompt templates or context files, keeping only the built-in coding tools.
 
-            ### Fixed
+            ### Fixes
 
-            - Reading a session that had been compacted could answer HTTP 500 when a historical assistant message carried no usage block; context usage is now reported as unknown instead.
-            - Session switching logged a browser console error for every session that is not part of a team; that is now an ordinary empty answer.
+            - The composer's Agent Team switch used to jump to Settings when clicked — an old preference key was read with a new meaning. Migrated to a new key; the switch now arms one message, resets on send, and asks about cost once.
+            - Two list APIs (market, skill search) answered with a single row when the page size was omitted: `Number(null)` is `0`, and `0` is finite, so a missing limit became a 1-row page.
+            - A curated skill could read "at risk" in the list but "no risk found" on its detail page.
+            - Reading a compacted session could answer HTTP 500 when a historical message carried no usage block.
+            - Tool-result details the UI reads were stripped before reaching the browser; `entry_appended` reaches it again.
 
             Bundled components: pi 1.5.0, pi-web 0.10.0.
 
@@ -204,111 +141,24 @@ jobs:
 
             ## Pi Agent Desktop 0.8.2（fork）
 
-            这是 pi-agent-desktop 的 **ojbkxc fork**，基于上游 0.8.2 构建。
+            这是 pi-agent-desktop 的 **ojbkxc fork**，基于上游 0.8.2 构建。版本号不变，随下列新增内容重新发布。
 
-            ### 新增
+            ### 本版包含
 
-            - **技能市场。** 整页浏览两个注册源（ClawHub 与 SkillHub），可搜索、预览 `SKILL.md`、文件清单与安全报告，并安装到 `~/.pi/agent/skills/`。安装会逐文件校验注册源给出的校验和，且只写自己可再次删除的目录；手工放进该目录的技能不会被碰。
-            - **侧栏原本打开「团队」的入口现在打开市场** —— 团队工作台改从会话头部团队条进入，与 cc-haha 一致。
+            - **技能市场。** 整页浏览两个注册源（ClawHub + SkillHub）：搜索、来源 / 安全状态 / 安装状态三个筛选、13 类分类栏与计数、398 条精选离线快照、骨架卡片与滚动加载、详情含文件预览与「安装前请了解」能力面板。安装逐文件校验注册源校验和，且只写自己可再次删除的目录。
+            - **Agent Teams。** 每条消息可选择用团队处理；成员是"真" agent，加载与普通会话同一批内置扩展（codemode / tool-search / MCP / LSP）外加团队邮箱，只读成员在 MCP 侧同样只读。忙闲可见并可一键调度，团队可显式停止与回收，计划需你批准后才派成员。
+            - **内置两个测试用例生成技能。** `generate-test-cases-skill`（需求文档 → 测试用例 XMind，带持久化记忆）与 `testcase-playbook`（10 种设计方法 + 流程图节点覆盖矩阵 + 质量门禁 + Excel / XMind 输出）。任意项目会话开箱可用，无需安装；设置 › 技能 里显示为只读的**内置**。
+            - **会话流量的网络代理**（设置 › 通用）。node 的 `fetch` 不读系统代理，所以在此之前系统代理对模型请求没有任何作用。可选 直连（默认）/ 跟随系统 / 手动；改完立即生效，技能市场与各类下载同样走它。应用自身的更新检查在桌面壳里，不受影响。
+            - **远程访问。** 监听端口可配置、Cloudflare 隧道（快速或命名，`cloudflared` 固定版本 + SHA-256 校验），以及 Tailscale 与端到端加密中继。
+            - **极简档**（设置 › 通用）：项目会话不加载扩展、技能、提示模板与上下文文件，只留内置编码工具。
 
             ### 修复
 
-            - 读取被压缩过的会话时，若某条历史 assistant 消息没有 usage 字段，状态接口会返回 HTTP 500；现在把上下文用量如实报为未知。
-            - 切换到不属于任何团队的会话时，浏览器控制台会多一条错误；现在只是一份普通的空结果。
-
-            内置组件版本：pi 1.5.0、pi-web 0.10.0。
-
-            ---
-
-            ## Pi Agent Desktop 0.8.2 (fork)
-
-            This is the **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2.
-
-            ### New
-
-            - **Team workload is visible and actionable.** See member availability and queued work, then make a first assignment, reassign work, or add a member with one action. Delivery receipts report the real result instead of merely closing the panel.
-            - **Teams can be stopped and reclaimed explicitly.** Inspect directory usage and recent activity, with an idle notice that never stops or deletes anything automatically. Reclaim requires a second confirmation, permanently removes team records, and preserves member session transcripts (`.jsonl`) and artifacts.
-
-            Bundled components: pi 1.5.0, pi-web 0.10.0.
-
-            ---
-
-            ## Pi Agent Desktop 0.8.2（fork）
-
-            这是 pi-agent-desktop 的 **ojbkxc fork**，基于上游 0.8.2 构建。
-
-            ### 新增
-
-            - **团队忙闲可见，并可一键调度。** 查看成员忙闲与任务积压，一键完成首次分配、改派或加人；真实投递回执报告实际结果，而不是只关闭面板。
-            - **团队可显式停止和回收。** 查看目录占用与最近活动；闲置提示绝不会自动停止或删除。回收需二次确认，永久删除团队记录，同时保留成员会话记录（`.jsonl`）与产物。
-
-            内置组件版本：pi 1.5.0、pi-web 0.10.0。
-
-            ---
-
-            ## Pi Agent Desktop 0.8.3 (fork)
-
-            This is the **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2.
-
-            ### New
-
-            - **Teammates are real agents now.** A spawned team member loads the same built-in extensions a normal session does — `codemode` / `tool-search` / `mcp` (so teammates can call MCP tools and benefit from deferred tool declarations) plus `lsp` for code navigation and a team **mailbox** (`team_message` / `team_status` / `team_wait` / `team_ticket` …). Dispatching a teammate from a teammate is impossible by construction, not merely intercepted.
-            - **Read-only teammates stay read-only through MCP.** The read-only MCP policy now reads a subagent's own tool snapshot, so `explore` / `plan` teammates can no longer write through an MCP server.
-            - **Lean mode.** A global switch (Settings › General › Chat) that drops extensions, skills, prompt templates and context files from a project session, keeping only the built-in coding tools — and teammates spawned while it is on are narrowed the same way.
-            - **Agent Team switch.** On by default; each message can ask for a team. Slash commands and `!shell` are never wrapped.
-            - **Carried over from the previous build:** Team plan approval now launches the members it promised, and teammates get an identity (`PI_AGENT_NAME` / `PI_TEAM_NAME`). The Agent team swimlane view (`?view=teams`) and the built-in `lsp` / `pi-team` extensions ship as before.
-
-            ### Notes
-
-            - The two extensions resolve from their Git sources, so a plain `clone` + `npm ci` is enough — no sibling checkout required.
-            - Updates point at **this fork's** releases.
-
-            ### Also in this build
-
-            - **Reach this server from anywhere (Cloudflare tunnel).** Settings › General › **Server** now holds the listener port and a Cloudflare tunnel, so your own computer can open this server from a network that is not the LAN. Authentication is the existing web password, and the tunnel hostname is trusted only while the tunnel is online *and* a password is set. Quick tunnels get a new `trycloudflare.com` address each time they start; named tunnels take a Tunnel Token. The `cloudflared` binary is pinned and SHA-256 verified (`npm run prepare:cloudflared`, or the Download button in Settings).
-            - **The server port is configurable** (1024–65535, applies on restart).
-
-            ### Fixed
-
-            - Tool-result details the UI reads — the saved-file card, the MCP `server/tool` label — were being stripped before they reached the browser.
-            - A team member's session no longer loses its sidebar completion notification and unread suppression; the sidebar running count and the swimlane tickets/acks read correctly again.
-            - `entry_appended` reaches the browser again, so an extension write while the session is idle refreshes the transcript instead of waiting for a manual reload.
-            - A network blip mid-run no longer leaves a tool stuck on "running" with a missing result card until the run ends.
-            - The outgoing-HTTP idle timeout is 10 minutes instead of 5, and configurable with `PI_WEB_HTTP_IDLE_TIMEOUT_MS`.
-
-            Bundled components: pi 1.5.0, pi-web 0.10.0.
-
-            ---
-
-            ## Pi Agent Desktop 0.8.2（fork）
-
-            这是 pi-agent-desktop 的 **ojbkxc fork**，基于上游 0.8.2 构建。
-
-            ### 新增
-
-            - **团队成员现在是"真" agent。** 派出的成员会加载和普通会话同一批内置扩展 —— `codemode` / `tool-search` / `mcp`（成员因此能调 MCP 工具，也用得上延迟工具声明的省 token 机制）、用于代码导航的 `lsp`，以及团队**邮箱**（`team_message` / `team_status` / `team_wait` / `team_ticket` 等）。成员再派成员是**结构性不可能**，不只是被拦截。
-            - **只读成员在 MCP 侧也是只读的。** 只读 MCP 策略现在会读子会话自己的工具快照，`explore` / `plan` 成员不能再通过 MCP 服务器写入。
-            - **极简档。** 全局开关（设置 › 通用 › 聊天）：项目会话不加载扩展、技能、提示模板与上下文文件，只保留内置编码工具；开启期间派出的成员同样收窄。
-            - **Agent Team 开关。** 默认打开，每条消息可选择用团队处理；斜杠命令与 `!shell` 永远不被包装。
-            - **沿用上一版的内容**：团队计划审批后会真的把成员派出去；成员拿到身份（`PI_AGENT_NAME` / `PI_TEAM_NAME`）。团队泳道图（`?view=teams`）与内置的 `lsp` / `pi-team` 扩展照旧。
-
-            ### 说明
-
-            - 两个扩展的依赖走 Git 源，clone 后 `npm ci` 即可，**不需要三仓并列**。
-            - 更新源指向**本 fork** 的 Release。
-
-            ### 本版同样包含
-
-            - **从任何网络访问这台服务器（Cloudflare 隧道）。** 设置 › 通用 › **服务器**现在同时管监听端口和 Cloudflare 隧道，自己的电脑在**非局域网**下也能打开这个服务。鉴权沿用现有 web 密码；隧道域名只在**隧道在线**且**已设密码**时才被信任。quick 隧道每次启动会拿到新的 `trycloudflare.com` 地址；named 隧道填 Tunnel Token。`cloudflared` 二进制是固定版本 + SHA-256 校验（`npm run prepare:cloudflared`，或设置页里的下载按钮）。
-            - **端口可配置**（1024–65535，重启后生效）。
-
-            ### 修复
-
-            - 界面真正要读的工具结果字段被抹掉了 —— 已保存文件卡片、MCP 的 `server/tool` 标签。
-            - 团队成员的会话不再丢侧栏完成通知与未读抑制；侧栏运行数徽标、泳道 tickets/acks 恢复正确。
-            - `entry_appended` 重新送达浏览器：扩展在空闲时写入条目会自动刷新转写，不用手动重载。
-            - 一轮运行中途网络抖动，不再把工具卡在"运行中"、结果卡片缺失直到本轮结束。
-            - 出站 HTTP 空闲超时由 5 分钟改为 10 分钟，可用 `PI_WEB_HTTP_IDLE_TIMEOUT_MS` 配置。
+            - 聊天页的 Agent Team 开关曾点一下就跳设置 —— 旧偏好键被以新语义读取。已迁移到新键；开关现在只勾选本条消息，发送后复位，首次开启提示一次成本。
+            - 两个列表接口在缺省分页大小时只回一行：`Number(null)` 是 `0`，而 `0` 是有限数，于是缺省被当成每页 1 条。
+            - 精选技能可能在列表标「存在风险」、详情却显示「未发现风险」。
+            - 读取被压缩过的会话时，历史消息缺 usage 字段会让状态接口 500。
+            - 界面要读的工具结果字段曾被抹掉；`entry_appended` 重新送达浏览器。
 
             内置组件版本：pi 1.5.0、pi-web 0.10.0。
           releaseDraft: true
