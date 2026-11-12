@@ -12,8 +12,9 @@ import { useI18n } from "@/hooks/useI18n";
  * （`capabilityMenuModel.ts:391-408`：the row leads there instead of arming a mode the
  * session would not honour）。只有成员会话 / 极简档才整行隐藏。
  *
- * - `available === true`：**真开关**（`role="switch"` + `aria-checked`），点击 → `onToggle()`；
- *   armed 时高亮。用户口径：「聊天页这个应该是个开关，打开后当前发送的就带着」。
+ * - `available === true`：**真开关**（`role="switch"` + `aria-checked`），右侧带一条 cc-haha
+ *   形态的 Switch 轨道（`composer-teams-toggle-track`），点击 → `onToggle()`；armed 时轨道填
+ *   accent、滑块右移。用户口径：「聊天页这个应该是个开关，打开后当前发送的就带着」。
  * - `available === false`：置灰（不做死按钮）——鼠标悬停用 tooltip 说明原因，点击跳设置
  *   （`onOpenSettings`）。这一档只是一个**去设置的动作行**，不冒充开关，所以不落 role /
  *   aria-checked。原因由 `disabledReason` 决定（chatOnly / disabled / lean / memberSession）。
@@ -114,6 +115,14 @@ export function AgentTeamToggle({ armed, available, disabledReason, onToggle, on
         <path d="M16 3.13a4 4 0 0 1 0 7.75" />
       </svg>
       <span className="composer-teams-toggle-label">{label}</span>
+      {/* 真·Switch 轨道（照 cc-haha 的 Switch：小号 h-4 w-7 + 圆形滑块）；只做视觉，
+          状态与点击语义都在外层 button 上（role=switch + aria-checked）。
+          不可用时整行仍显示，但轨道不画 —— 那只是一行「去设置」。 */}
+      {available && (
+        <span className="composer-teams-toggle-track" aria-hidden="true">
+          <span className="composer-teams-toggle-knob" />
+        </span>
+      )}
     </button>
   );
 }

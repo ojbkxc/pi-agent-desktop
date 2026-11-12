@@ -33,7 +33,6 @@ const {
   AGENT_TEAMS_ENABLED_DEFAULT,
   parseAgentTeamsEnabled,
   shouldDisarmAgentTeam,
-  shouldResetArmedOnSessionChange,
   setAgentTeamsEnabled,
   useAgentTeamsEnabled,
   setAgentTeamsArmed,
@@ -41,6 +40,9 @@ const {
   armAgentTeam,
   disarmAgentTeam,
   useAgentTeamsArmed,
+  resetAllAgentTeamsArmed,
+  agentTeamScopeKey,
+  UNSCOPED_AGENT_TEAM_KEY,
 } = await jiti.import("./useAgentTeamsEnabled.ts", { default: false });
 const { APP_PREF_KEYS, getPref } = await jiti.import("@/lib/app-prefs.ts", { default: false });
 const { withAgentTeamRequest } = await jiti.import("@/lib/agent-team-request.ts", { default: false });
@@ -50,7 +52,7 @@ const guide = await jiti.import("@/lib/agent-teams-guide.ts", { default: false }
 function resetAll() {
   storage.clear();
   setAgentTeamsEnabled(false);
-  disarmAgentTeam(null);
+  resetAllAgentTeamsArmed();
   guide.resetAgentTeamGuide();
 }
 
@@ -65,9 +67,10 @@ test("全局可用性默认开；单条 armed 默认关", () => {
   for (const raw of ["", "0", "null", "off"]) {
     assert.equal(parseAgentTeamsEnabled(raw), false, `stored ${JSON.stringify(raw)}`);
   }
-  // armed 默认关：没勾过就是关。
-  disarmAgentTeam(null);
-  assert.equal(isAgentTeamsArmed(), false, "armed 默认关");
+  // armed 默认关：没勾过就是关（任何会话都一样）。
+  assert.equal(isAgentTeamsArmed("s1"), false, "armed 默认关");
+  assert.equal(isAgentTeamsArmed(), false, "无会话键时也读作关");
+  assert.equal(UNSCOPED_AGENT_TEAM_KEY, "unscoped", "无键时的归属键与真实会话 id 不会撞");
 });
 
 // ───────────────────────── 2. 两态互不干扰 ─────────────────────────
@@ -88,9 +91,9 @@ test("全局可用性与单条 armed 互不干扰，且只有全局落盘", () =
   resetAll();
   // 关掉全局，不该动 armed。
   setAgentTeamsEnabled(false);
-  assert.equal(isAgentTeamsArmed(), false);
+  assert.equal(isAgentTeamsArmed("s1"), false);
   armAgentTeam("s1");
-  assert.equal(isAgentTeamsArmed(), true, "armed 与全局无关地打开");
+  assert.equal(isAgentTeamsArmed("s1"), true, "armed 与全局无关地打开");
   assert.equal(getPref(APP_PREF_KEYS.agentTeamsEnabled), "false", "全局偏好仍是关");
 
   // armed 不落盘：storage 里没有任何和 armed 有关的键。
@@ -104,7 +107,7 @@ test("全局可用性与单条 armed 互不干扰，且只有全局落盘", () =
   // 反过来：开关全局不影响 armed。
   armAgentTeam("s1");
   setAgentTeamsEnabled(true);
-  assert.equal(isAgentTeamsArmed(), true, "改全局不动 armed");
+  assert.equal(isAgentTeamsArmed("s1"), true, "改全局不动 armed");
   assert.equal(getPref(APP_PREF_KEYS.agentTeamsEnabled), "true");
   assert.equal(typeof useAgentTeamsEnabled, "function");
 });
@@ -124,31 +127,68 @@ test("只有真的带上团队块的消息才消耗 armed；命令类消息豁�
 
   // 端到端：arm → 发普通消息 → 复位。
   armAgentTeam("s1");
-  assert.equal(isAgentTeamsArmed(), true);
+  assert.equal(isAgentTeamsArmed("s1"), true);
   disarmAgentTeam("s1");
-  assert.equal(isAgentTeamsArmed(), false, "一条带团队块的消息发出去后复位");
+  assert.equal(isAgentTeamsArmed("s1"), false, "一条带团队块的消息发出去后复位");
   disarmAgentTeam("s1");
-  assert.equal(isAgentTeamsArmed(), false, "重复复位是 no-op");
+  assert.equal(isAgentTeamsArmed("s1"), false, "重复复位是 no-op");
 });
 
 test("arm/disarm 的读写与幂等", () => {
   resetAll();
   setAgentTeamsArmed(true, "s1");
-  assert.equal(isAgentTeamsArmed(), true);
+  assert.equal(isAgentTeamsArmed("s1"), true);
   setAgentTeamsArmed(true, "s1");
-  assert.equal(isAgentTeamsArmed(), true, "重复 arm 保持真");
+  assert.equal(isAgentTeamsArmed("s1"), true, "重复 arm 保持真");
   disarmAgentTeam("s1");
+  assert.equal(isAgentTeamsArmed("s1"), false);
+});
+
+// ───────────────────────── 4. 每会话各自记忆（2026-11-12 用户口径） ─────────────────────────
+
+test("armed 按会话分别记忆：切走再切回，仍是离开时的样子", () => {
+  resetAll();
+  // A 勾上，B 不动。
+  armAgentTeam("session-A");
+  assert.equal(isAgentTeamsArmed("session-A"), true);
+  // 切到 B：B 是关的（不串台）。
+  assert.equal(isAgentTeamsArmed("session-B"), false, "切到没勾过的会话必须是关，不能把 A 的 armed 串过去");
+  // 在 B 上也勾上。
+  armAgentTeam("session-B");
+  assert.equal(isAgentTeamsArmed("session-B"), true);
+  // 切回 A：仍是离开时的打开状态。
+  assert.equal(isAgentTeamsArmed("session-A"), true, "切回原会话要恢复该会话自己的 armed");
+  // 在 A 上发一条带团队块的消息：只复位 A。
+  disarmAgentTeam("session-A");
+  assert.equal(isAgentTeamsArmed("session-A"), false);
+  assert.equal(isAgentTeamsArmed("session-B"), true, "复位只作用于当前会话，不影响别的会话");
+});
+
+test("无会话键（极窄路径）落在 unscoped 上，不污染任何真实会话", () => {
+  resetAll();
+  armAgentTeam();
+  assert.equal(isAgentTeamsArmed(), true);
+  assert.equal(isAgentTeamsArmed("session-A"), false, "unscoped 的 armed 不能被真实会话读到");
+  disarmAgentTeam();
   assert.equal(isAgentTeamsArmed(), false);
 });
 
-// ───────────────────────── 4. 会话切换重算 ─────────────────────────
+test("agentTeamScopeKey：真实会话用 id，新建会话用 new:<cwd>（跨「点新建」保持）", () => {
+  assert.equal(agentTeamScopeKey("sess-1", "/repo"), "sess-1", "有会话 id 时用 id");
+  assert.equal(agentTeamScopeKey(null, "/repo"), "new:/repo", "没会话 id 时用 cwd 派生的稳定键");
+  assert.equal(agentTeamScopeKey("  sess-2  ", null), "sess-2", "trim 掉空白");
+  assert.equal(agentTeamScopeKey(null, null), null, "既没 id 也没 cwd → 无键");
+  assert.equal(agentTeamScopeKey(undefined, "  "), null);
 
-test("会话键变化时 armed 需要重置；同键不动", () => {
-  assert.equal(shouldResetArmedOnSessionChange("A", "B"), true, "换会话 → 重置");
-  assert.equal(shouldResetArmedOnSessionChange(null, "A"), true, "新会话落地 → 重置");
-  assert.equal(shouldResetArmedOnSessionChange("A", null), true, "会话清空 → 重置");
-  assert.equal(shouldResetArmedOnSessionChange("A", "A"), false, "同一会话不动 armed");
-  assert.equal(shouldResetArmedOnSessionChange(null, null), false, "都没会话也不动");
+  // 关键行为：连续点两次「新建」会换草稿键（draftId 不同），但 agentTeamScopeKey 不变，
+  // 所以勾上的团队不会丢 —— 这正是用户报的那条。
+  resetAll();
+  const firstNew = agentTeamScopeKey(null, "/repo");
+  const secondNew = agentTeamScopeKey(null, "/repo");
+  assert.equal(firstNew, secondNew);
+  armAgentTeam(firstNew);
+  assert.equal(isAgentTeamsArmed(secondNew), true, "再点新建后仍是勾着的");
+  assert.notEqual(`new:${crypto.randomUUID()}:/repo`, `new:${crypto.randomUUID()}:/repo`, "草稿键每次都不一样（对照）");
 });
 
 // ───────────────────────── 5. 一次性发现引导（两态） ─────────────────────────
@@ -179,20 +219,22 @@ test("发现引导：既没看过也没拒绝过才展示；看过 / 拒绝两�
 
 // ───────────────────────── 接线断言（hook 无法在无 DOM 下运行） ─────────────────────────
 
-test("hook 接线：两个独立 store、armed 默认 false、会话切换显式重置", async () => {
+test("hook 接线：两个独立 store、armed 按会话键取值、切会话不清", async () => {
   const source = await readFile(new URL("./useAgentTeamsEnabled.ts", import.meta.url), "utf8");
   // 全局可用性：默认开 + 服务端快照用默认常量。
   assert.match(source, /useSyncExternalStore\(subscribeEnabled, enabledSnapshot, \(\) => AGENT_TEAMS_ENABLED_DEFAULT\)/);
-  // 单条 armed：默认 false + 内存 store。
-  assert.match(source, /useSyncExternalStore\(subscribeArmed, armedSnapshot, \(\) => false\)/);
-  // 会话切换：用纯函数判断键是否变化，变化时在 effect 里显式重置（不在渲染期赋模块变量）。
-  assert.match(source, /shouldResetArmedOnSessionChange\(previousKeyRef\.current, key\)/);
-  assert.match(source, /if \(keyChanged\) setAgentTeamsArmed\(false, key\)/);
-  // 切会话的第一帧直接读成关，避免闪一下上一条的 armed。
-  assert.match(source, /return keyChanged \? false : armedNow/);
+  // 单条 armed：订阅版本号（任何会话改动都重渲染），再按当前 key 从 Map 取值。
+  assert.match(source, /useSyncExternalStore\(subscribeArmed, armedVersionSnapshot, \(\) => 0\)/);
+  assert.match(source, /return armedBySession\.get\(key\) === true;/);
+  // 切会话**不再**清 armed：源码里不该再有「keyChanged → setAgentTeamsArmed(false)」那条路径。
+  assert.doesNotMatch(source, /shouldResetArmedOnSessionChange/);
+  assert.doesNotMatch(source, /if \(keyChanged\) setAgentTeamsArmed\(false, key\)/);
+  // 归属键由 agentTeamScopeKey 决定（真实会话 id / new:<cwd>）。
+  assert.match(source, /export function agentTeamScopeKey\(/);
   assert.equal(typeof useAgentTeamsEnabled, "function");
   assert.equal(typeof useAgentTeamsArmed, "function");
   assert.equal(typeof disarmAgentTeam, "function");
   assert.equal(typeof shouldDisarmAgentTeam, "function");
   assert.equal(typeof parseAgentTeamsEnabled, "function");
+  assert.equal(typeof agentTeamScopeKey, "function");
 });

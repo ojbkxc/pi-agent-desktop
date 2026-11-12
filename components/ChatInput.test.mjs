@@ -1016,6 +1016,9 @@ test("handleSend sends exactly once and routes builtin commands through the pend
       onSend(message, images) { sends += 1; handler.sent = { message, images }; },
       clearInput() { cleared += 1; },
       agentTeamsEnabled,
+      // handleSend 复位的是「当前会话」的 armed（`disarmAgentTeam(teamScope)`），所以这层
+      // 上下文必须提供 teamScope —— 与组件里 `agentTeamScope ?? draftKey` 同一个值。
+      teamScope: "session-test",
       withAgentTeamRequest,
       shouldDisarmAgentTeam,
       disarmAgentTeam() { disarms += 1; },
@@ -1158,28 +1161,28 @@ test("editing a message that carried an Agent Team block re-arms the next send (
   assert.equal(userMessageRequestsAgentTeam(teamMessage), true);
   assert.equal(handle.replaceMessage(teamMessage), true);
   assert.deepEqual(armedKeys, ["session-a5-edit"], "re-arms under the composer's own draft key");
-  assert.equal(isAgentTeamsArmed(), true, "the next send will re-wrap with the team block");
+  assert.equal(isAgentTeamsArmed("session-a5-edit"), true, "the next send will re-wrap with the team block");
   // 回填的是剥掉块之后的用户原文（否则重发会套两层）。
   assert.deepEqual(setValueCalls, ["拆一下这活"]);
 
   // ② 普通消息：不误 arm。
-  disarmAgentTeam();
+  disarmAgentTeam("session-a5-edit");
   armedKeys.length = 0;
   const plainMessage = { role: "user", content: "普通消息" };
   assert.equal(hasAgentTeamRequest(plainMessage.content), false);
   assert.equal(userMessageRequestsAgentTeam(plainMessage), false);
   assert.equal(handle.replaceMessage(plainMessage), true);
   assert.deepEqual(armedKeys, [], "a plain message must not arm anything");
-  assert.equal(isAgentTeamsArmed(), false);
+  assert.equal(isAgentTeamsArmed("session-a5-edit"), false);
 
   // ③ 编辑态点 ✕：走 ChatInput 里真实的 onRemove 接线，armed 回 false。
   handle.replaceMessage(teamMessage);
-  assert.equal(isAgentTeamsArmed(), true);
-  const removeHandler = agentTeamChipRemoveHandler({ disarmAgentTeam, draftKey: "session-a5-edit" });
+  assert.equal(isAgentTeamsArmed("session-a5-edit"), true);
+  const removeHandler = agentTeamChipRemoveHandler({ disarmAgentTeam, teamScope: "session-a5-edit" });
   removeHandler();
-  assert.equal(isAgentTeamsArmed(), false, "the ✕ clears the arming for this edit");
+  assert.equal(isAgentTeamsArmed("session-a5-edit"), false, "the ✕ clears the arming for this edit");
 
-  disarmAgentTeam();
+  disarmAgentTeam("session-a5-edit");
 });
 
 test("a missing workspace replaces the model error and disables Send", () => {

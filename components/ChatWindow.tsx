@@ -17,6 +17,7 @@ import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { AgentTeamPlanCard } from "./AgentTeams/AgentTeamPlanCard";
 import { GoalStrip } from "./AgentTeams/GoalStrip";
 import { useTeamPlan } from "@/hooks/useTeamPlan";
+import { agentTeamScopeKey } from "@/hooks/useAgentTeamsEnabled";
 import { useGoalState } from "@/hooks/useGoalState";
 import { isPlanCardVisible } from "@/lib/agent-teams-plan";
 import { NewSessionWelcome } from "./NewSessionWelcome";
@@ -1287,6 +1288,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
       onAudioUnlock={unlockAudio}
       autoFocus={isNew}
       draftKey={session?.id ?? newSessionDraftKey ?? undefined}
+      agentTeamScope={agentTeamScopeKey(session?.id, newSessionCwd)}
       cwd={chatOnly ? undefined : session?.cwd ?? newSessionCwd}
       projectPath={chatOnly ? undefined : session?.projectRoot ?? session?.cwd ?? newSessionCwd}
       onSelectProject={chatOnly ? undefined : onSelectProject}

@@ -154,6 +154,12 @@ interface Props {
   onBuiltinCommand?: (message: string) => Promise<BuiltinSlashCommandResult>;
   onAudioUnlock?: () => void;
   draftKey?: string;
+  /**
+   * Agent Team armed 的归属键（`hooks/useAgentTeamsEnabled.ts` 的 `agentTeamScopeKey`）：
+   * 真实会话 = 会话 id，新建会话 = `new:<cwd>`。省略时退回 `draftKey`。与 `draftKey` 分开
+   * 是因为新建会话的草稿键每次点「新建」都换一个 draftId，而团队开关要跨这一步保持。
+   */
+  agentTeamScope?: string | null;
   /** Session working directory — enables the @ file autocomplete menu */
   cwd?: string | null;
   /** The hidden model-only chat workspace: images only, no file/shell mentions. */
@@ -881,6 +887,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onAudioUnlock,
   onPromptWithStreamingBehavior,
   draftKey,
+  agentTeamScope,
   cwd,
   chatOnly = false,
   memberSession = false,
@@ -937,8 +944,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   // ── Agent Team：A1 把原来的一个布尔拆成「全局可用性」+「单条 armed」两态 ──
   // 全局可用性（默认开、落 localStorage）：决定要不要在 composer 显示团队开关。
   const teamEnabled = useAgentTeamsEnabled();
-  // 单条 armed（默认关、不落盘、按会话键隔离）：勾「下一条消息用团队」。
-  const armed = useAgentTeamsArmed(draftKey);
+  // 单条 armed（默认关、不落盘、**按会话分别记忆**）：勾「下一条消息用团队」。
+  // 归属键优先用 `agentTeamScope`（新建会话是 `new:<cwd>`，跨「点新建」保持）；没有时退回
+  // 草稿键（引用浮层里的紧凑 composer 等）。
+  const teamScope = agentTeamScope ?? draftKey;
+  const armed = useAgentTeamsArmed(teamScope);
   // 极简档（A7）：开启时隐藏开关并强制复位 armed。
   const leanMode = useLeanModeEnabled();
   // 可用性（A7 + cc-haha 对齐）：成员会话 / 极简档**整行隐藏**（前者不可能再起团队，
@@ -964,19 +974,19 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, []);
   const handleTeamToggle = useCallback(() => {
     if (armed) {
-      disarmAgentTeam(draftKey);
+      disarmAgentTeam(teamScope);
       return;
     }
     if (shouldShowAgentTeamCostNotice()) {
       setTeamCostDialogOpen(true);
       return;
     }
-    armAgentTeam(draftKey);
-  }, [armed, draftKey]);
+    armAgentTeam(teamScope);
+  }, [armed, teamScope]);
   // 极简档强制复位：进入 lean、或 lean 下残留的 armed，都清掉（A7）。
   useEffect(() => {
-    if (leanMode && armed) disarmAgentTeam(draftKey);
-  }, [leanMode, armed, draftKey]);
+    if (leanMode && armed) disarmAgentTeam(teamScope);
+  }, [leanMode, armed, teamScope]);
   // 包装条件是「全局可用 ∧ 本条 armed」。变量名沿用 agentTeamsEnabled，是为了不破坏
   // components/ChatInput.test.mjs 对 handleSend 闭包的注入契约（它按这个名字喂值）；
   // 它的值现在已经是「这一条消息是否带团队」，不再是旧的「全局开关」。
@@ -1546,7 +1556,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     onSend(messageForModel, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
     // 发出去即复位（对齐 cc-haha 发送调用之后的 `disarmAgentTeam()`）：团队只作用于这一条，
     // 后续闲聊不再累积建团指令。命令类消息不被包装，也就不消耗这次勾选。
-    if (shouldDisarmAgentTeam(agentTeamsEnabled, messageForModel)) disarmAgentTeam();
+    if (shouldDisarmAgentTeam(agentTeamsEnabled, messageForModel)) disarmAgentTeam(teamScope);
     // d5-9：clearInput 前捕获 await 窗口内的新增键入——#提及解析期间用户继续
     // 打字的文字不能随发送一起蒸发（仅尾部追加可安全归位，中间删改保守丢弃）。
     const typedDuringSend = pendingTypedSuffix(sendBaseline, valueRef.current);
@@ -1561,7 +1571,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         ta.setSelectionRange(typedDuringSend.length, typedDuringSend.length);
       });
     }
-  }, [value, workspaceUnavailable, isStreaming, runBuiltinCommand, onSend, clearInput, onAudioUnlock, sessionMentionTargetsRef, agentTeamsEnabled]);
+  }, [value, workspaceUnavailable, isStreaming, runBuiltinCommand, onSend, clearInput, onAudioUnlock, sessionMentionTargetsRef, agentTeamsEnabled, teamScope]);
 
   const slashQuery = !compact && value.startsWith("/") && !/\s/.test(value.slice(1))
     ? value.slice(1).toLowerCase()
@@ -2344,15 +2354,17 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         })()}
         {/* A9: one-time discovery guide (above the composer, below real error banners).
             Mounted-only read; Enable arms the team, Dismiss is final. Compact is the quote
-            popover's text-only composer: it has no team switch, so no guide either. */}
-        {!compact && showTeamGuide && showTeamToggle && teamAvailable && (
+            popover's text-only composer: it has no team switch, so no guide either.
+            **armed 时不再显示**：那行「想让 AI 自动组队处理? / 开启」是在邀请用户打开，
+            已经打开了还挂着它就自相矛盾（真机截图里一眼能看出来）。 */}
+        {!compact && showTeamGuide && !armed && showTeamToggle && teamAvailable && (
           <div className="agent-team-guide-row" style={{ marginBottom: 8 }}>
             <AgentTeamGuide
               onEnable={() => {
                 markAgentTeamGuideSeen();
                 setShowTeamGuide(false);
                 if (shouldShowAgentTeamCostNotice()) setTeamCostDialogOpen(true);
-                else armAgentTeam(draftKey);
+                else armAgentTeam(teamScope);
               }}
               onDismiss={() => {
                 dismissAgentTeamGuide();
@@ -2574,7 +2586,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             popover) composers share the global armed state, so they never show it. */}
         {!compact && showTeamChip && (
           <div className="composer-teams-chip-row">
-            <AgentTeamChip onRemove={() => disarmAgentTeam(draftKey)} touch={isMobile} />
+            <AgentTeamChip onRemove={() => disarmAgentTeam(teamScope)} touch={isMobile} />
           </div>
         )}
 
@@ -3479,7 +3491,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       {/* A6: one-time cost confirmation before the first arm. */}
       <AgentTeamCostDialog
         open={teamCostDialogOpen}
-        onConfirm={() => { setTeamCostDialogOpen(false); armAgentTeam(draftKey); }}
+        onConfirm={() => { setTeamCostDialogOpen(false); armAgentTeam(teamScope); }}
         onCancel={() => setTeamCostDialogOpen(false)}
       />
     </fieldset>

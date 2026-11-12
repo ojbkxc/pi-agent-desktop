@@ -1,20 +1,24 @@
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { APP_PREF_KEYS, getPref, setPref } from "@/lib/app-prefs";
 import { hasAgentTeamRequest } from "@/lib/agent-team-request";
 
 /**
- * Agent Team 的两个开关状态（A1 拆分）。
- *
- * 原来的一个布尔既当「全局开关」又当「下一条消息 armed」，还把 armed 默认成开；现在拆成
- * 互相独立的两态：
+ * Agent Team 的两个开关状态。
  *
  * - `useAgentTeamsEnabled()`：**全局可用性**。默认开、落 localStorage。它是「这个功能对
- *   这个用户是否可用」的长期偏好，关掉后 composer 不该再提供单条团队开关。
+ *   这个用户是否可用」的长期偏好，关掉后 composer 不再提供单条团队开关。
  * - `useAgentTeamsArmed(sessionKey)`：**单条 armed**。默认关、**不落盘**（纯内存态）、
- *   按会话键隔离。勾选表示「**下一条**消息用团队处理」；带团队指令的消息发出去后立刻复位
- *   关，后续闲聊不再累积建团指令。命令类消息（`/`、`!`）原样发送、被豁免，不消耗这次 armed。
+ *   **按会话键分别记忆**。勾选表示「**下一条**消息用团队处理」；带团队指令的消息发出去后
+ *   该会话立刻复位关，后续闲聊不再累积建团指令。命令类消息（`/`、`!`）原样发送、被豁免，
+ *   不消耗这次 armed。
  *
- * 两态互不干扰：改全局可用性不会动某条的 armed，复位 armed 也不写全局偏好。
+ * 为什么按会话记（2026-11-12 用户口径）：cc-haha 的 armed 是常驻 composer 的局部状态，
+ * 切走再切回来**还是离开时的样子**。本仓原先是「切会话即归零」，用户实测后要求对齐 ——
+ * 「给某个会话打开了团队，切到别的会话再切回来，应该还是打开的状态」。
+ * 这里用一张按会话键的 Map 做到「每会话各自记住」，同时**不串台**（cc-haha 的常驻状态
+ * 会串到别的会话；本仓按 key 分开，切到没勾过的会话仍然是关）。
+ *
+ * 两态互不干扰：改全局可用性不会动任何会话的 armed，复位 armed 也不写全局偏好。
  */
 
 // ───────────────────────── 全局可用性（持久化，默认开） ─────────────────────────
@@ -56,21 +60,36 @@ export function useAgentTeamsEnabled(): boolean {
   return useSyncExternalStore(subscribeEnabled, enabledSnapshot, () => AGENT_TEAMS_ENABLED_DEFAULT);
 }
 
-// ───────────────────────── 单条 armed（内存态，默认关） ─────────────────────────
+// ───────────────────────── 单条 armed（内存态，按会话键记忆） ─────────────────────────
+
+/** 无会话键时（极少数路径，如未挂载草稿）用的键；与真实会话 id 不会撞。 */
+export const UNSCOPED_AGENT_TEAM_KEY = "unscoped";
 
 /**
- * armed 不落盘：它只是「这一条消息」的临时意图，刷新 / 重启后自然归零（即默认关）。
+ * armed 不落盘：它只是「这一条消息」的临时意图，刷新 / 重启后自然归零（即全部关）。
  *
- * 只存在内存里，并绑定一个会话键：`useAgentTeamsArmed(sessionKey)` 在会话切换时把它
- * 重置为关——同一份 composer 在不同会话间切换不会把 armed 串过去。
+ * 键是**会话键**（ChatInput 的 `draftKey`：真实会话 id，或新建会话的 `new:<id>:<cwd>`）。
+ * `false` / 键不存在都读作关；只有显式 `true` 才安全 —— 这样 Map 里不必存一堆 false。
+ *
+ * 注意 `unscoped` 键：`ChatInput` 在某些极窄场景（例如引用浮层里的紧凑 composer）没有
+ * draftKey，那里勾了也无处可记，就统一落在 `unscoped` 上，不影响任何真实会话。
  */
-let armed = false;
-/** armed 归属的会话键：无参 `disarmAgentTeam()` 靠它定位，会话切换时也靠它判断要不要重置。 */
-let armedSessionKey: string | null = null;
+const armedBySession = new Map<string, boolean>();
 const armedListeners = new Set<() => void>();
+/**
+ * 每次改动自增。`useSyncExternalStore` 的 getSnapshot 必须返回**稳定可比较**的值，而
+ * 「当前会话是否 armed」取决于组件传入的 key —— 让快照只报告版本号，组件再用当前 key 去
+ * Map 里取值，就同时满足「key 变化立刻读到正确值」与「任何一个会话改动都会触发重渲染」。
+ */
+let armedVersion = 0;
 
-function armedSnapshot(): boolean {
-  return armed;
+function scopeKey(sessionKey?: string | null): string {
+  const trimmed = typeof sessionKey === "string" ? sessionKey.trim() : "";
+  return trimmed || UNSCOPED_AGENT_TEAM_KEY;
+}
+
+function armedVersionSnapshot(): number {
+  return armedVersion;
 }
 
 function subscribeArmed(listener: () => void): () => void {
@@ -78,34 +97,27 @@ function subscribeArmed(listener: () => void): () => void {
   return () => { armedListeners.delete(listener); };
 }
 
+function notifyArmedChanged(): void {
+  armedVersion += 1;
+  armedListeners.forEach((listener) => listener());
+}
+
+/** 读某个会话的 armed；没记过就是关。 */
+export function isAgentTeamsArmed(sessionKey?: string | null): boolean {
+  return armedBySession.get(scopeKey(sessionKey)) === true;
+}
+
 /**
- * armed 是否需要因会话切换而重置。
+ * 把某个会话的 armed 设为 next（内存态、不落盘）。
  *
- * 抽成纯函数，方便在没有 DOM 的单测里直接验证「切会话重算」这条规则；真正调用它的是
- * `useAgentTeamsArmed` 的会话切换守卫。
- */
-export function shouldResetArmedOnSessionChange(
-  previousKey: string | null,
-  nextKey: string | null,
-): boolean {
-  return previousKey !== nextKey;
-}
-
-/** 读当前 armed（命令式读取路径；React 组件请用 `useAgentTeamsArmed`）。 */
-export function isAgentTeamsArmed(): boolean {
-  return armed;
-}
-
-/**
- * 把 armed 设为 next（内存态、不落盘）。带 sessionKey 时同时登记它归属哪个会话；
- * 省略则沿用当前归属。值没变就什么都不做，避免无谓的重渲染。
+ * 值没变就什么都不做，避免无谓的重渲染。
  */
 export function setAgentTeamsArmed(next: boolean, sessionKey?: string | null): void {
-  const key = sessionKey === undefined ? armedSessionKey : (sessionKey ?? null);
-  if (armed === next && armedSessionKey === key) return;
-  armed = next;
-  armedSessionKey = key;
-  armedListeners.forEach((listener) => listener());
+  const key = scopeKey(sessionKey);
+  const previous = armedBySession.get(key) === true;
+  if (previous === next) return;
+  armedBySession.set(key, next);
+  notifyArmedChanged();
 }
 
 /** 勾上「下一条用团队」。 */
@@ -116,10 +128,17 @@ export function armAgentTeam(sessionKey?: string | null): void {
 /**
  * 复位这次 armed：一条带着团队指令的消息发出后调用（`components/ChatInput.tsx` 的
  * handleSend，位置对齐 cc-haha 发送调用之后的 `disarmAgentTeam()`）。已经是关的状态时
- * 什么都不做。签名保持无参可调，兼容既有调用方；需要指定会话时可传 sessionKey。
+ * 什么都不做。需要指定会话时可传 sessionKey。
  */
 export function disarmAgentTeam(sessionKey?: string | null): void {
   setAgentTeamsArmed(false, sessionKey);
+}
+
+/** 清空所有会话的 armed（单测与「重置」用；生产路径不调用）。 */
+export function resetAllAgentTeamsArmed(): void {
+  if (armedBySession.size === 0) return;
+  armedBySession.clear();
+  notifyArmedChanged();
 }
 
 /**
@@ -134,24 +153,34 @@ export function shouldDisarmAgentTeam(armedNow: boolean, sentMessage: string): b
 }
 
 /**
- * 单条 armed：默认关、不落盘、随会话键隔离。
+ * armed 的会话键。
  *
- * 会话切换时**显式重置**为关（用 effect 而不是渲染期赋值——组件渲染必须纯净）：
- * 切过去先清掉上一条会话的 armed。返回前再用 `keyChanged` 兜一层，切会话的第一帧直接
- * 读成「关」，不会闪一下上一条会话的 armed，也就不会在那一帧误发一条带团队块的消息。
+ * 真实会话直接用会话 id。**新建会话**（还没发出第一条消息）用 `new:<cwd>` —— 而不是
+ * ChatInput 草稿键里的 `new:<draftId>:<cwd>`：那个 draftId 每次点「新建」都换一个，会让
+ * 「勾了团队 → 点新建」把开关丢掉；cc-haha 在同样操作下仍是同一个 composer、开关保持
+ * 打开，用户要求对齐。发出第一条消息后键变成真实会话 id，当前的 armed 也就用不上了
+ * （发送即复位）。
+ */
+export function agentTeamScopeKey(
+  sessionId?: string | null,
+  newSessionCwd?: string | null,
+): string | null {
+  const id = typeof sessionId === "string" ? sessionId.trim() : "";
+  if (id) return id;
+  const cwd = typeof newSessionCwd === "string" ? newSessionCwd.trim() : "";
+  return cwd ? `new:${cwd}` : null;
+}
+
+/**
+ * 单条 armed：默认关、不落盘、**按会话键分别记忆**。
+ *
+ * 切会话**不再**归零：每个会话各自记住自己的 armed（切回原会话恢复原状，对齐 cc-haha）。
+ * 未勾过的会话读作关，所以也不会串台。
  */
 export function useAgentTeamsArmed(sessionKey?: string | null): boolean {
-  const key = sessionKey ?? null;
-  const armedNow = useSyncExternalStore(subscribeArmed, armedSnapshot, () => false);
-
-  const previousKeyRef = useRef<string | null>(key);
-  const keyChanged = shouldResetArmedOnSessionChange(previousKeyRef.current, key);
-  useEffect(() => {
-    // 切会话 → 丢弃上一条 armed（内存态，仅影响本模块）。
-    if (keyChanged) setAgentTeamsArmed(false, key);
-    previousKeyRef.current = key;
-    // keyChanged 只在会话键切换的那一帧为真，切完即假。
-  }, [key, keyChanged]);
-
-  return keyChanged ? false : armedNow;
+  const key = scopeKey(sessionKey);
+  // 订阅版本号（任何会话改动都会重渲染），再从 Map 里按当前 key 取值 —— 于是切回一个
+  // 之前 armed 过的会话时，第一帧就是打开的状态，不会闪。
+  useSyncExternalStore(subscribeArmed, armedVersionSnapshot, () => 0);
+  return armedBySession.get(key) === true;
 }

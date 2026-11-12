@@ -43,6 +43,9 @@ test("可用 + armed：真开关、aria-checked=true、不带不可用标记", (
   assert.match(html, /aria-checked="true"/);
   assert.doesNotMatch(html, /is-unavailable/);
   assert.doesNotMatch(html, /data-disabled-reason/);
+  // 外观是 cc-haha 形态的 Switch：轨道 + 滑块（纯视觉，状态仍在 role/aria-checked 上）。
+  assert.match(html, /composer-teams-toggle-track/);
+  assert.match(html, /composer-teams-toggle-knob/);
 });
 
 test("可用 + 未 armed：aria-checked=false，不落 data-armed", () => {
@@ -51,6 +54,7 @@ test("可用 + 未 armed：aria-checked=false，不落 data-armed", () => {
   assert.match(html, /aria-checked="false"/);
   assert.doesNotMatch(html, /data-armed/);
   assert.doesNotMatch(html, /is-unavailable/);
+  assert.match(html, /composer-teams-toggle-track/, "未勾选时轨道仍在，只是滑块在左");
 });
 
 test("全局关掉（disabled）：整行还在、置灰、不冒充开关、title 是本地化文案", () => {
@@ -60,6 +64,8 @@ test("全局关掉（disabled）：整行还在、置灰、不冒充开关、tit
   assert.match(html, /data-disabled-reason="disabled"/);
   assert.doesNotMatch(html, /aria-checked/, "不可用时它只是去设置的动作行，不该落 aria-checked");
   assert.doesNotMatch(html, /role="switch"/, "不可用时不该冒充开关");
+  // 不可用时不画轨道：它只是一行「去设置」，画个开关会让人以为能勾。
+  assert.doesNotMatch(html, /composer-teams-toggle-track/, "不可用时不画 Switch 轨道");
   assert.match(html, /title="Agent Teams are off in Settings/);
   assert.doesNotMatch(html, /chat\.agentTeam\./, "不得把 i18n 键原文渲染到界面");
 });
