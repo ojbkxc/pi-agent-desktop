@@ -114,6 +114,30 @@ jobs:
           tagName: v__VERSION__
           releaseName: pi-agent-desktop v__VERSION__
           releaseBody: |
+            ## Pi Agent Desktop 0.8.2 (fork) — 2026-11-12
+
+            Incremental update to the same 0.8.2 build (same version number, re-published).
+
+            ### New
+
+            - **Two test-case-generation skills are built in.** `generate-test-cases-skill` (turns a requirement document into test-case XMind files, with a persistent memory and a self-learning loop) and `testcase-playbook` (a 10-method design playbook with a flowchart node-coverage matrix, quality gates, Excel / XMind output and copy-paste prompt templates) now ship with the app and are usable in any project session without installing anything. Settings › Skills lists them under a **built-in** group, read-only: the switch is greyed out on purpose, because their files live in the app's resource directory and every upgrade rebuilds them.
+
+            Bundled components: pi 1.5.0, pi-web 0.10.0.
+
+            ---
+
+            ## Pi Agent Desktop 0.8.2（fork）— 2026-11-12
+
+            同一 0.8.2 构建的增量更新（版本号不变，重新发布）。
+
+            ### 新增
+
+            - **内置两个测试用例生成技能。** `generate-test-cases-skill`（从需求文档生成测试用例 XMind，带持久化记忆与自学习闭环）与 `testcase-playbook`（10 种测试设计方法 + 流程图节点覆盖矩阵 + 质量门禁 + Excel / XMind 输出 + 可复制的提示词模板）随应用一起打包，任意项目会话开箱可用，不需要安装。设置 › 技能 里它们自成一类「内置」、只读：开关是刻意置灰的 —— 它们的文件在应用资源目录里，每次升级都会重建。
+
+            内置组件版本：pi 1.5.0、pi-web 0.10.0。
+
+            ---
+
             ## Pi Agent Desktop 0.8.2 (fork) — 2026-11-11
 
             Incremental update to the same 0.8.2 build (same version number, re-published).
