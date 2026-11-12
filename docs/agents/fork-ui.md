@@ -151,6 +151,8 @@ Single project sessions archive the same way chats do (#200): the session row's 
 - `/api/skills` uses `DefaultResourceLoader` so settings paths, package skills, and project `.agents/skills` are listed the same way the runtime sees them.
 - Skill toggling edits only the `disable-model-invocation` frontmatter key on the target `SKILL.md`; keep that surgical so user formatting survives.
 - `/api/skills/install` shells through `npx skills add ... --agent pi`; project installs run with the selected cwd.
+- The panel and the runtime load the same extra roots through `additionalForkSkillPaths()` (`lib/fork-skill-paths.ts`): `~/.claude/skills` (cc-haha's downloads) plus the packaged `builtin-skills/`. The panel always passes `true` for "skills on", otherwise the list and a real session disagree.
+- Packaged built-in skills come back from `/api/skills` with `builtin: true` (`lib/builtin-skills.ts` decides by path). They are **read-only**: the switch renders disabled, the row is tagged 内置, and they are excluded from the sidebar group switch. Do not add their root to `getSkillEditRoots()` in `app/api/skills/route.ts` — they live in the app's resource directory, so a write either 403s or is undone by the next upgrade.
 
 ## Completion sound
 - `hooks/useAudio.ts` stores the toggle in `localStorage` as `pi-sound-enabled` and reuses one `AudioContext`. The switch is in Settings › General (`settings.completionSound`), not the composer row.

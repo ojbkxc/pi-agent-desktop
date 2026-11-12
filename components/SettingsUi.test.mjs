@@ -312,7 +312,13 @@ test("skills and plugins switch whole groups from the group heading, not from a 
   for (const name of ["SkillsConfig", "PluginsConfig"]) {
     const sidebar = sources[name].match(/<ConfigSidebar>[\s\S]*?<\/ConfigSidebar>/)?.[0] ?? "";
     // The switch sits in the heading row, so the list keeps all of its height.
-    assert.match(sidebar, /<ConfigSidebarGroupLabel\s+aside=\{\s*<ConfigSidebarGroupSwitch/, name);
+    // Skills wraps it in a "there is anything toggleable here" guard (bundled skills are
+    // read-only), so accept the conditional form too — but it must still be the heading's aside.
+    assert.match(
+      sidebar,
+      /<ConfigSidebarGroupLabel\s+aside=\{\s*(?:toggleable\.length > 0 \? \(\s*)?<ConfigSidebarGroupSwitch/,
+      name,
+    );
     assert.match(sidebar, /<ConfigSidebarGroupStatus /, name);
     assert.doesNotMatch(sidebar, /<ConfigButton/, name);
   }

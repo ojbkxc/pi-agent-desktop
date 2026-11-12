@@ -46,10 +46,12 @@ import {
 import { isImeComposing } from "@/lib/ime";
 import { itemsToSwitch, projectTrustReloadKey } from "./settings-ui-helpers";
 
-type SkillScope = "global" | "project" | "path";
+type SkillScope = "global" | "project" | "path" | "builtin";
 type Translate = ReturnType<typeof useI18n>["t"];
 
 function sourceLabel(skill: Skill): SkillScope {
+  // 随应用打包的内置技能自成一类（只读，见 lib/builtin-skills.ts），先于 sourceInfo 判定。
+  if (skill.builtin) return "builtin";
   const src = skill.sourceInfo?.source;
   const scope = skill.sourceInfo?.scope;
   if (scope === "user" || src === "user") return "global";
@@ -60,6 +62,7 @@ function sourceLabel(skill: Skill): SkillScope {
 function scopeLabel(scope: SkillScope, t: Translate): string {
   if (scope === "project") return t("skills.scope.project");
   if (scope === "global") return t("skills.scope.global");
+  if (scope === "builtin") return t("skills.scope.builtin");
   return t("skills.scope.path");
 }
 
@@ -145,13 +148,27 @@ function SkillDetail({
           <ConfigDetailActions>
             <ConfigSwitch
               checked={enabled}
+              disabled={Boolean(skill.builtin)}
               loading={toggling}
-              label={enabled ? t("i18n.visibleInPrompt") : t("i18n.hiddenFromPrompt")}
+              label={skill.builtin
+                ? t("skills.builtinReadonly")
+                : enabled
+                  ? t("i18n.visibleInPrompt")
+                  : t("i18n.hiddenFromPrompt")}
+              describedBy={skill.builtin ? "skill-builtin-note" : undefined}
               onChange={() => onToggle(skill)}
             />
           </ConfigDetailActions>
         </ConfigDetailHeader>
         <div className="skill-detail-status-row">
+          {skill.builtin && (
+            <span
+              id="skill-builtin-note"
+              style={{ fontSize: "var(--fs-micro)", color: "var(--text-dim)" }}
+            >
+              {t("skills.builtinReadonly")}
+            </span>
+          )}
           {!enabled && (
             <span style={{ fontSize: "var(--fs-micro)", color: "var(--text-dim)" }}>
               {t("i18n.hiddenButInvocable")}
@@ -817,6 +834,7 @@ export function SkillsConfig({
                     project: t("skills.scope.project"),
                     global: t("skills.scope.global"),
                     path: t("skills.scope.path"),
+                    builtin: t("skills.scope.builtin"),
                   };
                   const groupDefinitions = [
                     {
@@ -846,6 +864,12 @@ export function SkillsConfig({
                     {
                       label: scopeLabels.path,
                       matches: (skill: Skill) => sourceLabel(skill) === "path",
+                    },
+                    // 内置技能自成一类：它们在应用资源目录里（只读、升级会重建），
+                    // 面板只展示，开关置灰，也不参与分组的批量启用/停用。
+                    {
+                      label: scopeLabels.builtin,
+                      matches: (skill: Skill) => sourceLabel(skill) === "builtin",
                     },
                   ];
                   for (const { label, matches } of groupDefinitions) {
@@ -885,20 +909,25 @@ export function SkillsConfig({
                   };
                   return groups.map(
                     ({ label: grpLabel, skills: grpSkills }) => {
-                      const visible = grpSkills.filter((skill) => !skill.disableModelInvocation).length;
-                      const allVisible = visible === grpSkills.length;
+                      // 内置技能不可改（只读资源目录）：从分组批量开关里排除，
+                      // 否则一次「全部停用」会给它们刷一堆 403。
+                      const toggleable = grpSkills.filter((skill) => !skill.builtin);
+                      const visible = toggleable.filter((skill) => !skill.disableModelInvocation).length;
+                      const allVisible = toggleable.length > 0 && visible === toggleable.length;
                       return (
                         <div key={grpLabel} className="config-sidebar-group">
                           <ConfigSidebarGroupLabel
                             aside={
-                              <ConfigSidebarGroupSwitch
-                                enabled={visible}
-                                total={grpSkills.length}
-                                disabled={bulkBusy}
-                                loading={bulkGroup === grpLabel}
-                                label={t(allVisible ? "skills.groupSwitchOn" : "skills.groupSwitchOff", { group: grpLabel })}
-                                onChange={(enabled) => void setGroupSkills(grpLabel, grpSkills, enabled)}
-                              />
+                              toggleable.length > 0 ? (
+                                <ConfigSidebarGroupSwitch
+                                  enabled={visible}
+                                  total={toggleable.length}
+                                  disabled={bulkBusy}
+                                  loading={bulkGroup === grpLabel}
+                                  label={t(allVisible ? "skills.groupSwitchOn" : "skills.groupSwitchOff", { group: grpLabel })}
+                                  onChange={(enabled) => void setGroupSkills(grpLabel, toggleable, enabled)}
+                                />
+                              ) : null
                             }
                           >
                             {grpLabel}

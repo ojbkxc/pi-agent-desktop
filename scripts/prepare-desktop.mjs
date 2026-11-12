@@ -179,6 +179,16 @@ async function assembleServer() {
     join(cloudflaredScriptDir, "prepare-cloudflared.mjs"),
   );
 
+  // 随应用打包的内置技能（builtin-skills/）：服务端由 lib/builtin-skills.ts 按
+  // `process.cwd()/builtin-skills` 找回，而打包版的服务端 cwd 就是本目录（Tauri 用
+  // `.current_dir(resource_dir/resources/server)` 拉起）。这些是纯数据文件（md / py），
+  // Next 的文件追踪（@vercel/nft）看不到运行期拼出来的路径，所以必须在这里显式拷进来；
+  // 漏了这一步内置技能在打包版里会静默消失（dev / e2e 下 cwd 是仓库根，照样能看到，
+  // 所以只有真机打包版才会暴露）。见 scripts/prepare-desktop-builtin-skills.test.mjs。
+  await cp(join(rootDir, "builtin-skills"), join(serverResourcesDir, "builtin-skills"), {
+    recursive: true,
+  });
+
   const staticSource = join(desktopBuildDir, "static");
   const staticDestination = join(serverResourcesDir, ".next-desktop", "static");
   await mkdir(dirname(staticDestination), { recursive: true });

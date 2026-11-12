@@ -1,0 +1,9 @@
+# 排除：不属于本项目、含内部/业务信息的文件（切勿提交）
+用例表转导入格式_作业指导书.md
+convert_to_import_format.py
+verify_import_format.py
+
+# 打包产物与缓存
+*.zip
+__pycache__/
+*.pyc

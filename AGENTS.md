@@ -130,6 +130,11 @@ lib/
   draft-store.ts       local draft persistence helpers
   file-access.ts       allowed file roots for /api/files and worktrees
   file-paths.ts        client/server path encoding helpers
+  builtin-skills.ts    the packaged skill root (`builtin-skills/`, resolved from cwd like the
+                      cloudflared script) and the read-only check the Skills panel uses
+  fork-skill-paths.ts  additionalForkSkillPaths() — the one seam that feeds every session,
+                      member session and the Skills panel: ~/.claude/skills + builtin-skills/
+                      (see builtin-skills/README.md)
   enabled-models.ts    pure minimal-edit engine for the `enabledModels` pattern list
   enabled-models-runtime.ts  SDK adapter: per-pattern resolution, provider kinds, settings IO
   markdown.ts          shared markdown helpers
@@ -278,6 +283,7 @@ Each one undid a real regression; the linked note has the reasoning.
 - Fork UI copy lives in `lib/i18n/locale-plugins.ts` under `FORK_MESSAGE_PATCHES` (en / zh-CN / zh-TW), **not** in `lib/i18n/messages/*.ts` — those are pi-web's upstream locales and a merge overwrites them. A key present in only some locales renders its own name in the UI, so `lib/i18n/usage.test.mjs` and `registry.test.mjs` gate every `t()` call site. ([fork-ui](docs/agents/fork-ui.md))
 - The plan-approval card must never write `plan.json` itself: `POST /api/teams/[team]/plan/approve` only delivers a prompt to the lead session, because a desktop-written approve misses `approvedSnapshot` and `isTeamExecutionApproved()` stays false, so the launch never starts. Approving does not auto-launch. ([agent-teams-design](docs/agent-teams-design.md))
 - The composer Agent Team row mirrors cc-haha and must keep doing so: the global switch defaults **on** (`AGENT_TEAMS_ENABLED_DEFAULT`), the row is a per-message `armed` toggle that resets on send, and when the global switch is off the row **stays visible with no switch and leads to Settings** — only member sessions and Lean mode hide it. Turning it off must not make the feature disappear from the conversation. The global pref key is `pi-agent-teams-enabled-v2`: the pre-split key `pi-agent-teams-enabled` meant the per-message armed flag (old sends wrote `"false"` to it), so a leftover value there would read as "feature off" and must not be reused. ([agent-teams-design](docs/agent-teams-design.md))
+- The packaged skills live in `builtin-skills/` and reach sessions only through `additionalForkSkillPaths()` (`lib/fork-skill-paths.ts`) — never wire one root directly at a call site, and keep them out of chat-only / Lean (the SDK's `noSkills` does not filter `additionalSkillPaths`). Adding a built-in skill is just a new directory with a `SKILL.md`; the `prepare-desktop.mjs` stage and its sentinel test need no edit, but the path is `process.cwd()`-derived, so packaging must stage it (see `builtin-skills/README.md`). They are read-only in the Skills panel on purpose: they sit in the app's resource directory, and approving a write would 403 or silently revert on upgrade.
 
 ---
 

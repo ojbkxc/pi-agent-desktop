@@ -40,7 +40,7 @@ import { appendSubagentInputFiles, loadSubagentInputFiles } from "./subagent-inp
 import { projectTrustReloadOptions } from "./project-trust";
 import { resolveShellTools } from "./powershell-settings";
 import { isBuiltInSubagentsEnabled, readSubagentSettings } from "./subagent-settings";
-import { additionalCcHahaSkillPaths } from "./cc-haha-skills";
+import { additionalForkSkillPaths } from "./fork-skill-paths";
 import { SubagentQueue, type EnqueuedSubagent } from "./subagent-queue";
 import { createSubagentBuiltinExtensions } from "./builtin-extensions";
 import { LEAN_TOOL_NAMES } from "./lean-mode";
@@ -309,7 +309,7 @@ export function createSubagentController(
           noSkills: !profile.loadSkills,
           // 团队成员与普通会话加载同一批技能：额外接上 cc-haha 的用户级技能根。技能被 profile
           // 关掉时（含极简档 lean）不传，避免绕过 noSkills 反而多加载。
-          additionalSkillPaths: additionalCcHahaSkillPaths(profile.loadSkills),
+          additionalSkillPaths: additionalForkSkillPaths(profile.loadSkills),
           noPromptTemplates: true,
           noThemes: true,
           noContextFiles: true,

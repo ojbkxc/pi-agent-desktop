@@ -34,3 +34,19 @@ test("all three load triggers stay wired (d5-23)", () => {
   assert.match(skillsSource, /loadedTrustKeyRef\.current === trustKey/);
   assert.match(skillsSource, /onInstalled=\{\(\) => \{\s*void loadSkills\(\);\s*\}\}/);
 });
+
+test("bundled skills stay read-only and out of the bulk switches", () => {
+  // 内置技能（skill.builtin）在应用资源目录里，写入会被 /api/skills 的
+  // getSkillEditRoots() 拒（403），macOS 上还只读、升级后重建。面板必须：
+  //   1. 自成一类（不能落进「路径」组后被误认为可编辑的 path 技能）；
+  //   2. 开关置灰；
+  //   3. 不进分组批量开关的 targets / 计数 —— 否则一次「全部停用」会刷一堆 403。
+  assert.match(skillsSource, /if \(skill\.builtin\) return "builtin";/);
+  assert.match(skillsSource, /matches: \(skill: Skill\) => sourceLabel\(skill\) === "builtin"/);
+  assert.match(skillsSource, /disabled=\{Boolean\(skill\.builtin\)\}/);
+  assert.match(skillsSource, /const toggleable = grpSkills\.filter\(\(skill\) => !skill\.builtin\);/);
+  assert.match(skillsSource, /total=\{toggleable\.length\}/);
+  assert.match(skillsSource, /onChange=\{\(enabled\) => void setGroupSkills\(grpLabel, toggleable, enabled\)\}/);
+  // 批量开关只对可改的技能渲染。
+  assert.match(skillsSource, /toggleable\.length > 0 \? \(\s*<ConfigSidebarGroupSwitch/);
+});

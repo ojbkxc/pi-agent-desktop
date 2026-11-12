@@ -101,6 +101,8 @@ export interface SkillInfo {
     source?: string;
     scope?: string;
   };
+  /** 随应用打包的内置技能（`builtin-skills/`）：只读，面板显示「内置」标签并置灰开关。 */
+  builtin?: boolean;
   install?: SkillInstallInfo;
 }
 
