@@ -242,10 +242,10 @@
     },
     "lib/http-dispatcher.ts": {
       "risk": "medium",
-      "drift": 32,
-      "structuralDrift": 32,
+      "drift": 68,
+      "structuralDrift": 68,
       "disposition": "accepted",
-      "reason": "Raises the outbound HTTP idle timeout from upstream 5 minutes to 10 and reads PI_WEB_HTTP_IDLE_TIMEOUT_MS (ms, or \"disabled\"). Upstream keeps body/headers timeouts at 5 minutes on the global undici dispatcher, which every model request uses; a buffering relay or a long reasoning pause is then dropped mid-response and the provider records it as a client disconnect. A merge that restores the 5-minute default silently re-introduces that cut, so keep resolveHttpIdleTimeoutMs and the larger default."
+      "reason": "Raises the outbound HTTP idle timeout from upstream 5 minutes to 10 and reads PI_WEB_HTTP_IDLE_TIMEOUT_MS (ms, or \"disabled\"). Upstream keeps body/headers timeouts at 5 minutes on the global undici dispatcher, which every model request uses; a buffering relay or a long reasoning pause is then dropped mid-response and the provider records it as a client disconnect. A merge that restores the 5-minute default silently re-introduces that cut, so keep resolveHttpIdleTimeoutMs and the larger default. Also adds installHttpDispatcher({ force }) so the network-proxy setting can replace the dispatcher in-process; the replaced instance must be close()d, never destroy()ed (a live model stream would be cut)."
     },
     "lib/request-security.test.mjs": {
       "risk": "medium",
@@ -297,10 +297,10 @@
     },
     "components/SettingsPanel.tsx": {
       "risk": "high",
-      "drift": 520,
-      "structuralDrift": 428,
+      "drift": 525,
+      "structuralDrift": 433,
       "disposition": "accepted",
-      "reason": "Fork settings sections (server, public access, relay, remote access, agent teams, chats) mounted in the General tab. Upstream edits to the same tab merge cleanly around them, so a merge must keep every fork section mounted."
+      "reason": "Fork settings sections (server, network proxy, public access, relay, remote access, agent teams, chats) mounted in the General tab. Upstream edits to the same tab merge cleanly around them, so a merge must keep every fork section mounted."
     }
   },
   "forkOwnedPaths": [
@@ -348,6 +348,11 @@
     "lib/builtin-skills.test.mjs",
     "lib/fork-skill-paths.ts",
     "lib/fork-skill-paths.test.mjs",
+    "lib/network-proxy.ts",
+    "lib/network-proxy.test.mjs",
+    "components/NetworkProxySection.tsx",
+    "app/api/network-proxy/",
+    "docs/agents/fork-network-proxy.md",
     ".github/workflows/",
     "app/native-theme.css",
     "app/api/updates/",

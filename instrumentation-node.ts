@@ -1,4 +1,5 @@
 import { configureHttpDispatcher } from "@/lib/http-dispatcher";
+import { applyNetworkProxy } from "@/lib/network-proxy";
 import { closeAllAgentEventStreams } from "@/lib/agent-event-stream";
 import { startScheduler } from "@/lib/scheduled-tasks";
 import { startUnattendedSweepLoop } from "@/lib/agent-teams-unattended-runtime";
@@ -7,6 +8,17 @@ import { restartPublicAccessFromConfig } from "@/lib/public-access/runtime";
 
 export function registerNodeInstrumentation(): void {
   configureHttpDispatcher();
+
+  // 网络代理（设置 › 通用 › 网络代理）：把保存的档位写进 HTTP_PROXY / HTTPS_PROXY / NO_PROXY，
+  // 再 force 重装 dispatcher —— node 的 fetch 不读系统代理，模型请求要走出去得靠这一步。
+  // 必须排在 configureHttpDispatcher() 之后（这里要覆盖它在无代理环境下装的那个实例）。
+  // 设置读不出来、系统探测失败都不该拦住启动，所以整段只记一行日志。
+  void applyNetworkProxy().catch((error) => {
+    console.error(
+      "[network-proxy] could not apply the saved setting:",
+      error instanceof Error ? error.message : error,
+    );
+  });
 
   // Scheduled tasks must fire without anyone having opened a page, and the
   // packaged app keeps this server alive while its window is hidden in the tray.

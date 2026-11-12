@@ -42,6 +42,7 @@ import { AgentTeamsSettingRow } from "./AgentTeamsSettingRow";
 import { LeanModeSettingRow } from "./LeanModeSettingRow";
 import { RemoteAccessSection } from "./RemoteAccessSection";
 import { ServerSection } from "./ServerSection";
+import { NetworkProxySection } from "./NetworkProxySection";
 import { RelaySection } from "./RelaySection";
 import { ChatsSettingsSection } from "./ChatsSettingsSection";
 import { CompactionSettingsSection } from "./CompactionSettingsSection";
@@ -366,6 +367,8 @@ function GeneralSettings({
           <RemoteAccessSection />
 
           <ServerSection />
+
+          <NetworkProxySection />
 
           <TerminalSettingsSection />
 
