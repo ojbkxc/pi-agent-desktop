@@ -59,9 +59,10 @@ test("GET /api/teams returns the roster", async (t) => {
   const body = await response.json();
   assert.deepEqual(body.teams.map((team) => team.name), ["demo"]);
   assert.equal(body.teams[0].memberCount, 2);
-  // memberSessionIds：名册无 sessionId，lifecycle 的 s-impl 必须出现
+  // memberSessionIds：名册无 sessionId，lifecycle 的 s-impl 必须出现；
+  // lead 会话也在内（侧栏的团队运行点靠它，见 listTeams）。
   assert.ok(Array.isArray(body.teams[0].memberSessionIds), "GET /api/teams 返回 memberSessionIds 数组");
-  assert.deepEqual(body.teams[0].memberSessionIds, ["s-impl"]);
+  assert.deepEqual(body.teams[0].memberSessionIds, ["s-impl", "lead-session"]);
 });
 
 test("GET /api/teams/[team]/workbench returns a lane snapshot lane-diagram can read", async (t) => {

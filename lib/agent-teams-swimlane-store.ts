@@ -19,6 +19,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import * as lockfile from "proper-lockfile";
 import { userHome } from "./user-home";
+import { readSessionParentSessionId } from "./session-reader";
 import {
   projectTeamWorkbench,
   type AcceptedRecordLike,
@@ -217,6 +218,38 @@ export async function readTeamWorkbench(teamName: string): Promise<TeamWorkbench
   });
 }
 
+/** pi-team 未设 PI_SESSION_ID 时写下的占位值（见 docs/agents/agent-teams-upstream-defects.md B1）。 */
+const UNKNOWN_LEAD_SESSION = "unknown-session";
+
+/**
+ * 团队真实的 lead 会话 id：config 里有可靠值时用它，否则从成员会话反推。
+ *
+ * 为什么必须反推：pi-team 在 `team_create` 时写 `leadSessionId: process.env.PI_SESSION_ID
+ * || 'unknown-session'`，而这个服务端进程从不设置 PI_SESSION_ID（同进程多会话共用一个
+ * env，宿主无法安全写入）。于是本机每个团队的 config 都是 `unknown-session`，lead 会话
+ * 因此**既显示不出团队条、也打不开团队工作台** —— `/api/teams/session/<lead>/workbench`
+ * 按会话 id 反查时永远命中不了。成员会话自己的 `pi-web:subagent` 快照仍然记着真正的
+ * lead（`parentSessionId`），那是磁盘上唯一可靠证据。
+ */
+export async function resolveLeadSessionId(
+  team: TeamFileLike,
+  lifecycle: Record<string, LifecycleEntryLike>,
+): Promise<string | null> {
+  const recorded = typeof team.leadSessionId === "string" ? team.leadSessionId : "";
+  if (recorded && recorded !== UNKNOWN_LEAD_SESSION) return recorded;
+  const memberSessions = Object.values(lifecycle)
+    .filter((entry) => typeof entry.sessionFile === "string" && entry.sessionFile.endsWith(".jsonl"));
+  for (const entry of memberSessions) {
+    try {
+      const parent = readSessionParentSessionId(entry.sessionFile as string);
+      if (parent && parent !== UNKNOWN_LEAD_SESSION) return parent;
+    } catch {
+      // 单个成员会话损坏不影响其他成员的反推。
+    }
+  }
+  return null;
+}
+
 /**
  * 找到包含该 session 的团队名（供 /api/teams/session/[id]/workbench）。
  * 既认 lead 会话，也认成员会话：成员的 sessionId 可能落在 config 名册里，
@@ -232,10 +265,16 @@ export async function findTeamBySession(sessionId: string): Promise<string | nul
   for (const name of names) {
     const teamDir = teamDirFor(name);
     const team = await readJson<TeamFileLike>(join(teamDir, "config.json"));
-    if (team?.leadSessionId === sessionId) return name;
-    if (Array.isArray(team?.members) && team.members.some((member) => member.sessionId === sessionId)) return name;
+    if (!team) continue;
+    if (team.leadSessionId === sessionId) return name;
+    if (Array.isArray(team.members) && team.members.some((member) => member.sessionId === sessionId)) return name;
     const lifecycle = await readLifecycle(teamDir);
     if (Object.values(lifecycle).some((entry) => entry.sessionId === sessionId)) return name;
+    // lead 会话：config 的 leadSessionId 多半是 'unknown-session'，用成员会话反推。
+    if (team.leadSessionId === UNKNOWN_LEAD_SESSION || !team.leadSessionId) {
+      const lead = await resolveLeadSessionId(team, lifecycle);
+      if (lead === sessionId) return name;
+    }
   }
   return null;
 }
@@ -278,6 +317,9 @@ export async function listTeams(): Promise<Array<{
     for (const entry of Object.values(lifecycle)) {
       if (typeof entry.sessionId === "string" && entry.sessionId) sessionIds.add(entry.sessionId);
     }
+    // lead 会话也算「团队会话」：侧栏据此给 lead 行打团队运行点。
+    const leadSessionId = await resolveLeadSessionId(team, lifecycle);
+    if (leadSessionId) sessionIds.add(leadSessionId);
     const configName = typeof team.name === "string" && team.name ? team.name : "";
     return {
       name,

@@ -50,9 +50,17 @@ export async function GET(req: Request) {
       // (A duplicate frame here is harmless: the client just sets the same set.)
       encode({ type: "running", runningSessionIds: getRunningRpcSessionIds(), sessionListVersion: getSessionListVersion() });
 
-      // Heartbeat to keep the connection alive through proxies/timeouts.
+      // Heartbeat keeps the connection alive through proxies/timeouts, and it must
+      // carry the CURRENT snapshot rather than a bare SSE comment: the sidebar treats
+      // this stream as authoritative for running state, so a half-open connection
+      // (comments still flow, but a state change was lost) would leave the last
+      // received set — and its spinner — on screen forever. A real `data:` frame
+      // re-establishes the truth even when nothing changed server-side.
       if (!closed) heartbeat = setInterval(() => {
         if (closed) return;
+        const sent = encode({ type: "running", runningSessionIds: getRunningRpcSessionIds(), sessionListVersion: getSessionListVersion() });
+        if (!sent) return;
+        // A trailing comment still keeps intermediaries from idling the socket.
         try { controller.enqueue(encoder.encode(":\n\n")); }
         catch { cleanup(); }
       }, 30_000);

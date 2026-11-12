@@ -66,6 +66,13 @@ export function ContextUsageRing({ contextUsage, sessionStats, onOpenStats }: Co
   // as a loading spinner, so leave the slot empty until usage arrives.
   if (!hasUsage) return null;
 
+  // cc-haha's compact form: a short ring **with the percentage beside it**.
+  // A bare arc reads as a spinner that never finishes (it is static by design),
+  // so the number is what tells the user this is a gauge, not a loading state.
+  const percentLabel = percent !== null
+    ? `${pct.toFixed(pct >= 10 || Number.isInteger(pct) ? 0 : 1)}%`
+    : null;
+
   return (
     <button
       type="button"
@@ -77,8 +84,12 @@ export function ContextUsageRing({ contextUsage, sessionStats, onOpenStats }: Co
         if (hasUsage) onOpenStats?.();
       }}
       style={{
-        display: "flex", alignItems: "center", justifyContent: "center",
-        width: 32, height: 32, padding: 0, flexShrink: 0,
+        display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+        width: percentLabel ? undefined : 32,
+        minWidth: 32,
+        height: 32,
+        padding: percentLabel ? "0 6px" : 0,
+        flexShrink: 0,
         background: "none", border: "none", borderRadius: "var(--radius-md)",
         cursor: hasUsage ? "pointer" : "default",
         transition: "background var(--dur-fast) var(--ease-native), opacity var(--dur-fast) var(--ease-native)",
@@ -107,6 +118,20 @@ export function ContextUsageRing({ contextUsage, sessionStats, onOpenStats }: Co
           opacity={percent === null ? 0.35 : 1}
         />
       </svg>
+      {percentLabel && (
+        <span
+          aria-hidden="true"
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: "var(--fs-micro)",
+            fontVariantNumeric: "tabular-nums",
+            color: pct >= CTX_DANGER_PCT ? "var(--danger)" : "var(--text-muted)",
+            lineHeight: 1,
+          }}
+        >
+          {percentLabel}
+        </span>
+      )}
     </button>
   );
 }

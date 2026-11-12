@@ -675,16 +675,39 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   useEffect(() => {
     // Live running status via SSE — no polling. The server pushes the current
-    // set of running session ids whenever any session starts/stops working.
+    // set of running session ids whenever any session starts/stops working, and
+    // its 30s heartbeat repeats the current set as a real frame (not a bare
+    // comment), so a healthy connection always delivers a message.
     let source: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let silenceTimer: ReturnType<typeof setTimeout> | null = null;
     let closed = false;
+
+    // A half-open stream (readyState OPEN, no frames) would keep the last
+    // received running set — and its spinner — on screen forever: "the dot
+    // spins and never stops". The server sends every 30s, so 2.5 heartbeats of
+    // silence means the connection is dead even though browser says OPEN.
+    const RUNNING_STREAM_SILENCE_MS = 75_000;
+    const armSilenceWatchdog = () => {
+      if (silenceTimer) clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(() => {
+        silenceTimer = null;
+        if (closed) return;
+        // Force a fresh connection; onerror/CLOSED handling cannot see this case.
+        source?.close();
+        source = null;
+        connect();
+      }, RUNNING_STREAM_SILENCE_MS);
+    };
 
     const connect = () => {
       if (closed) return;
       source?.close();
       source = new EventSource("/api/agent/running/events");
+      armSilenceWatchdog();
       source.onmessage = async (e) => {
+        // Any decoded frame proves the stream is alive, heartbeat frames included.
+        if (!closed) armSilenceWatchdog();
         try {
           const data = JSON.parse(e.data) as { type?: string; runningSessionIds?: string[]; sessionListVersion?: number };
           if (data.type === "running") {
@@ -721,6 +744,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     return () => {
       closed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (silenceTimer) clearTimeout(silenceTimer);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("online", connect);
       source?.close();

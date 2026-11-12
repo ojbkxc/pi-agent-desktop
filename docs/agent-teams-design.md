@@ -815,8 +815,19 @@ Ticket 与 Thread（团队讨论）多对多订阅。后续讨论（如 PR 上�
 
 **字段口径**（以 `lib/agent-teams-swimlane.ts` 的接口为准）：
 
-- `team.id` 是**团队名**（投影没有独立 id）；`team.status` 由 tickets 与 plan 状态推导（无票 = `forming`，
-  全 ended = `completed`，plan running 且已有 ended = `finishing`，plan draft/review_pending = `forming`）。
+- `team.id` 是**团队名**（投影没有独立 id）；`team.status` 由 tickets 与 plan 状态推导（全 ended = `completed`，
+  plan running 且已有 ended = `finishing`，plan draft/review_pending = `forming`）。
+  **无票团队不能恒判 `forming`**：`team_create` 直接派活（从不 `team_plan`/`team_ticket`）的团队 tickets 恒为 0，
+  原先永远显示「组建中」、团队条每 3 秒轮询不止，交付完了也停不下来。现在无票时按 lifecycle 收尾：名册里没有
+  任何成员进 lifecycle → `forming`（刚建/派发失败）；有成员派发且全员不在跑（idle/parked/aborted）→ 有
+  `accepted.jsonl` 记录就 `completed`，否则 `ended`；还有人在跑 → `running`（`deriveTeamStatus`，见
+  `lib/agent-teams-swimlane.ts`）。任务画布的空态文案也分两档（`teams.emptyTasks` / `teams.emptyTasksSettled`），
+  已收尾却无票时如实说明「这个团队没用过共享任务列表」。
+- **lead 会话要能反查到团队**：`config.json` 的 `leadSessionId` 在本服务进程恒为 `'unknown-session'`
+  （pi-team 读 `process.env.PI_SESSION_ID`，见 [agent-teams-upstream-defects](agent-teams-upstream-defects.md) B1），
+  不兜底的话 lead 会话既没有团队条也打不开工作台。`findTeamBySession()` 与 `listTeams()` 会从成员会话的
+  `pi-web:subagent` 快照读 `parentSessionId` 还原真实 lead（`resolveLeadSessionId`），并把 lead 会话并入
+  `memberSessionIds`（侧栏的团队运行点靠它）。
 - `members[].status` 来自 `lifecycle.json`（parked 视作 idle，lead 恒 running）；`activity` 由 status 派生（running = active，其余 idle）；`color` 取名册显式值，否则 lead = gray、其余按名册顺序取调色板。
 - `tickets[].source`：`plan` = plan.json 任务派生，`runtime` = `tickets/<id>.json`（`team_ticket` 落盘），
   `merged` = 同 id 两者合并（运行时的 assignments/status 覆盖派生值，subject/依赖保留计划口径）。

@@ -53,6 +53,7 @@ import {
   SUBAGENT_CONTROL_TOOL_NAMES,
 } from "./subagents";
 import { createSubagentController } from "./subagent-runtime";
+import { withWindowsBashFallback } from "./windows-bash-fallback";
 import { createPiExtensionBuiltins } from "./pi-extension-builtins";
 import { findTeamBySession, teamDirFor } from "./agent-teams-swimlane-store";
 import { isBuiltInSubagentsEnabled } from "./subagent-settings";
@@ -3094,12 +3095,17 @@ export async function startRpcSession(
       current?: { resourceLoader: { getSkills(): { skills: { filePath: string; baseDir: string }[] } } };
     } = {};
     const baseSettingsManager = SettingsManager.create(sessionCwd, agentDir);
+    // Windows where Git is not under %ProgramFiles%: the SDK's own bash discovery only
+    // probes that one root plus PATH, so `bash` would fail with "No bash shell found" in
+    // every session. Only fills in an ABSENT shellPath (never overrides an explicit one)
+    // and is a no-op off Windows; see lib/windows-bash-fallback.ts.
+    const shellAwareSettingsManager = withWindowsBashFallback(baseSettingsManager);
     // v0.8.2：只包 getCompactionSettings，按模型的真实 contextWindow 套 balanced/long 档位；
     // native 档返回 base 本身（同一对象），其余方法与属性全部透传。压缩扩展在
     // session_before_compact 里另行读取同一份 compactionPolicy（每次压缩重读，改设置免重启）。
     const settingsManager = compactionEnabled
-      ? createCompactionSettingsManager(baseSettingsManager)
-      : baseSettingsManager;
+      ? createCompactionSettingsManager(shellAwareSettingsManager)
+      : shellAwareSettingsManager;
     // Chat-only sessions and subagents that replace Pi's prompt send an exact
     // system prompt. The prompt is resolved at prompt time through this inline
     // extension: it may read the session's context files, which exist only

@@ -166,6 +166,28 @@ export function readSessionSubagentScanEntries(filePath: string): SessionEntry[]
   return readSessionRelationEntries(filePath);
 }
 
+/**
+ * A member session's parent session id, read from the same bounded prefix as
+ * `readSessionSubagentScanEntries` — never the whole file.
+ *
+ * The Agent Teams lookup needs it: pi-team writes `leadSessionId` from
+ * `process.env.PI_SESSION_ID`, which this server never sets, so every team's
+ * config says `unknown-session`. The member session's own `pi-web:subagent`
+ * entry still names the lead (`parentSessionId`), and that is the only
+ * on-disk evidence of who the lead session really is.
+ */
+export function readSessionParentSessionId(filePath: string): string | undefined {
+  const entries = readSessionRelationEntries(filePath);
+  for (const entry of entries) {
+    if (entry.type !== "custom" || entry.customType !== SUBAGENT_META_TYPE) continue;
+    const data = entry.data as { parentSessionId?: unknown } | undefined;
+    if (typeof data?.parentSessionId === "string" && data.parentSessionId) return data.parentSessionId;
+  }
+  // A forked session carries `parentSession` in its header (a file path, not an id);
+  // that is a different relation and must not be reported as a team lead.
+  return undefined;
+}
+
 export async function attachSessionProjectInfo(sessions: SessionInfo[]): Promise<SessionInfo[]> {
   const uniqueCwds = [...new Set(sessions.map((s) => s.cwd).filter(Boolean))];
   const projectByCwd = new Map<string, ProjectInfo>();

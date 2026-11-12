@@ -841,14 +841,42 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
     };
   });
 
-  const teamStatus: WorkbenchTeam["status"] = (() => {
-    if (tickets.length === 0) return "forming";
+  /**
+ * 团队阶段派生。
+ *
+ * 票是主信号，但**票不是唯一的收尾方式**：`team_create` 直接派活、从头到尾没用过
+ * `team_plan` / `team_ticket` 的团队，tickets 恒为 0。这类团队原先恒判 `forming`，
+ * 于是团队条永远显示「组建中」、还每 3 秒轮询不止（isActiveTeamPhase 只看 forming/
+ * running/finishing），已经交付完了也停不下来。缺票时按生命周期的真实终态收尾：
+ * 全员 idle/parked/aborted（即都不在跑）且至少有人被验收过 → completed；全员已
+ * 离开（parked/aborted）但没人验收 → ended。名字用 members 的 status（投影后的
+ * MemberStatus），与界面上展示的成员态同源。
+ */
+function deriveTeamStatus(
+  tickets: readonly WorkbenchTicket[],
+  plan: PlanLike | null | undefined,
+  members: readonly WorkbenchMember[],
+  lifecycle: Record<string, LifecycleEntryLike>,
+  accepted: readonly AcceptedRecordLike[],
+): WorkbenchTeam["status"] {
+  if (tickets.length > 0) {
     const ended = tickets.filter((ticket) => ticket.status === "ended").length;
     if (ended === tickets.length) return "completed";
     if (plan?.state === "running" && ended > 0) return "finishing";
     if (plan?.state === "draft" || plan?.state === "review_pending") return "forming";
     return "running";
-  })();
+  }
+  // 无票：先看成员是否真的被派发过——lifecycle 里没有非 lead 成员，就还是组建中
+  // （刚建团队 / 派发失败 / plan 独有成员尚未 launch 都落在这一档）。
+  const roster = members.filter((member) => !member.isLead);
+  const dispatched = roster.filter((member) => lifecycle[member.name] !== undefined);
+  if (dispatched.length === 0) return "forming";
+  // 全员都停了（idle / parked / aborted 都是「不在跑」）才算收尾；验收过 → completed，
+  // 否则（成员自己跑完、lead 还没签收）→ ended。
+  const allSettled = dispatched.every((member) => member.status !== "running" && member.status !== "queued");
+  if (!allSettled) return plan?.state === "draft" || plan?.state === "review_pending" ? "forming" : "running";
+  return accepted.length > 0 ? "completed" : "ended";
+}
 
   return {
     version: 1,
@@ -859,7 +887,7 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
       description: team.description ?? "",
       createdAt: isoFromMillis(team.createdAt),
       leadSessionId: team.leadSessionId ?? null,
-      status: teamStatus,
+      status: deriveTeamStatus(tickets, plan, members, lifecycle, accepted),
       incarnationId: plan?.incarnationId ?? teamName,
     },
     members,

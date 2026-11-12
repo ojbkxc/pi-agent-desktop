@@ -21,13 +21,26 @@ const MCP_TOOL_PREFIX = "mcp__";
 
 export const READ_ONLY_MCP_POLICY_EXTENSION_NAME = "pi-web-read-only-mcp";
 
+/** `+name` 是「在 settings.json 的 defaultTools 之上强开这个内置工具」的修饰形态。 */
+function bareToolName(name: string): string {
+  return name.startsWith("+") ? name.slice(1) : name;
+}
+
 /**
  * Whether a pinned tool selection is read-only: it names tools, and none of
  * them can write or run commands. The Read-only preset is one; so is a subset
  * of it. No pin (pi's configured tools) is not.
+ *
+ * A selection is stored in one of two shapes (see readSessionToolSelection): a
+ * bare allowlist, or `+name` modifiers that force built-ins open on top of
+ * settings.json defaultTools. The `+` MUST be stripped before the check — a
+ * full-tools session pins `["+bash","+read","+edit","+write",…]`, and comparing
+ * "+bash" to the bare name marked **every** such session read-only, so its MCP
+ * write tools were blocked with a read-only reason the user never selected.
  */
 export function isReadOnlySelection(tools: readonly string[] | undefined): boolean {
-  return tools !== undefined && tools.length > 0 && !tools.some((name) => WRITE_CAPABLE_TOOLS.has(name));
+  return tools !== undefined && tools.length > 0
+    && !tools.some((name) => WRITE_CAPABLE_TOOLS.has(bareToolName(name)));
 }
 
 /** A tool the MCP extension registered, or one named like an MCP tool by another MCP extension. */

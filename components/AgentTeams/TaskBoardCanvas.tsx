@@ -105,8 +105,14 @@ export function TaskBoardCanvas({ snapshot, requestedWidth = 0, formation, onSel
   if (snapshot.tickets.length === 0) {
     // 编队带展示的是「成员」，与票无关：成员已 spawn 但还没建票的团队也应看到编队带。
     // 只有传了 formation 槽位时才铺画布，否则退回纯空态提示。
+    //
+    // 文案分两档：团队还没结束 → 「负责人拆解工作后任务会出现在这里」；已经结束
+    // （成员都已停下）→ 说实话：这个团队从未用过 team_plan / team_ticket，任务列表
+    // 因此是空的。team_create 直接派活是合法且常见的用法，空画布不该让用户以为坏了。
+    const settled = snapshot.team.status === "completed" || snapshot.team.status === "ended";
+    const emptyText = settled ? t("teams.emptyTasksSettled") : t("teams.emptyTasks");
     if (!formation) {
-      return <p className="scheduled-hint agent-teams-board-empty">{t("teams.emptyTasks")}</p>;
+      return <p className="scheduled-hint agent-teams-board-empty">{emptyText}</p>;
     }
     return (
       <div className="agent-teams-board-scroll">
@@ -116,7 +122,7 @@ export function TaskBoardCanvas({ snapshot, requestedWidth = 0, formation, onSel
             className="scheduled-hint agent-teams-board-empty"
             style={{ position: "absolute", top: DEPTH_COLUMN_TOP + 8, left: HORIZONTAL_PADDING }}
           >
-            {t("teams.emptyTasks")}
+            {emptyText}
           </p>
         </div>
       </div>

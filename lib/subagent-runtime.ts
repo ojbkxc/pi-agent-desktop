@@ -9,6 +9,7 @@ import {
   type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentSessionLike } from "./pi-types";
+import { withWindowsBashFallback } from "./windows-bash-fallback";
 import {
   subagentNotificationText,
   subagentToolDetails,
@@ -296,9 +297,11 @@ export function createSubagentController(
       // 与恢复路径 lib/rpc-manager.ts 的 compactionEnabled 必须同规则。
       const compactionEnabled = request.lean !== true && !chatOnly;
       const baseSettingsManager = SettingsManager.create(childCwd, agentDir);
+      // 成员会话与普通会话同规则（见 lib/rpc-manager.ts）：Windows 上 Git 不在
+      // %ProgramFiles% 时补 shellPath，否则成员的 bash 工具同样报 "No bash shell found"。
       const settingsManager = compactionEnabled
-        ? createCompactionSettingsManager(baseSettingsManager)
-        : baseSettingsManager;
+        ? createCompactionSettingsManager(withWindowsBashFallback(baseSettingsManager))
+        : withWindowsBashFallback(baseSettingsManager);
       const services = await createAgentSessionServices({
         cwd: childCwd,
         agentDir,

@@ -58,8 +58,28 @@ export function discoverTerminalShells({
     add(variable("ComSpec")?.replace(/^"(.*)"$/, "$1") ?? paths.join(systemRoot, "System32", "cmd.exe"));
     add(paths.join(systemRoot, "System32", "cmd.exe"));
     const git = find("git.exe");
-    const gitBash = [git && paths.join(paths.dirname(paths.dirname(git)), "bin", "bash.exe"),
-      paths.join(programFiles, "Git", "bin", "bash.exe")].find(path => path && executable(path));
+    // Git for Windows ships git.exe in `<root>\cmd\` or `<root>\mingw64\bin\`, and bash.exe
+    // in `<root>\bin\`. Walking up from git.exe therefore cannot assume a fixed depth:
+    // two dirname() calls from `<root>\mingw64\bin\git.exe` land on `<root>\mingw64`
+    // (and win32.dirname() collapses a drive path to `D:`), so the old derivation found
+    // Git Bash on *no* Windows machine. Walk the ancestors instead, bounded to the tree
+    // that owns git.exe, and also probe the two standard install roots.
+    const ancestors = (() => {
+      const chain: string[] = [];
+      let current = git ? paths.dirname(git) : "";
+      for (let depth = 0; depth < 6 && current && !chain.includes(current); depth += 1) {
+        chain.push(current);
+        const parent = paths.dirname(current);
+        if (!parent || parent === current) break;
+        current = parent;
+      }
+      return chain;
+    })();
+    const gitBash = [
+      ...ancestors.map(root => paths.join(root, "bin", "bash.exe")),
+      ...ancestors.map(root => paths.join(root, "usr", "bin", "bash.exe")),
+      paths.join(programFiles, "Git", "bin", "bash.exe"),
+    ].find(path => executable(path));
     add(gitBash, "Git Bash");
     return { shells, defaultPath: shells[0]?.path ?? null };
   }

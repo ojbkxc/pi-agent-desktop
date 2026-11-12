@@ -174,6 +174,12 @@ pi-team 版本 **0.2.0**（`node_modules/pi-team/package.json`）；pi-team 升�
   里取当前会话 id，而不是读进程 env。
 - **影响 + 修复方向**：当前是**潜在雷**（提示词从未引导跨团队操作），但契约层面已破。桌面侧无法
   可靠补（写 `process.env` 会串号）；只能先用文档约束、并在 UI/提示词层面避免跨团队操作。
+- **桌面侧已部分兜住（2026-11-12）**：`'unknown-session'` 让 **lead 会话自己**反查不到团队——
+  团队条不出现、工作台打不开，用户只看到「团队在那儿但点不进去」。`findTeamBySession()` /
+  `listTeams()` 现在在 config 无可靠值时，从成员会话自己的 `pi-web:subagent` 快照读
+  `parentSessionId` 还原真实 lead（`lib/agent-teams-swimlane-store.ts` 的
+  `resolveLeadSessionId` + `lib/session-reader.ts` 的 `readSessionParentSessionId`，有界读取不碰全文件）。
+  这**不修隔离判据本身**（那仍需 pi-team 从 `ExtensionContext` 取会话 id）。
 
 ### B2. `config.json` 是唯一权威名册 → **工具侧**看不到 plan 独有成员（合并原 H5 + M1）
 
