@@ -121,6 +121,7 @@ jobs:
             ### New
 
             - **Two test-case-generation skills are built in.** `generate-test-cases-skill` (turns a requirement document into test-case XMind files, with a persistent memory and a self-learning loop) and `testcase-playbook` (a 10-method design playbook with a flowchart node-coverage matrix, quality gates, Excel / XMind output and copy-paste prompt templates) now ship with the app and are usable in any project session without installing anything. Settings › Skills lists them under a **built-in** group, read-only: the switch is greyed out on purpose, because their files live in the app's resource directory and every upgrade rebuilds them.
+            - **Network proxy for session traffic** (Settings › General). Node's `fetch` does not read the system proxy, and every model request leaves from the local server — so until now a system proxy made no difference here. Pick **direct** (the default: nothing changes), **system** (Windows registry / macOS network preferences) or **manual** with a URL. It applies at once, without a restart, and to the skill market and downloads too. It deliberately does not cover the app's own update checks, which run in the desktop shell.
 
             Bundled components: pi 1.5.0, pi-web 0.10.0.
 
@@ -133,6 +134,7 @@ jobs:
             ### 新增
 
             - **内置两个测试用例生成技能。** `generate-test-cases-skill`（从需求文档生成测试用例 XMind，带持久化记忆与自学习闭环）与 `testcase-playbook`（10 种测试设计方法 + 流程图节点覆盖矩阵 + 质量门禁 + Excel / XMind 输出 + 可复制的提示词模板）随应用一起打包，任意项目会话开箱可用，不需要安装。设置 › 技能 里它们自成一类「内置」、只读：开关是刻意置灰的 —— 它们的文件在应用资源目录里，每次升级都会重建。
+            - **会话流量的网络代理**（设置 › 通用）。node 的 `fetch` 不读系统代理，而所有模型请求都由本机服务端发出 —— 所以在此之前，系统代理对本应用没有任何作用。可选 **直连**（默认，行为不变）、**跟随系统**（Windows 注册表 / macOS 网络偏好）或**手动**填地址；改完立即生效、无需重启，技能市场与各类下载同样走它。它刻意不覆盖应用自身的更新检查（那条路在桌面壳里）。
 
             内置组件版本：pi 1.5.0、pi-web 0.10.0。
 
