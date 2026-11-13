@@ -22,6 +22,8 @@ export interface UseTeamPlanResult {
   error: string | null;
   /** approve 请求进行中。 */
   busy: boolean;
+  /** 上次批准失败的原因（投递失败 / identity 409 / 状态不允许）；成功或重试后清空。 */
+  approveError: string | null;
   /** 保存编辑进行中。 */
   saving: boolean;
   /** 保存失败信息。 */
@@ -52,10 +54,37 @@ export interface PlanEdits {
   tasks: PlanTaskEditDraft[];
 }
 
+/**
+ * 轮询响应是否该覆盖当前 plan（并**是否该换掉对象身份**）。
+ *
+ * 两件事都靠它：
+ *
+ * 1. **陈旧响应**：2s 轮询与 PATCH 保存会并发，一个早于写入发出的响应可能后到并把 plan 退回
+ *    旧 revision —— 那会连带把编辑器的草稿基线重置，用户刚改的、没保存的内容会消失。
+ *    同一世系（planId + incarnationId）里 revision 只增不减，所以更小的 revision 一律忽略。
+ * 2. **对象身份**：`PlanEditor` 以 `plan` 为依赖重置草稿，而轮询每 2s 都重新解析一份 JSON
+ *    （内容一样也是**新对象**）。若照单全收，用户正在编辑的草稿每 2 秒被清一次。plan.json 的
+ *    任何写入（pi-team 的 `mutateTeamPlan` / `stageMember` / `approve` / 本仓的 PATCH）都会
+ *    bump `revision`，所以「同世系且 revision 相同 ⇒ 内容相同」，此时必须返回**原来那个对象**，
+ *    让 React 的依赖比较（Object.is）把它判成没变。
+ */
+export function acceptPlan(
+  current: TeamPlanView | null,
+  incoming: TeamPlanView | null,
+): TeamPlanView | null {
+  if (!incoming) return null;
+  if (!current) return incoming;
+  const sameLineage =
+    current.planId === incoming.planId && current.incarnationId === incoming.incarnationId;
+  if (sameLineage && incoming.revision <= current.revision) return current;
+  return incoming;
+}
+
 export function useTeamPlan(teamName: string | null, refreshKey: number = 0): UseTeamPlanResult {
   const [plan, setPlan] = useState<TeamPlanView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [approveError, setApproveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
@@ -95,7 +124,7 @@ export function useTeamPlan(teamName: string | null, refreshKey: number = 0): Us
         }
         const data = (await response.json()) as { plan: TeamPlanView | null };
         if (stopped) return;
-        setPlan(data.plan);
+        setPlan((current) => acceptPlan(current, data.plan));
         setError(null);
         schedule(TEAM_PLAN_POLL_MS);
       } catch (err) {
@@ -124,6 +153,7 @@ export function useTeamPlan(teamName: string | null, refreshKey: number = 0): Us
     const current = planRef.current;
     if (!current) return { ok: false, reason: "no plan" };
     setBusy(true);
+    setApproveError(null);
     try {
       const response = await fetch(
         `/api/teams/${encodeURIComponent(teamName ?? current.teamName)}/plan/approve`,
@@ -142,11 +172,16 @@ export function useTeamPlan(teamName: string | null, refreshKey: number = 0): Us
       // 投递成功后再拉一次，让后续状态变化尽快反映到界面。
       setTick((value) => value + 1);
       if (!response.ok || !data.ok) {
-        return { ok: false, reason: data.reason ?? `批准失败（HTTP ${response.status}）` };
+        const reason = data.reason ?? `批准失败（HTTP ${response.status}）`;
+        // 失败必须在界面上可见：调用方（ChatWindow）丢掉返回值，只有这里能留下痕迹。
+        setApproveError(reason);
+        return { ok: false, reason };
       }
       return { ok: true };
     } catch (err) {
-      return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+      const reason = err instanceof Error ? err.message : String(err);
+      setApproveError(reason);
+      return { ok: false, reason };
     } finally {
       setBusy(false);
     }
@@ -189,7 +224,8 @@ export function useTeamPlan(teamName: string | null, refreshKey: number = 0): Us
         return { ok: false, reason };
       }
       // 就地回填：revision 已 +1，编辑基线随 plan prop 一起重置。
-      setPlan(data.plan);
+      const saved = data.plan;
+      setPlan((prev) => acceptPlan(prev, saved));
       return { ok: true };
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
@@ -200,5 +236,5 @@ export function useTeamPlan(teamName: string | null, refreshKey: number = 0): Us
     }
   }, [teamName]);
 
-  return { plan, error, busy, saving, saveError, conflict, refresh, approve, save };
+  return { plan, error, busy, approveError, saving, saveError, conflict, refresh, approve, save };
 }

@@ -1872,6 +1872,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
               saveError={teamPlan.saveError}
               conflict={teamPlan.conflict}
               error={teamPlan.error}
+              approveError={teamPlan.approveError}
               onApprove={() => void teamPlan.approve()}
               onSave={(edits) => void teamPlan.save(edits)}
               onReload={teamPlan.refresh}

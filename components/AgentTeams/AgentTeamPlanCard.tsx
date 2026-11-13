@@ -6,6 +6,7 @@ import type { TranslationParams } from "@/lib/i18n/types";
 import {
   derivePlanReview,
   isApproveDisabled,
+  isPlanApprovable,
   isPlanCardVisible,
   type PlanState,
   type TeamPlanView,
@@ -13,19 +14,23 @@ import {
 import { PlanEditor, type PlanMemberEditDraft, type PlanTaskEditDraft } from "./PlanEditor";
 
 /**
- * B3 计划卡（会话决策坞，composer 上方）——**只读展示 + 批准**。
+ * B3 计划卡（会话决策坞，composer 上方）——展示 + **可编辑** + 批准。
  *
- * 收缩态：团队名 + 状态徽标 + 成员数 + 「Review configuration」。点开是 Modal：成员名册
- * （逐个 runtime）、成员详情（agentType / reason / prompt）、全部任务（subject / 依赖 /
- * owner / 未分配告警）。批准按钮的 disabled 口径 = presetChanged || hasUnassignedTasks ||
- * invalidNames>0（本轮只读，presetChanged 恒 false）。
+ * 收缩态：团队名 + 状态徽标 + 成员数 + 「Review configuration」。点开是 Modal：
+ * - 传了 `onSave` → 渲染 `PlanEditor`（成员勾选/批量设模型/跟随队长/逐个改 agent 与模型/
+ *   任务负责人；`draft` / `review_pending` 才可编辑）；
+ * - 没传 → 退回只读名册（纯展示场景与静态断言用）。
+ *
+ * 批准按钮的 disabled 口径 = `isApproveDisabled`（图校验：未分配任务 / 非法成员名）
+ * || **状态不是 review_pending**（批准路由对其它状态一律 409） || busy
+ * || **有未保存的编辑**（否则会按旧模型启动团队）。
  *
  * 阶段显示（对齐 cc-haha AgentTeamsPlanCard.tsx:83）：draft / review_pending / launch_failed
  * / interrupted 显示；无 plan、launching、running、cancelled 且无 parentPlanId 隐藏。
  * approve 成功 → 状态变 launching → 卡片自动消失。
  *
- * 纯展示：数据由调用方用 `useTeamPlan(teamName)` 提供；approve 只是回调（由 hook 投递给
- * lead，桌面不写盘）。本组件自判断可见性，可见性不满足时返回 null，挂载点可直接渲染。
+ * 纯展示 + 回调：数据由调用方用 `useTeamPlan(teamName)` 提供；approve 只是回调（由 hook
+ * 投递给 lead，桌面不写盘），save 走 PATCH。本组件自判断可见性，不满足时返回 null。
  * 样式内联 + 主题 CSS 变量，不新增全局类。
  */
 interface Props {
@@ -42,6 +47,8 @@ interface Props {
   conflict?: boolean;
   /** 读取 / 批准的错误信息。 */
   error?: string | null;
+  /** 批准失败的原因（投递失败 / 409），由 useTeamPlan 记录。 */
+  approveError?: string | null;
   /** 点「批准」；由 hook 的 approve 投递给 lead。 */
   onApprove?: () => void;
   /** 保存编辑（PATCH）；缺省时保存按钮不出现。 */
@@ -158,10 +165,16 @@ export function planModalView(
     onReload?: () => void;
     /** 传 true 才渲染可编辑区（需要 React hook，无 DOM 的纯视图测试默认不传）。 */
     editor?: boolean;
+    /** 可编辑区有未保存改动（批准必须被拦住）。 */
+    dirty?: boolean;
+    onDirtyChange?: (dirty: boolean) => void;
+    /** 批准失败的原因（投递失败 / 409 等），由 useTeamPlan 记录。 */
+    approveError?: string | null;
   } = {},
 ) {
   const review = derivePlanReview(plan);
-  const approveDisabled = isApproveDisabled(plan) || Boolean(options.busy);
+  const approveDisabled =
+    isApproveDisabled(plan) || !isPlanApprovable(plan) || Boolean(options.busy) || Boolean(options.dirty);
   const ownerName = (ownerId: string | undefined) =>
     plan.members.find((member) => member.id === ownerId)?.name ?? t("teams.plan.unassigned");
   const editable = options.editor === true && (plan.state === "draft" || plan.state === "review_pending");
@@ -202,6 +215,7 @@ export function planModalView(
             conflict={options.conflict ?? false}
             {...(options.onSave ? { onSave: options.onSave } : {})}
             {...(options.onReload ? { onReload: options.onReload } : {})}
+            {...(options.onDirtyChange ? { onDirtyChange: options.onDirtyChange } : {})}
           />
         ) : (
           <>
@@ -250,6 +264,17 @@ export function planModalView(
           </>
         )}
 
+        {options.dirty ? (
+          <p style={S.alert} role="alert" data-testid="team-plan-unsaved">
+            {t("teams.plan.saveBeforeApprove")}
+          </p>
+        ) : null}
+        {options.approveError ? (
+          <p style={S.alert} role="alert" data-testid="team-plan-approve-error">
+            {options.approveError}
+          </p>
+        ) : null}
+
         <div style={S.footer}>
           <button type="button" data-testid="team-plan-close" style={S.ghost} onClick={options.onClose} disabled={options.busy}>
             {t("teams.plan.close")}
@@ -277,17 +302,26 @@ export function AgentTeamPlanCard({
   saveError = null,
   conflict = false,
   error = null,
+  approveError = null,
   onApprove,
   onSave,
   onReload,
 }: Props) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
+  // 可编辑区有未保存改动时，批准必须被拦住（否则按旧模型启动团队）。
+  const [dirty, setDirty] = useState(false);
 
   // 审批通过（state 变 launching）后卡片本就隐藏；这里顺手把 Modal 关掉，避免退场残留。
   useEffect(() => {
     if (!isPlanCardVisible(plan)) setOpen(false);
   }, [plan]);
+
+  // 关掉弹框后「有未保存改动」不再成立（草稿随 PlanEditor 卸载而消失）。计划本身变化时
+  // **不**在这里清 —— 有未保存改动时 PlanEditor 会保留草稿，由它自己上报真实的 dirty。
+  useEffect(() => {
+    if (!open) setDirty(false);
+  }, [open]);
 
   useEffect(() => {
     if (!open || typeof document === "undefined") return;
@@ -341,6 +375,9 @@ export function AgentTeamPlanCard({
             saving,
             saveError,
             conflict,
+            dirty,
+            approveError,
+            onDirtyChange: setDirty,
             ...(onSave ? { onSave } : {}),
             ...(onReload ? { onReload } : {}),
           })

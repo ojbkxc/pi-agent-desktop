@@ -47,6 +47,7 @@ const FAKE = {
   "teams.plan.state.launch_failed": "Launch failed",
   "teams.plan.state.cancelled": "Cancelled",
   "teams.plan.state.interrupted": "Interrupted",
+  "teams.plan.saveBeforeApprove": "Save your changes before approving — otherwise the team launches with the old models.",
 };
 function tFake(key, params) {
   let text = FAKE[key] ?? key;
@@ -157,6 +158,25 @@ test("批准按钮 disabled = 有未分配任务 / 非法成员名；busy 时禁
   assert.match(busy, /data-testid="team-plan-approve"[^>]*disabled/);
   assert.match(busy, /Approving…/, "busy 时按钮文案改为「批准中」");
   assert.doesNotMatch(busy, /teams\.plan\./, "不应渲染 i18n 键原文");
+});
+
+test("批准门禁：非 review_pending / 有未保存改动 / 批准失败都拦住并给提示", () => {
+  // draft 等状态批准路由必然 409 → 按钮禁用。
+  for (const state of ["draft", "launch_failed", "interrupted"]) {
+    const html = renderToStaticMarkup(planModalView(tFake, view({ state })));
+    assert.match(html, /data-testid="team-plan-approve"[^>]*disabled/, `${state} 不能批准`);
+  }
+
+  // 改了模型但没保存：批准被拦住 + 说明原因（否则会按旧模型启动团队）。
+  const dirty = renderToStaticMarkup(planModalView(tFake, view(), { editor: false, dirty: true }));
+  assert.match(dirty, /data-testid="team-plan-approve"[^>]*disabled/);
+  assert.match(dirty, /data-testid="team-plan-unsaved"/);
+  assert.match(dirty, /Save your changes before approving/, "提示文案来自 i18n（此处为假词典/英文包）");
+
+  // 批准失败的原因必须显示出来（调用方丢返回值也不静默）。
+  const failed = renderToStaticMarkup(planModalView(tFake, view(), { approveError: "投递失败：找不到 lead 会话" }));
+  assert.match(failed, /data-testid="team-plan-approve-error"/);
+  assert.match(failed, /找不到 lead 会话/);
 });
 
 test("回调接线：启用时点批准触发 onApprove、点关闭触发 onClose；禁用时批准无 onClick", () => {

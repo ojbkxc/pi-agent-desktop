@@ -15,7 +15,7 @@ const jiti = createJiti(import.meta.url, {
   alias: { react: fileURLToPath(new URL("./__fixtures__/fake-react.mjs", import.meta.url)) },
 });
 const ReactFake = await jiti.import("react");
-const { useTeamPlan, TEAM_PLAN_POLL_MS } = await jiti.import("./useTeamPlan.ts");
+const { useTeamPlan, acceptPlan, TEAM_PLAN_POLL_MS } = await jiti.import("./useTeamPlan.ts");
 
 const PLAN = {
   planId: "p-1",
@@ -160,4 +160,60 @@ test("无 plan 时 approve → 不 fetch，返回 { ok:false }", async (t) => {
   const result = await h.current.approve();
   assert.equal(result.ok, false);
   assert.equal(env.calls.length, before, "approve 前无 plan：不发请求");
+});
+
+test("approve 失败 → approveError 落地（调用方丢返回值也看得见）", async (t) => {
+  installEnv([
+    { ok: true, body: { plan: PLAN } },
+    { ok: false, status: 502, body: { ok: false, reason: "投递失败：找不到 lead 会话" } },
+  ]);
+  t.after(restoreEnv);
+  const h = mount(useTeamPlan, "demo", 0);
+  h.flush();
+  await flush();
+
+  assert.equal(h.current.approveError, null, "初始为空");
+  await h.current.approve();
+  assert.match(h.current.approveError, /找不到 lead 会话/, "失败原因留在这里给界面显示");
+});
+
+test("approve 成功 → 清掉上一次的 approveError", async (t) => {
+  installEnv([
+    { ok: true, body: { plan: PLAN } },
+    { ok: false, status: 502, body: { ok: false, reason: "boom" } },
+    { ok: true, status: 200, body: { ok: true, requestId: "desktop-approve-p-1-r3" } },
+  ]);
+  t.after(restoreEnv);
+  const h = mount(useTeamPlan, "demo", 0);
+  h.flush();
+  await flush();
+
+  await h.current.approve();
+  assert.equal(h.current.approveError, "boom");
+  await h.current.approve();
+  assert.equal(h.current.approveError, null, "重试成功后不再显示旧错误");
+});
+
+test("acceptPlan：同世系里更小的 revision 被忽略（轮询不能回退刚保存的计划）", () => {
+  const newer = { ...PLAN, revision: 5 };
+  const stale = { ...PLAN, revision: 3 };
+  assert.equal(acceptPlan(newer, stale), newer, "陈旧轮询响应被丢弃");
+  assert.equal(acceptPlan(stale, newer), newer, "更新的照收");
+
+  // 同 revision 的重复内容必须保住**对象身份**：PlanEditor 以 plan 为依赖重置草稿，
+  // 若每 2s 都换新对象，用户正在编辑、尚未保存的内容会被周期性地清空。
+  const sameContentDifferentObject = { ...PLAN, revision: 5 };
+  assert.notEqual(sameContentDifferentObject, newer);
+  assert.equal(acceptPlan(newer, sameContentDifferentObject), newer, "同 revision 保留原对象身份");
+
+  // 换世系（新计划 / 换团队）：revision 从 1 重来也必须接受。
+  const nextPlan = { ...PLAN, planId: "p-2", incarnationId: "inc-2", revision: 1 };
+  assert.equal(acceptPlan(newer, nextPlan), nextPlan, "换 planId 一律接受");
+  const nextIncarnation = { ...PLAN, incarnationId: "inc-9", revision: 1 };
+  assert.equal(acceptPlan(newer, nextIncarnation), nextIncarnation, "换 incarnation 一律接受");
+
+  // 服务端说没有计划 → 清空。
+  assert.equal(acceptPlan(newer, null), null);
+  assert.equal(acceptPlan(null, PLAN), PLAN);
+  assert.equal(acceptPlan(newer, { ...newer, revision: 6 }).revision, 6, "更高 revision 照收");
 });

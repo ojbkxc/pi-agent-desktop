@@ -101,12 +101,42 @@ export function isValidTeamMemberName(name: string): boolean {
   return /^[\p{L}\p{N}_-]+$/u.test(name) && name !== "team-lead";
 }
 
+/**
+ * 运行时三元组是否可用。
+ *
+ * pi-team 写 `plan.leaderRuntime` 时读 `process.env.PI_PROVIDER_ID` / `PI_MODEL_ID`，而本服务
+ * 进程从不设置它们（同 `PI_SESSION_ID`，见 docs/agents/agent-teams-upstream-defects.md B1）→
+ * 真实机器上队长运行时恒为 `unknown/unknown`。界面必须把它当「未知」，否则「跟随队长模型」
+ * 会把成员模型写成 `unknown/unknown`（一个必然 spawn 失败的值），队长那一行也会显示得像个真值。
+ */
+export function isUsableRuntime(
+  runtime: Pick<PlanRuntimeView, "providerId" | "modelId"> | null | undefined,
+): boolean {
+  if (!runtime) return false;
+  const provider = runtime.providerId?.trim() ?? "";
+  const model = runtime.modelId?.trim() ?? "";
+  return Boolean(provider && model && provider !== "unknown" && model !== "unknown");
+}
+
+/**
+ * 这个计划当前能否批准。只有 `review_pending` 可以 —— `draft` 要先 submit，
+ * `launch_failed` / `interrupted` 桌面侧没有重试入口（pi-team 的 team_plan 也没有 retry）。
+ * 这条门禁很重要：批准路由对非 review_pending 一律 409，没有它按钮点了必然失败。
+ */
+export function isPlanApprovable(plan: Pick<TeamPlanView, "state">): boolean {
+  return plan.state === "review_pending";
+}
+
 export interface PlanReview {
   /** 有任务没分到（成员不存在的）owner。 */
   hasUnassignedTasks: boolean;
   /** 不合法的成员名（会渲染到界面报错行）。 */
   invalidNames: string[];
-  /** agent 预设被改过。本轮计划卡是只读展示、不含编辑，恒为 false（保留字段以对齐 disabled 公式）。 */
+  /**
+   * agent 预设被改过。**恒为 false**：桌面侧的编辑是「改完显式保存」，草稿的未保存状态
+   * 由卡片自己门禁（`PlanEditor` 的 onDirtyChange → 批准按钮禁用），不走这个字段。
+   * 保留字段是为了跟 cc-haha 的 disabled 公式对齐、也留给将来服务端侧判定。
+   */
   presetChanged: boolean;
 }
 
@@ -119,7 +149,7 @@ export function derivePlanReview(plan: Pick<TeamPlanView, "members" | "tasks">):
   const invalidNames = plan.members
     .filter((member) => !isValidTeamMemberName(member.name))
     .map((member) => member.name);
-  // 本轮计划卡只读，没有本地编辑 → presetChanged 恒 false。
+  // 未保存的编辑由卡片自己的 dirty 门禁处理（见 PlanReview.presetChanged 说明）。
   return { hasUnassignedTasks, invalidNames, presetChanged: false };
 }
 

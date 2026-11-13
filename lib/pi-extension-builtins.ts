@@ -24,7 +24,7 @@ import { createGoalExtension } from "./goal/goal-extension";
 import { PI_EXTENSION_BUILTIN_NAMES } from "./pi-extension-names";
 import { isBuiltInSubagentsEnabled } from "./subagent-settings";
 import type { SubagentController } from "./subagent-runtime";
-import { sanitizeTeamName, teamDirFor } from "./agent-teams-swimlane-store";
+import { sanitizeTeamName, teamDirFor, writeDesktopLeadSession } from "./agent-teams-swimlane-store";
 
 // pi-purge 的加载方式与另两个不同，这里必须用运行时加载而不是顶层 import：
 // 它不编译、不发 dist，入口是纯 TS 源码 `extensions/pi-purge.ts`，且 package.json
@@ -77,7 +77,9 @@ export const TEAM_PLAN_APPROVAL_GUIDE = `This desktop always reviews a team plan
 1. Call team_create with spawn=false (the host forces this even if you pass true), then immediately call team_plan { operation: "submit" } with the full member list (id / name / agent_type / prompt / provider_id / model_id) and the task graph (every task has exactly one owner_id, every member owns at least one task, dependencies acyclic). The plan card appears in the user's chat; the user can edit models, agent presets and task owners there.
 2. Do not launch on your own. Wait for the user. When the user approves, you receive a prompt telling you the exact request_id to pass to team_plan { operation: "approve" }, followed by team_plan { operation: "launch" } to spawn the members. Approving does not start them.
 
-If team_create returns "未派发成员（spawn=false）", that is the expected outcome — proceed to submit the plan, do not retry team_create. Never work around this by calling team_plan launch before the user has approved.`;
+If team_create returns "未派发成员（spawn=false）", that is the expected outcome — proceed to submit the plan, do not retry team_create. Never work around this by calling team_plan launch before the user has approved.
+
+Give every member an explicit provider_id / model_id in the plan: the trustworthy one for planning and review, a cheaper one for search and bulk edits. Do not leave them to the lead's own model — the desktop records the leader runtime as unknown, and a member left on "unknown" cannot be spawned.`;
 
 /**
  * team_create 撞目录时的拦截文案。
@@ -163,6 +165,25 @@ function teamBuiltin(
       pi.on("before_agent_start", (event) => {
         event.systemPromptOptions.sections[TEAM_NAMING_SECTION] = TEAM_NAMING_GUIDE;
         event.systemPromptOptions.sections[TEAM_PLAN_APPROVAL_SECTION] = TEAM_PLAN_APPROVAL_GUIDE;
+        return undefined;
+      });
+      // team_create 成功后记下「这个团队的 lead 是当前会话」。
+      //
+      // 必需，不是优化：默认 spawn=false 时团队里还没有任何成员会话，磁盘上除了 pi-team
+      // 写的占位 'unknown-session' 没有第二份 lead 证据，而计划卡正是靠「lead 会话 → 反查
+      // 团队」出现的 —— 没有这条记录用户永远看不到计划、也就永远无法批准。
+      // 只写本仓库自己的 desktop-lead.json，绝不改 config.json 的 leadSessionId：
+      // pi-team 的 incarnation() 要求它等于 process.env.PI_SESSION_ID（= 占位值）。
+      pi.on("tool_result", async (event, ctx) => {
+        if (event.toolName !== TEAM_CREATE_TOOL_NAME) return undefined;
+        const input = event.input as { team_name?: unknown } | undefined;
+        const rawName = typeof input?.team_name === "string" ? input.team_name.trim() : "";
+        if (!rawName) return undefined;
+        try {
+          await writeDesktopLeadSession(rawName, ctx.sessionManager.getSessionId());
+        } catch {
+          // 记录失败不影响团队本身；成员派发后仍可反推（只是晚一轮）。
+        }
         return undefined;
       });
     }

@@ -1184,6 +1184,27 @@ completed / in_progress / blocked / available）；泳道 `taskAnchors[].status`
   `process.env.PI_SESSION_ID`，本服务进程从不设置）→ 恒为占位 `unknown-session`。审批路由与
   无人值守扫描都改用 `resolveTeamLeadSession(team)`（`lib/agent-teams-swimlane-store.ts`，
   从成员会话的 `pi-web:subagent.parentSessionId` 反推），反推不出来才回落原值。
+- **`desktop-lead.json`（lead 标记，必须有）**。改了默认 `spawn=false` 之后，`team_create`
+  那一刻**还没有任何成员会话**，磁盘上除了 pi-team 的占位值没有第二份 lead 证据 —— 而计划卡
+  正是靠「lead 会话 → 反查团队」出现的，缺了它用户永远看不到计划、也就永远无法批准。
+  所以 extension 在 `team_create` 的 `tool_result` 钩子里把当前会话写进
+  `<team>/desktop-lead.json`（`writeDesktopLeadSession`），`resolveLeadSessionId` /
+  `findTeamBySession` / `listTeams` / `resolveTeamLeadSession` 都读它（优先级：config 真值 →
+  该标记 → 成员会话反推）。**绝不改 config 的 `leadSessionId`**：pi-team 的 `incarnation()`
+  要求它等于 `process.env.PI_SESSION_ID`（= 占位值），改真值会让之后所有 `team_plan` 调用
+  404「Team does not belong to this session」。
+- **批准按钮的 disabled 口径**（`components/AgentTeams/AgentTeamPlanCard.tsx`）=
+  `isApproveDisabled`（图校验）|| `!isPlanApprovable`（**只有 `review_pending` 能批**，其余状态
+  批准路由一律 409）|| busy || **未保存的编辑**（`PlanEditor` 的 `onDirtyChange` → dirty；
+  不拦就会「改了模型没保存、直接点批准」，团队按旧模型启动 —— cc-haha 的 `presetChanged` 就是
+  拦这个）。批准失败的原因由 `useTeamPlan.approveError` 记录并显示，因为调用方
+  （ChatWindow）丢掉了 `approve()` 的返回值。
+- **队长运行时是占位值时不许「跟随队长」**。`plan.leaderRuntime` 读 `PI_PROVIDER_ID` /
+  `PI_MODEL_ID`（同样从不设置）→ 恒为 `unknown/unknown`；`isUsableRuntime()` 把它当未知：
+  隐藏队长那一行、禁用「跟随队长模型」，否则会把成员模型写成必然 spawn 失败的 `unknown/unknown`。
+- **轮询不能回退计划**。2s 轮询与 PATCH 保存并发时，一个早于写入的响应可能后到并把 plan 退回
+  旧 revision（连带重置编辑草稿、丢掉未保存内容）。`useTeamPlan.acceptPlan()` 在同一
+  planId + incarnationId 世系里丢弃更小的 revision；换世系一律接受。
 
 ---
 

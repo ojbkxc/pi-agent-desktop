@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { useModelCatalog } from "@/hooks/useModelCatalog";
 import { AppSelect } from "@/components/AppSelect";
 import { ConfigButton } from "@/components/SettingsUi";
-import type { TeamPlanView } from "@/lib/agent-teams-plan";
+import { isUsableRuntime, type TeamPlanView } from "@/lib/agent-teams-plan";
 
 /**
  * B3 计划卡的**可编辑**内容（对齐 cc-haha AgentTeamsPlanCard 的弹框）。
@@ -39,6 +39,20 @@ export interface PlanTaskEditDraft {
   ownerId?: string;
 }
 
+/** 思考级别（与 pi SDK 的 `ThinkingLevel` 同集；空串 = 未设置）。 */
+export const PLAN_EFFORT_LEVELS = ["", "off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+/** 编辑器里的成员草稿（`effortLevel` 空串 = 未设置）。 */
+export interface PlanMemberDraft {
+  agentType: string;
+  modelRef: string;
+  effortLevel: string;
+}
+export interface PlanDraft {
+  members: Record<string, PlanMemberDraft>;
+  tasks: Record<string, string>;
+}
+
 /** `provider/modelId` → 两个字段（provider 里不含斜杠，模型 id 可能含）。 */
 export function splitModelRef(ref: string): { providerId: string; modelId: string } | null {
   if (!ref) return null;
@@ -51,11 +65,16 @@ export function joinModelRef(providerId: string, modelId: string): string {
   return providerId && modelId ? `${providerId}/${modelId}` : "";
 }
 
-/** 只把**真正改过**的字段放进 PATCH 体（与 cc-haha teamPlansApi.save 同口径）。 */
-export function diffPlanEdits(
-  plan: TeamPlanView,
-  draft: { members: Record<string, { agentType: string; modelRef: string }>; tasks: Record<string, string> },
-): { members: PlanMemberEditDraft[]; tasks: PlanTaskEditDraft[] } {
+/** 只把**真正改过**的字段放进 PATCH 体（与 cc-haha teamPlansApi.save 同口径）。
+ *
+ * 思考级别随模型一起打包：`runtime` 是个整体，只改模型时也要**带上草稿里现有的级别**，
+ * 否则写路径按「未给出 = 清空」处理，会静默丢掉计划里原本设好的级别（用户看不到这一项，
+ * 也就无从察觉）。
+ */
+export function diffPlanEdits(plan: TeamPlanView, draft: PlanDraft): {
+  members: PlanMemberEditDraft[];
+  tasks: PlanTaskEditDraft[];
+} {
   const members: PlanMemberEditDraft[] = [];
   for (const member of plan.members) {
     const edited = draft.members[member.id];
@@ -67,9 +86,15 @@ export function diffPlanEdits(
       changed = true;
     }
     const runtime = splitModelRef(edited.modelRef);
-    if (runtime && (runtime.providerId !== member.runtime.providerId || runtime.modelId !== member.runtime.modelId)) {
-      next.runtime = runtime;
-      changed = true;
+    if (runtime) {
+      const effort = edited.effortLevel ?? "";
+      const modelChanged =
+        runtime.providerId !== member.runtime.providerId || runtime.modelId !== member.runtime.modelId;
+      const effortChanged = effort !== (member.runtime.effortLevel ?? "");
+      if (modelChanged || effortChanged) {
+        next.runtime = { ...runtime, ...(effort ? { effortLevel: effort } : {}) };
+        changed = true;
+      }
     }
     if (changed) members.push(next);
   }
@@ -83,15 +108,13 @@ export function diffPlanEdits(
 }
 
 /** 从 plan 生成编辑草稿（保存成功后用它重置基线）。 */
-export function draftFromPlan(plan: TeamPlanView): {
-  members: Record<string, { agentType: string; modelRef: string }>;
-  tasks: Record<string, string>;
-} {
-  const members: Record<string, { agentType: string; modelRef: string }> = {};
+export function draftFromPlan(plan: TeamPlanView): PlanDraft {
+  const members: Record<string, PlanMemberDraft> = {};
   for (const member of plan.members) {
     members[member.id] = {
       agentType: member.agentType,
       modelRef: joinModelRef(member.runtime.providerId, member.runtime.modelId),
+      effortLevel: member.runtime.effortLevel ?? "",
     };
   }
   const tasks: Record<string, string> = {};
@@ -100,10 +123,7 @@ export function draftFromPlan(plan: TeamPlanView): {
 }
 
 /** 草稿是否与服务端一致（「有未保存的更改」提示与保存按钮的 enabled 口径）。 */
-export function isDraftDirty(
-  plan: TeamPlanView,
-  draft: { members: Record<string, { agentType: string; modelRef: string }>; tasks: Record<string, string> },
-): boolean {
+export function isDraftDirty(plan: TeamPlanView, draft: PlanDraft): boolean {
   const edits = diffPlanEdits(plan, draft);
   return edits.members.length > 0 || edits.tasks.length > 0;
 }
@@ -126,6 +146,11 @@ interface Props {
   /** 计划已被别人改过（409）：提示重新载入。 */
   conflict?: boolean;
   onReload?: () => void;
+  /**
+   * 草稿是否与已保存的计划不同。卡片据此**禁用批准**：不这么做的话，「改了模型但忘了保存、
+   * 直接点批准」会按旧模型启动团队（cc-haha 的 presetChanged 就是拦这个）。
+   */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 const S = {
@@ -148,7 +173,7 @@ const S = {
   hint: { fontSize: "var(--fs-micro)", color: "var(--text-dim)", margin: "4px 0 0" },
 } as const;
 
-export function PlanEditor({ plan, cwd = null, editable, saving = false, saveError = null, onSave, conflict = false, onReload }: Props) {
+export function PlanEditor({ plan, cwd = null, editable, saving = false, saveError = null, onSave, conflict = false, onReload, onDirtyChange }: Props) {
   const { t } = useI18n();
   const catalog = useModelCatalog();
   const [draft, setDraft] = useState(() => draftFromPlan(plan));
@@ -159,11 +184,18 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
   const [agentsError, setAgentsError] = useState<string | null>(null);
 
   // 服务端 plan 变了（保存成功 / 另一个窗口改了）：重设基线，避免草稿越改越旧。
+  // **但有未保存改动时不重置** —— 否则别人（或另一个窗口）一动计划，用户正在输入的内容就
+  // 静默消失。保留草稿、让保存按字段合并（写路径只覆盖列出的字段），明显好于丢输入。
+  // 依赖用 planKey 而不是 plan 对象：轮询每 2s 重新解析一份 JSON，对象身份不稳定。
+  const planKey = `${plan.planId}:${plan.incarnationId}:${plan.revision}`;
   useEffect(() => {
-    setDraft(draftFromPlan(plan));
-    setSelected([]);
+    if (!dirtyRef.current) {
+      setDraft(draftFromPlan(plan));
+      setSelected([]);
+    }
     setActiveMemberId((current) => (plan.members.some((member) => member.id === current) ? current : plan.members[0]?.id ?? null));
-  }, [plan]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 按 planKey 重置，plan 只用于取值
+  }, [planKey]);
 
   // agent 预设目录：读不到（无 cwd / 未信任）就只显示当前值，不阻塞其它编辑。
   useEffect(() => {
@@ -190,8 +222,16 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
 
   const dirty = useMemo(() => isDraftDirty(plan, draft), [plan, draft]);
   const activeMember = plan.members.find((member) => member.id === activeMemberId) ?? null;
+  // 给上面的「重置草稿」effect 读最新值（effect 声明在前面，用 ref 避免顺序与闭包问题）。
+  const dirtyRef = useRef(false);
+  dirtyRef.current = dirty;
 
-  const setMember = useCallback((id: string, patch: { agentType?: string; modelRef?: string }) => {
+  // 把 dirty 报给卡片：未保存的改动要拦住「批准」（否则按旧模型启动）。
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  const setMember = useCallback((id: string, patch: Partial<PlanMemberDraft>) => {
     setDraft((current) => ({
       ...current,
       members: {
@@ -217,8 +257,10 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
 
   const followLead = () => {
     const lead = plan.leaderRuntime;
-    if (!lead || selected.length === 0) return;
-    const modelRef = joinModelRef(lead.providerId, lead.modelId);
+    // 队长运行时可能是 pi-team 写的占位 unknown/unknown（本服务进程不设 PROVIDER/MODEL 环境
+    // 变量）；那样的值不能写进成员模型，按钮也据此禁用。
+    if (!isUsableRuntime(lead) || selected.length === 0) return;
+    const modelRef = joinModelRef(lead!.providerId, lead!.modelId);
     setDraft((current) => {
       const members = { ...current.members };
       for (const id of selected) members[id] = { ...members[id], modelRef };
@@ -226,11 +268,13 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
     });
   };
 
+  // 恢复建议模型：模型与 agent 预设回到计划里的值，思考级别保持用户当前的选择。
   const restoreSuggested = () => {
     setDraft((current) => {
       const members = { ...current.members };
       for (const member of plan.members) {
         members[member.id] = {
+          ...members[member.id],
           agentType: member.agentType,
           modelRef: joinModelRef(member.runtime.providerId, member.runtime.modelId),
         };
@@ -306,14 +350,17 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
                   <span style={S.mono}>{String(index + 1).padStart(2, "0")}</span>
                   <span style={S.rowMeta}>
                     <span style={S.name}>{member.name}</span>
-                    <span style={S.mono}>{current?.modelRef || t("teams.plan.unspecified")}</span>
+                    <span style={S.mono}>
+                      {current?.modelRef || t("teams.plan.unspecified")}
+                      {current?.effortLevel ? ` · ${current.effortLevel}` : ""}
+                    </span>
                   </span>
                 </button>
               </div>
             );
           })}
-          {plan.leaderRuntime && (
-            <p style={S.hint}>{t("teams.plan.leader")}: {joinModelRef(plan.leaderRuntime.providerId, plan.leaderRuntime.modelId)}</p>
+          {isUsableRuntime(plan.leaderRuntime) && (
+            <p style={S.hint}>{t("teams.plan.leader")}: {joinModelRef(plan.leaderRuntime!.providerId, plan.leaderRuntime!.modelId)}</p>
           )}
 
           {editable && (
@@ -330,7 +377,7 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
                 <ConfigButton size="small" disabled={selected.length === 0 || !batchRef} onClick={applyBatch}>
                   {t("teams.plan.applyBatch")}
                 </ConfigButton>
-                <ConfigButton size="small" disabled={selected.length === 0 || !plan.leaderRuntime} onClick={followLead}>
+                <ConfigButton size="small" disabled={selected.length === 0 || !isUsableRuntime(plan.leaderRuntime)} onClick={followLead}>
                   {t("teams.plan.followLeader")}
                 </ConfigButton>
                 <ConfigButton size="small" onClick={restoreSuggested}>
@@ -346,7 +393,7 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
           {activeMember && (
             <section aria-label={t("teams.plan.configureMember", { name: activeMember.name })}>
               <h4 style={S.h4}>{t("teams.plan.assignment")} · {activeMember.name}</h4>
-              <div style={{ display: "grid", gap: 10, gridTemplateColumns: "minmax(0,1fr) minmax(0,1.2fr)" }}>
+              <div style={{ display: "grid", gap: 10, gridTemplateColumns: "minmax(0,1fr) minmax(0,1.2fr) minmax(0,0.8fr)" }}>
                 <div style={S.field}>
                   <span style={S.label}>{t("teams.plan.agent")}</span>
                   {agents.length > 0 ? (
@@ -382,6 +429,19 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
                       ...modelOptions,
                     ]}
                     disabled={!editable || catalog.loading}
+                  />
+                </div>
+                <div style={S.field}>
+                  <span style={S.label}>{t("teams.plan.effort")}</span>
+                  <AppSelect
+                    aria-label={`${activeMember.name} · ${t("teams.plan.effort")}`}
+                    value={draft.members[activeMember.id]?.effortLevel ?? ""}
+                    onValueChange={(value) => setMember(activeMember.id, { effortLevel: value })}
+                    options={PLAN_EFFORT_LEVELS.map((value) => ({
+                      value,
+                      label: value || t("teams.plan.effortDefault"),
+                    }))}
+                    disabled={!editable}
                   />
                 </div>
               </div>

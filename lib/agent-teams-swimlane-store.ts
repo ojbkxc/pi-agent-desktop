@@ -222,6 +222,46 @@ export async function readTeamWorkbench(teamName: string): Promise<TeamWorkbench
 export const UNKNOWN_LEAD_SESSION = "unknown-session";
 
 /**
+ * 桌面写下的 lead 会话标记文件名（pi-team 从不读它，只归本仓库所有）。
+ *
+ * 为什么必须有这个文件：`team_create` 现在默认 `spawn=false`（先审后跑，见
+ * lib/pi-extension-builtins.ts），此刻**还没有任何成员会话**，磁盘上除了 pi-team 写的
+ * 占位 `unknown-session` 之外没有第二份 lead 证据。而计划卡正是靠「lead 会话 → 反查团队」
+ * 才出现的（components/ChatWindow.tsx → /api/teams/session/<id>/workbench）——
+ * 没有这条记录，用户永远看不到计划、也就永远无法批准，团队卡在组建中。
+ */
+export const DESKTOP_LEAD_FILE = "desktop-lead.json";
+
+/** 读 lead 标记（不存在/损坏/仍是占位值 → null）。 */
+async function readDesktopLeadSession(teamDir: string): Promise<string | null> {
+  const raw = await readJson<{ leadSessionId?: unknown }>(join(teamDir, DESKTOP_LEAD_FILE));
+  const id = raw && typeof raw.leadSessionId === "string" ? raw.leadSessionId.trim() : "";
+  return id && id !== UNKNOWN_LEAD_SESSION ? id : null;
+}
+
+/**
+ * 写下「这个团队的 lead 是哪个会话」（team_create 成功后由扩展钩子调用）。
+ * 只写本仓库自己的文件，绝不改 config.json 的 `leadSessionId` —— pi-team 的
+ * `incarnation()` 要求它等于 `process.env.PI_SESSION_ID`（= 占位值），改真值会让
+ * 之后所有 `team_plan` 调用 404「Team does not belong to this session」。
+ */
+export async function writeDesktopLeadSession(
+  teamName: string,
+  sessionId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const id = sessionId?.trim();
+  if (!id || id === UNKNOWN_LEAD_SESSION) return;
+  const root = env.PI_TEAM_DIR || teamsRootDir();
+  const teamDir = join(root, sanitizeTeamName(teamName));
+  await writeFile(
+    join(teamDir, DESKTOP_LEAD_FILE),
+    `${JSON.stringify({ leadSessionId: id, updatedAt: Date.now() }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
+/**
  * 团队真实的 lead 会话 id：config 里有可靠值时用它，否则从成员会话反推。
  *
  * 为什么必须反推：pi-team 在 `team_create` 时写 `leadSessionId: process.env.PI_SESSION_ID
@@ -234,9 +274,12 @@ export const UNKNOWN_LEAD_SESSION = "unknown-session";
 export async function resolveLeadSessionId(
   team: TeamFileLike,
   lifecycle: Record<string, LifecycleEntryLike>,
+  desktopLead: string | null = null,
 ): Promise<string | null> {
   const recorded = typeof team.leadSessionId === "string" ? team.leadSessionId : "";
   if (recorded && recorded !== UNKNOWN_LEAD_SESSION) return recorded;
+  // 桌面自己写的标记优先于反推：spawn=false 的团队没有任何成员会话可反推。
+  if (desktopLead && desktopLead !== UNKNOWN_LEAD_SESSION) return desktopLead;
   const memberSessions = Object.values(lifecycle)
     .filter((entry) => typeof entry.sessionFile === "string" && entry.sessionFile.endsWith(".jsonl"));
   for (const entry of memberSessions) {
@@ -263,8 +306,11 @@ export async function resolveTeamLeadSession(
   const teamDir = join(root, sanitizeTeamName(teamName));
   const team = await readJson<TeamFileLike>(join(teamDir, "config.json"));
   if (!team || !Array.isArray(team.members)) return null;
-  const lifecycle = await readLifecycle(teamDir);
-  return resolveLeadSessionId(team, lifecycle);
+  const [lifecycle, desktopLead] = await Promise.all([
+    readLifecycle(teamDir),
+    readDesktopLeadSession(teamDir),
+  ]);
+  return resolveLeadSessionId(team, lifecycle, desktopLead);
 }
 
 /**
@@ -285,11 +331,15 @@ export async function findTeamBySession(sessionId: string): Promise<string | nul
     if (!team) continue;
     if (team.leadSessionId === sessionId) return name;
     if (Array.isArray(team.members) && team.members.some((member) => member.sessionId === sessionId)) return name;
-    const lifecycle = await readLifecycle(teamDir);
+    const [lifecycle, desktopLead] = await Promise.all([
+      readLifecycle(teamDir),
+      readDesktopLeadSession(teamDir),
+    ]);
     if (Object.values(lifecycle).some((entry) => entry.sessionId === sessionId)) return name;
-    // lead 会话：config 的 leadSessionId 多半是 'unknown-session'，用成员会话反推。
+    if (desktopLead === sessionId) return name;
+    // lead 会话：config 的 leadSessionId 多半是 'unknown-session'，用桌面标记 / 成员会话反推。
     if (team.leadSessionId === UNKNOWN_LEAD_SESSION || !team.leadSessionId) {
-      const lead = await resolveLeadSessionId(team, lifecycle);
+      const lead = await resolveLeadSessionId(team, lifecycle, desktopLead);
       if (lead === sessionId) return name;
     }
   }
@@ -322,9 +372,10 @@ export async function listTeams(): Promise<Array<{
   }
   const teams = await Promise.all(names.map(async (name) => {
     const teamDir = teamDirFor(name);
-    const [team, lifecycle] = await Promise.all([
+    const [team, lifecycle, desktopLead] = await Promise.all([
       readJson<TeamFileLike>(join(teamDir, "config.json")),
       readLifecycle(teamDir),
+      readDesktopLeadSession(teamDir),
     ]);
     if (!team) return null;
     const sessionIds = new Set<string>();
@@ -335,7 +386,7 @@ export async function listTeams(): Promise<Array<{
       if (typeof entry.sessionId === "string" && entry.sessionId) sessionIds.add(entry.sessionId);
     }
     // lead 会话也算「团队会话」：侧栏据此给 lead 行打团队运行点。
-    const leadSessionId = await resolveLeadSessionId(team, lifecycle);
+    const leadSessionId = await resolveLeadSessionId(team, lifecycle, desktopLead);
     if (leadSessionId) sessionIds.add(leadSessionId);
     const configName = typeof team.name === "string" && team.name ? team.name : "";
     return {

@@ -56,15 +56,18 @@ test("joinModelRef 与 splitModelRef 互逆", () => {
   assert.deepEqual(splitModelRef(joinModelRef("p", "a/b")), { providerId: "p", modelId: "a/b" });
 });
 
-test("draftFromPlan：基线原样来自 plan", () => {
+test("draftFromPlan：基线原样来自 plan（含思考级别）", () => {
   const draft = draftFromPlan(plan());
-  assert.deepEqual(draft.members.m1, { agentType: "general-purpose", modelRef: "openai/gpt-5" });
-  assert.deepEqual(draft.members.m2, { agentType: "general-purpose", modelRef: "openai/gpt-5" });
+  assert.deepEqual(draft.members.m1, { agentType: "general-purpose", modelRef: "openai/gpt-5", effortLevel: "" });
+  assert.deepEqual(draft.members.m2, { agentType: "general-purpose", modelRef: "openai/gpt-5", effortLevel: "" });
   assert.equal(draft.tasks.t1, "m1");
   assert.equal(draft.tasks.t2, "", "未分配 → 空串（下拉的「未分配」值）");
+
+  const withEffort = draftFromPlan(plan({ members: [member({ runtime: { providerId: "openai", modelId: "gpt-5", effortLevel: "high" } })] }));
+  assert.equal(withEffort.members.m1.effortLevel, "high", "计划里的级别进草稿");
 });
 
-test("isDraftDirty：未改 → false；改模型 / agent / owner → true", () => {
+test("isDraftDirty：未改 → false；改模型 / agent / owner / 思考级别 → true", () => {
   const base = plan();
   const draft = draftFromPlan(base);
   assert.equal(isDraftDirty(base, draft), false);
@@ -80,6 +83,38 @@ test("isDraftDirty：未改 → false；改模型 / agent / owner → true", () 
   const ownerChanged = structuredClone(draft);
   ownerChanged.tasks.t2 = "m2";
   assert.equal(isDraftDirty(base, ownerChanged), true);
+
+  const effortChanged = structuredClone(draft);
+  effortChanged.members.m1.effortLevel = "high";
+  assert.equal(isDraftDirty(base, effortChanged), true, "只改思考级别也算改过");
+});
+
+test("diffPlanEdits：只改模型时**带上草稿现有的思考级别**（不能静默清掉）", () => {
+  const base = plan({ members: [member({ runtime: { providerId: "openai", modelId: "gpt-5", effortLevel: "high" } })] });
+  const draft = draftFromPlan(base);
+  draft.members.m1 = { ...draft.members.m1, modelRef: "anthropic/claude-sonnet" };
+  const edits = diffPlanEdits(base, draft);
+  assert.deepEqual(edits.members, [
+    { id: "m1", runtime: { providerId: "anthropic", modelId: "claude-sonnet", effortLevel: "high" } },
+  ], "只换模型不该丢掉计划里设好的级别");
+});
+
+test("diffPlanEdits：只改思考级别也发 runtime（级别在 runtime 里）", () => {
+  const base = plan();
+  const draft = draftFromPlan(base);
+  draft.members.m1 = { ...draft.members.m1, effortLevel: "xhigh" };
+  const edits = diffPlanEdits(base, draft);
+  assert.deepEqual(edits.members, [
+    { id: "m1", runtime: { providerId: "openai", modelId: "gpt-5", effortLevel: "xhigh" } },
+  ]);
+});
+
+test("diffPlanEdits：清空思考级别 → runtime 不带 effortLevel（写路径按「未给出=清空」处理）", () => {
+  const base = plan({ members: [member({ runtime: { providerId: "openai", modelId: "gpt-5", effortLevel: "high" } })] });
+  const draft = draftFromPlan(base);
+  draft.members.m1 = { ...draft.members.m1, effortLevel: "" };
+  const edits = diffPlanEdits(base, draft);
+  assert.deepEqual(edits.members, [{ id: "m1", runtime: { providerId: "openai", modelId: "gpt-5" } }]);
 });
 
 test("diffPlanEdits：只把真正改过的字段放进 PATCH 体", () => {

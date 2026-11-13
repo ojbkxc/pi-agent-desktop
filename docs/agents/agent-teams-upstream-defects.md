@@ -180,6 +180,12 @@ pi-team 版本 **0.2.0**（`node_modules/pi-team/package.json`）；pi-team 升�
   `parentSessionId` 还原真实 lead（`lib/agent-teams-swimlane-store.ts` 的
   `resolveLeadSessionId` + `lib/session-reader.ts` 的 `readSessionParentSessionId`，有界读取不碰全文件）。
   这**不修隔离判据本身**（那仍需 pi-team 从 `ExtensionContext` 取会话 id）。
+- **补齐（2026-11-13）**：默认改 `spawn=false`（先审后跑）之后，`team_create` 那一刻还没有任何
+  成员会话可反推 —— 而计划卡正是靠「lead 会话 → 反查团队」出现的，用户会看不到计划、永远无法
+  批准。extensions 因此在 `team_create` 的 **`tool_result`** 钩子里写下
+  `<team>/desktop-lead.json`（`writeDesktopLeadSession`），`resolveLeadSessionId` 的反推顺序改为
+  config 真值 → 该标记 → 成员会话。**不动 `config.json` 的 `leadSessionId`**：它必须保持等于
+  `process.env.PI_SESSION_ID`（占位值），否则 `incarnation()` 会 404（见上面的隔离判据）。
 
 ### B2. `config.json` 是唯一权威名册 → **工具侧**看不到 plan 独有成员（合并原 H5 + M1）
 
