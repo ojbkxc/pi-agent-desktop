@@ -118,6 +118,10 @@ jobs:
 
             The **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2. Same version number, re-published with the additions below.
 
+            ### Rereleased
+
+            Re-published with the plan-approval flow corrected. Creating a team used to leave the plan card unreachable: a `spawn=false` team has no member session yet, and the card only appears when a session resolves back to its team, so nothing was shown and the plan could not be approved — the lead session is now recorded when the plan is submitted. The plan editor also no longer loses an edit to the 2-second refresh (which reset the draft and cleared what you were typing), a failed approval now says why instead of doing nothing, a plan's placeholder leader model can no longer be copied onto members, and the thinking level is editable again.
+
             ### New in this republish
 
             - **Team plans are editable, and reviewed first.** Creating a team no longer dispatches teammates straight away: the lead submits a plan and the chat shows a plan card. Open it to change each member's model and agent preset, set one model for a batch, follow the lead's model, restore the suggested ones, and reassign task owners — then save, and approve when it looks right. Saving keeps the plan awaiting review; approving tells the lead to approve and launch, and nothing runs before that.
@@ -159,6 +163,10 @@ jobs:
             ## Pi Agent Desktop 0.8.2（fork）
 
             这是 pi-agent-desktop 的 **ojbkxc fork**，基于上游 0.8.2 构建。版本号不变，随下列新增内容重新发布。
+
+            ### 本次重新发布
+
+            重新发布，修正计划审批链路。此前建团队后计划卡根本不会出现：`spawn=false` 的团队那一刻还没有成员会话，而计划卡只在「会话反查回团队」时出现，于是什么都不显示、计划也无法批准——现在提交计划时就记录 lead 会话。计划编辑器里正在输入的内容也不会再被 2 秒刷新重置；批准失败会说明原因而不是毫无反应；计划里占位的队长模型不会再被复制到成员；思考强度恢复可编辑。
 
             ### 本次重发新增
 
