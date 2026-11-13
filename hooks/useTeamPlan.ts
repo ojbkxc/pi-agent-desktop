@@ -22,16 +22,43 @@ export interface UseTeamPlanResult {
   error: string | null;
   /** approve 请求进行中。 */
   busy: boolean;
+  /** 保存编辑进行中。 */
+  saving: boolean;
+  /** 保存失败信息。 */
+  saveError: string | null;
+  /** 上次保存因乐观并发冲突（409）失败：界面提示重新载入。 */
+  conflict: boolean;
   /** 主动补拉一次。 */
   refresh(): void;
   /** 批准当前计划（投递给 lead）。返回是否投递成功。 */
   approve(): Promise<{ ok: boolean; reason?: string }>;
+  /** 保存编辑（PATCH）。成功后就地回填 plan（revision 已 +1）。 */
+  save(edits: PlanEdits): Promise<{ ok: boolean; reason?: string }>;
+}
+
+export interface PlanMemberEditDraft {
+  id: string;
+  agentType?: string;
+  runtime?: { providerId: string; modelId: string; effortLevel?: string };
+}
+
+export interface PlanTaskEditDraft {
+  id: string;
+  ownerId?: string;
+}
+
+export interface PlanEdits {
+  members: PlanMemberEditDraft[];
+  tasks: PlanTaskEditDraft[];
 }
 
 export function useTeamPlan(teamName: string | null, refreshKey: number = 0): UseTeamPlanResult {
   const [plan, setPlan] = useState<TeamPlanView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState(false);
   // 轮询外触发的一次性补拉计数。
   const [tick, setTick] = useState(0);
   // 最新 plan 的 ref：approve 时读它取 identity，避免闭包拿到旧值。
@@ -125,5 +152,53 @@ export function useTeamPlan(teamName: string | null, refreshKey: number = 0): Us
     }
   }, [teamName]);
 
-  return { plan, error, busy, refresh, approve };
+  const save = useCallback(async (edits: PlanEdits): Promise<{ ok: boolean; reason?: string }> => {
+    const current = planRef.current;
+    if (!current) return { ok: false, reason: "no plan" };
+    setSaving(true);
+    setSaveError(null);
+    setConflict(false);
+    try {
+      const response = await fetch(
+        `/api/teams/${encodeURIComponent(teamName ?? current.teamName)}/plan`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            planId: current.planId,
+            sessionId: current.sessionId,
+            incarnationId: current.incarnationId,
+            expectedRevision: current.revision,
+            members: edits.members,
+            tasks: edits.tasks,
+          }),
+        },
+      );
+      const data = (await response.json().catch(() => ({}))) as { plan?: TeamPlanView; error?: string };
+      if (response.status === 409) {
+        setConflict(true);
+        const reason = data.error ?? "计划已变更，请重新载入后再保存";
+        setSaveError(reason);
+        // 冲突时立即补拉一次，让界面拿到最新 revision。
+        setTick((value) => value + 1);
+        return { ok: false, reason };
+      }
+      if (!response.ok || !data.plan) {
+        const reason = data.error ?? `保存失败（HTTP ${response.status}）`;
+        setSaveError(reason);
+        return { ok: false, reason };
+      }
+      // 就地回填：revision 已 +1，编辑基线随 plan prop 一起重置。
+      setPlan(data.plan);
+      return { ok: true };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      setSaveError(reason);
+      return { ok: false, reason };
+    } finally {
+      setSaving(false);
+    }
+  }, [teamName]);
+
+  return { plan, error, busy, saving, saveError, conflict, refresh, approve, save };
 }

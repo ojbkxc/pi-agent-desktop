@@ -219,7 +219,7 @@ export async function readTeamWorkbench(teamName: string): Promise<TeamWorkbench
 }
 
 /** pi-team 未设 PI_SESSION_ID 时写下的占位值（见 docs/agents/agent-teams-upstream-defects.md B1）。 */
-const UNKNOWN_LEAD_SESSION = "unknown-session";
+export const UNKNOWN_LEAD_SESSION = "unknown-session";
 
 /**
  * 团队真实的 lead 会话 id：config 里有可靠值时用它，否则从成员会话反推。
@@ -248,6 +248,23 @@ export async function resolveLeadSessionId(
     }
   }
   return null;
+}
+
+/**
+ * 团队真实的 lead 会话 id（按团队名直接解析）：配置、生命周期都在团队目录里读。
+ * 供计划审批 / 兜底提醒这类「只知道团队名、要投递到 lead」的路径使用。
+ * `env` 与 `teamsRootDir()` 同口径（PI_TEAM_DIR 覆盖），便于测试注入。
+ */
+export async function resolveTeamLeadSession(
+  teamName: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string | null> {
+  const root = env.PI_TEAM_DIR || teamsRootDir();
+  const teamDir = join(root, sanitizeTeamName(teamName));
+  const team = await readJson<TeamFileLike>(join(teamDir, "config.json"));
+  if (!team || !Array.isArray(team.members)) return null;
+  const lifecycle = await readLifecycle(teamDir);
+  return resolveLeadSessionId(team, lifecycle);
 }
 
 /**

@@ -1866,9 +1866,15 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
           <div style={{ maxHeight: "min(45dvh, 440px)", overflowY: "auto", marginBottom: 8, flexShrink: 0 }}>
             <AgentTeamPlanCard
               plan={teamPlan.plan}
+              cwd={session?.cwd ?? null}
               busy={teamPlan.busy}
+              saving={teamPlan.saving}
+              saveError={teamPlan.saveError}
+              conflict={teamPlan.conflict}
               error={teamPlan.error}
               onApprove={() => void teamPlan.approve()}
+              onSave={(edits) => void teamPlan.save(edits)}
+              onReload={teamPlan.refresh}
             />
           </div>
         )}

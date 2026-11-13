@@ -140,3 +140,50 @@ test("502：投递失败 → { ok:false, reason }（不静默）", async (t) => 
   assert.equal(data.ok, false);
   assert.match(data.reason, /正在运行/);
 });
+
+/**
+ * plan.json 的 sessionId 与 config.json 的 leadSessionId 同源（都读 PI_SESSION_ID，
+ * 服务进程从不设置）→ 真实机器上恒为 'unknown-session'。照抄它投递，用户点「批准」
+ * 什么都不会发生。这里钉住改投真实 lead。
+ */
+async function writeTeamWithPlaceholderLead(dir, { withMemberSession }) {
+  await writeFile(join(dir, "config.json"), JSON.stringify({
+    name: "demo", leadSessionId: "unknown-session",
+    members: [{ agentId: "a", name: "team-lead" }, { agentId: "b", name: "impl" }],
+  }));
+  if (!withMemberSession) return;
+  const memberFile = join(dir, "impl-session.jsonl");
+  await writeFile(memberFile, `${[
+    { type: "session", version: 3, id: "child-impl", timestamp: "2026-11-05T01:00:00.000Z", cwd: "D:/proj" },
+    {
+      type: "custom", customType: "pi-web:subagent", id: "a1", parentId: null, timestamp: "2026-11-05T01:00:01.000Z",
+      data: { version: 1, parentSessionId: "real-lead", parentSessionPath: "/s/real-lead.jsonl", parentToolCallId: "pi-team:impl", profile: "general-purpose", description: "demo/impl", task: "干活", runInBackground: true, createdAt: "2026-11-05T01:00:01.000Z" },
+    },
+  ].map((line) => JSON.stringify(line)).join("\n")}\n`);
+  await writeFile(join(dir, "lifecycle.json"), JSON.stringify({
+    version: 1,
+    members: { impl: { name: "impl", status: "parked", sessionId: "child-impl", sessionFile: memberFile, updatedAt: 1 } },
+  }));
+}
+
+const UNKNOWN_PLAN = { ...BASE_PLAN, sessionId: "unknown-session" };
+const UNKNOWN_IDENTITY = { ...IDENTITY, sessionId: "unknown-session" };
+
+test("plan.sessionId 是占位 'unknown-session' → 投给反推出的真实 lead 会话", async (t) => {
+  const { dir } = await setup(t, { plan: UNKNOWN_PLAN });
+  await writeTeamWithPlaceholderLead(dir, { withMemberSession: true });
+  globalThis.__deliverResult = { ok: true };
+  const res = await approve(UNKNOWN_IDENTITY);
+  assert.equal(res.status, 200);
+  assert.equal(globalThis.__deliverCalls.length, 1);
+  assert.equal(globalThis.__deliverCalls[0].sessionId, "real-lead", "不能投给占位值");
+});
+
+test("反推不出真实 lead → 回落 plan.sessionId（不静默丢批准）", async (t) => {
+  const { dir } = await setup(t, { plan: UNKNOWN_PLAN });
+  await writeTeamWithPlaceholderLead(dir, { withMemberSession: false });
+  globalThis.__deliverResult = { ok: true };
+  const res = await approve(UNKNOWN_IDENTITY);
+  assert.equal(res.status, 200);
+  assert.equal(globalThis.__deliverCalls[0].sessionId, "unknown-session");
+});

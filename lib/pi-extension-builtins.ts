@@ -57,11 +57,27 @@ const TEAM_CREATE_TOOL_NAME = "team_create";
 /** 命名提示的 system prompt 截面名。 */
 export const TEAM_NAMING_SECTION = "team-naming";
 
+/** 计划审批提示的 system prompt 截面名。 */
+export const TEAM_PLAN_APPROVAL_SECTION = "team-plan-approval";
+
 // 只对 lead 注入的命名提示。语言中立（英文），因为服务端拿不到 locale —— i18n 只在浏览器
 // localStorage，见 docs/i18n.md：i18n 不与服务端耦合，故这里不按语言分叉。
 export const TEAM_NAMING_GUIDE = `When you call team_create, team_name must be a path-safe identifier: ASCII letters, digits and hyphens only. It becomes the team's directory name. Put the human-readable name — including a Chinese name — in the description field; that is what the team list shows.
 
 Two names that sanitize to the same identifier collide: every non-ASCII character (e.g. any Chinese character) collapses to a hyphen, so two all-Chinese names both become "-". The second team_create then fails because that directory already exists. Give each team a distinct ASCII team_name.`;
+
+/**
+ * 计划审批提示：桌面端**强制**先把计划交给用户确认，再派发成员（用户 2026-11-12 拍板
+ * 「默认走审批」）。仅提示不够——模型只要仍给 team_create 传 spawn=true 就会绕过审批，
+ * 所以 tool_call 钩子同时把 spawn 改写成 false（见 teamBuiltin）。这段提示解释改写后的
+ * 预期动作序列，否则模型会以为派发失败而反复重试。
+ */
+export const TEAM_PLAN_APPROVAL_GUIDE = `This desktop always reviews a team plan before any member runs. Two rules follow from that:
+
+1. Call team_create with spawn=false (the host forces this even if you pass true), then immediately call team_plan { operation: "submit" } with the full member list (id / name / agent_type / prompt / provider_id / model_id) and the task graph (every task has exactly one owner_id, every member owns at least one task, dependencies acyclic). The plan card appears in the user's chat; the user can edit models, agent presets and task owners there.
+2. Do not launch on your own. Wait for the user. When the user approves, you receive a prompt telling you the exact request_id to pass to team_plan { operation: "approve" }, followed by team_plan { operation: "launch" } to spawn the members. Approving does not start them.
+
+If team_create returns "未派发成员（spawn=false）", that is the expected outcome — proceed to submit the plan, do not retry team_create. Never work around this by calling team_plan launch before the user has approved.`;
 
 /**
  * team_create 撞目录时的拦截文案。
@@ -120,9 +136,18 @@ function teamBuiltin(
     // team_create 撞目录预检：中文/符号名会被 pi-team 压成同一串短横线（「前端队」「后端队」
     // 的 slug 都是 "---"），pi-team 只会说「团队 "后端队" 已存在」，用户看不懂。这里提前拦下
     // 并说清是目录名撞了、跟哪个既有团队撞。放在 team_create 自己的检查之前。
+    //
+    // 同一钩子还负责「默认走计划审批」：把 spawn 改写成 false，让成员不派发、计划先落到
+    // 计划卡上等用户确认（用户 2026-11-12 拍板）。工具参数是可变的（SDK types.d.ts:1000
+    // 「event.input is mutable … later handlers see earlier mutations」），pi-team 在
+    // execute 里读的正是这份 input。只在 lead 上生效：成员不建团队。
     pi.on("tool_call", (event) => {
       if (event.toolName !== TEAM_CREATE_TOOL_NAME) return undefined;
-      const input = event.input as { team_name?: unknown } | undefined;
+      const input = event.input as { team_name?: unknown; spawn?: unknown } | undefined;
+      if (!identity?.agentName && input && input.spawn !== false) {
+        // 目标字段不存在时也要建出来：pi-team 用 `params.spawn !== false` 判派发。
+        input.spawn = false;
+      }
       // 与 pi-team 逐字一致：它用未 trim 的 params.team_name 落目录（sanitizeName 会把空格
       // 也压成 '-'），所以这里也不 trim，只拿 trim 结果判空。
       const rawName = typeof input?.team_name === "string" ? input.team_name : "";
@@ -133,10 +158,11 @@ function teamBuiltin(
       const display = readTeamDisplayName(dir) ?? slug;
       return { block: true, reason: teamCreateCollisionReason(slug, display) };
     });
-    // 命名提示只给 lead：成员（identity.agentName 存在）不建团队。
+    // 提示只给 lead：成员（identity.agentName 存在）不建团队。
     if (!identity?.agentName) {
       pi.on("before_agent_start", (event) => {
         event.systemPromptOptions.sections[TEAM_NAMING_SECTION] = TEAM_NAMING_GUIDE;
+        event.systemPromptOptions.sections[TEAM_PLAN_APPROVAL_SECTION] = TEAM_PLAN_APPROVAL_GUIDE;
         return undefined;
       });
     }

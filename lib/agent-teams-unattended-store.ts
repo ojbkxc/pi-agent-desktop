@@ -18,6 +18,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { writePrivateFileAtomicSync } from "./atomic-file";
+import { resolveTeamLeadSession, UNKNOWN_LEAD_SESSION } from "./agent-teams-swimlane-store";
 import { remoteAccessSettingsPath } from "./remote-access";
 import { userHome } from "./user-home";
 import {
@@ -302,11 +303,17 @@ export async function collectUnattendedInput(env: NodeJS.ProcessEnv = process.en
     const teamDir = join(root, dirName);
     const planRaw = readJson(join(teamDir, "plan.json"));
     const plan = isRecord(planRaw) ? (planRaw as PlanFileLike) : null;
-    const sessionId = plan ? asString(plan.sessionId) : null;
-    if (!plan || !sessionId) {
+    const recorded = plan ? asString(plan.sessionId) : null;
+    if (!plan || !recorded) {
       skippedTeams.push(dirName);
       continue;
     }
+    // plan.json 的 sessionId 与 config.json 的 leadSessionId 同源（都读 PI_SESSION_ID，
+    // 本服务进程从不设置）→ 恒为占位 'unknown-session'，投递必然找不到会话。改用磁盘上
+    // 可反推的真实 lead 会话（成员会话的 parentSessionId，见 swimlane-store 的说明）。
+    const sessionId = recorded === UNKNOWN_LEAD_SESSION
+      ? (await resolveTeamLeadSession(dirName, env).catch(() => null)) ?? recorded
+      : recorded;
     // config.json 读取失败不阻断 plan/tickets 侧（memberModel 会回退 plan.runtime）。
     const configRaw = readJson(join(teamDir, "config.json"));
     const config = isRecord(configRaw) ? (configRaw as ConfigFileLike) : null;

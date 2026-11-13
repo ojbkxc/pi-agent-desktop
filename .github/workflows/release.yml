@@ -118,6 +118,23 @@ jobs:
 
             The **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2. Same version number, re-published with the additions below.
 
+            ### New in this republish
+
+            - **Team plans are editable, and reviewed first.** Creating a team no longer dispatches teammates straight away: the lead submits a plan and the chat shows a plan card. Open it to change each member's model and agent preset, set one model for a batch, follow the lead's model, restore the suggested ones, and reassign task owners — then save, and approve when it looks right. Saving keeps the plan awaiting review; approving tells the lead to approve and launch, and nothing runs before that.
+            - **The Agent Teams workbench opens again.** A team's lead session was recorded as an unknown placeholder, so the lead's own conversation showed no team strip and the workbench could not be reached. It is now resolved from the teammate sessions, and a team that never used the shared task list no longer reads as "forming" forever after it has finished.
+            - **No more spinner that never stops.** The running-state stream's keepalive frames carried no data, so a half-open connection could pin the sidebar spinner on screen indefinitely. Heartbeats now repeat the current snapshot, and the sidebar notices 75 seconds of silence and reconnects.
+            - **Context usage is a percentage, not a frozen ring.** The ring next to the composer now shows the used share as a number, so it no longer reads as a stuck loading circle.
+            - **Bash works on Windows without Git on the PATH.** Git Bash installed under `Program Files` or a `mingw64` layout is now found by walking up from `git.exe`, and the shell path is supplied to the session when the SDK has none.
+
+            ### Fixes
+
+            - The composer's Agent Team switch used to jump to Settings when clicked — an old preference key was read with a new meaning. Migrated to a new key; the switch now arms one message, resets on send, and asks about cost once.
+            - Two list APIs (market, skill search) answered with a single row when the page size was omitted: `Number(null)` is `0`, and `0` is finite, so a missing limit became a 1-row page.
+            - A curated skill could read "at risk" in the list but "no risk found" on its detail page.
+            - Reading a compacted session could answer HTTP 500 when a historical message carried no usage block.
+            - Tool-result details the UI reads were stripped before reaching the browser; `entry_appended` reaches it again.
+            - A tool selection written as `+name` was read as a read-only selection, so MCP servers that are fine to write stayed blocked.
+
             ### In this build
 
             - **Skill market.** A full page over two registries (ClawHub + SkillHub): search, source / security / install-state filters, a 13-category rail with counts, a bundled 398-skill curated snapshot (browsing works offline), skeleton cards, infinite scroll, detail with file preview, install safety checks and a "what this skill does" panel. Installs verify every file against the registry checksum and only ever write directories they can remove again.
@@ -142,6 +159,23 @@ jobs:
             ## Pi Agent Desktop 0.8.2（fork）
 
             这是 pi-agent-desktop 的 **ojbkxc fork**，基于上游 0.8.2 构建。版本号不变，随下列新增内容重新发布。
+
+            ### 本次重发新增
+
+            - **团队计划可编辑，而且先审后跑。** 建团队不再直接派发成员：lead 先提交计划，聊天里出现计划卡。点开可以逐个成员改模型与 agent 预设、给勾选的成员批量设模型、跟随队长模型、恢复建议模型，以及改任务负责人——改完保存，确认无误再批准。保存后计划仍停在「等待确认」；批准才让 lead 执行 approve → launch，在此之前什么都不会跑。
+            - **团队工作台重新能打开。** 团队的 lead 会话曾被记成一个占位 id，导致 lead 自己的对话里没有团队条、也进不去工作台。现在从成员会话反推真实 lead；从头到尾没用过共享任务列表的团队，做完也不会再永远显示「组建中」。
+            - **侧栏转圈不再卡死。** 运行状态流的保活帧原来不带数据，半开连接会把侧栏的运行圈永远钉在屏幕上。现在心跳重复当前快照，客户端 75 秒无数据就判定断开并重连。
+            - **上下文用量是百分比，不是静止的环。** 输入框旁那个环现在直接显示已用比例，不再被当成卡住的加载圈。
+            - **Windows 上没把 Git 加进 PATH 也能用 bash。** Git Bash 装在 `Program Files` 或 `mingw64` 布局下，现在会从 `git.exe` 逐级向上找到；SDK 自己没有 shellPath 时才补上。
+
+            ### 修复
+
+            - 聊天页的 Agent Team 开关曾点一下就跳设置 —— 旧偏好键被以新语义读取。已迁移到新键；开关现在只勾选本条消息，发送后复位，首次开启提示一次成本。
+            - 两个列表接口在缺省分页大小时只回一行：`Number(null)` 是 `0`，而 `0` 是有限数，于是缺省被当成每页 1 条。
+            - 精选技能可能在列表标「存在风险」、详情却显示「未发现风险」。
+            - 读取被压缩过的会话时，历史消息缺 usage 字段会让状态接口 500。
+            - 界面要读的工具结果字段曾被抹掉；`entry_appended` 重新送达浏览器。
+            - 以 `+name` 形态保存的工具选择被误判成只读选择，能写的 MCP 服务器也被拦住。
 
             ### 本版包含
 

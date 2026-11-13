@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { readTeamPlanView } from "@/lib/agent-teams-plan-store";
 import { buildUserApprovalPrompt, checkPlanIdentity, desktopApprovalRequestId } from "@/lib/agent-teams-plan";
+import { resolveTeamLeadSession } from "@/lib/agent-teams-swimlane-store";
 import { defaultDeliver } from "@/lib/agent-teams-unattended-runtime";
 
 export const dynamic = "force-dynamic";
@@ -76,7 +77,13 @@ export async function POST(
 
   const requestId = asNonEmptyString(body.requestId) ?? desktopApprovalRequestId(plan);
   const prompt = buildUserApprovalPrompt(plan);
-  const result = await defaultDeliver(sessionId, prompt);
+  // 投递目的地：**不能**直接用 plan.sessionId —— 那也是 pi-team 读 PI_SESSION_ID 记的
+  // 占位 'unknown-session'（见 docs/agents/agent-teams-upstream-defects.md B1）。优先用
+  // 磁盘上可反推的真实 lead 会话（成员会话的 parentSessionId），其次才是 plan 里的值。
+  // identity 校验仍用请求里的 sessionId（那是审批幂等语义的一部分），只有投递换目标。
+  const leadSessionId = await resolveTeamLeadSession(team).catch(() => null);
+  const deliverTo = leadSessionId ?? plan.sessionId;
+  const result = await defaultDeliver(deliverTo, prompt);
   if (!result.ok) {
     return NextResponse.json(
       { ok: false, requestId, reason: result.reason ?? "delivery failed" },

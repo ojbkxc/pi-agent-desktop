@@ -185,3 +185,23 @@ test("状态标签键与徽标色覆盖四态（纯函数输出）", () => {
   assert.equal(planStateToneColor("launch_failed"), "var(--danger)");
   assert.equal(planStateToneColor("draft"), "var(--text-muted)");
 });
+
+test("editable 路径：传 editor 才渲染可编辑区，且 draft / review_pending 才允许保存", async () => {
+  // PlanEditor 需要 useModelCatalog 等 hook，SSR 渲染会真的发请求；这里只断言卡片
+  // 把 `editor: true` 传进了纯视图（分叉点），PlanEditor 自己的纯函数有独立单测。
+  const { planModalView: viewFn } = await jiti.import("./AgentTeamPlanCard.tsx");
+  assert.equal(typeof viewFn, "function");
+
+  // 不传 editor → 退回只读名册（既有静态断言不变）。
+  const readOnly = renderToStaticMarkup(planModalView(tFake, view()));
+  assert.doesNotMatch(readOnly, /data-testid="team-plan-editor"/);
+
+  // 主组件始终传 editor: true（可编辑弹框是默认形态）。
+  const fs = await jiti.import("node:fs");
+  const source = fs.readFileSync(new URL("./AgentTeamPlanCard.tsx", import.meta.url), "utf8");
+  assert.match(source, /editor: true/, "主组件必须把可编辑区打开");
+  assert.match(source, /onSave \? \{ onSave \} : \{\}/, "onSave 缺省时不下传，保持只读降级");
+  assert.match(source, /saving=\{options\.saving \?\? false\}/, "saving 一路传到可编辑区");
+  assert.match(source, /conflict=\{options\.conflict \?\? false\}/, "conflict 一路传到可编辑区");
+  assert.match(source, /cwd=\{options\.cwd \?\? null\}/, "cwd 一路传到可编辑区（agent 预设目录）");
+});

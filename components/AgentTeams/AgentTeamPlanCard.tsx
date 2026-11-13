@@ -10,6 +10,7 @@ import {
   type PlanState,
   type TeamPlanView,
 } from "@/lib/agent-teams-plan";
+import { PlanEditor, type PlanMemberEditDraft, type PlanTaskEditDraft } from "./PlanEditor";
 
 /**
  * B3 计划卡（会话决策坞，composer 上方）——**只读展示 + 批准**。
@@ -29,12 +30,24 @@ import {
  */
 interface Props {
   plan: TeamPlanView | null;
+  /** 读 agent 预设用的项目目录（会话 cwd）；缺省时成员详情只显示当前 agentType。 */
+  cwd?: string | null;
   /** approve 请求进行中。 */
   busy?: boolean;
+  /** 保存编辑进行中。 */
+  saving?: boolean;
+  /** 保存失败信息。 */
+  saveError?: string | null;
+  /** 上次保存 409（计划已被别人改过）。 */
+  conflict?: boolean;
   /** 读取 / 批准的错误信息。 */
   error?: string | null;
   /** 点「批准」；由 hook 的 approve 投递给 lead。 */
   onApprove?: () => void;
+  /** 保存编辑（PATCH）；缺省时保存按钮不出现。 */
+  onSave?: (edits: { members: PlanMemberEditDraft[]; tasks: PlanTaskEditDraft[] }) => void;
+  /** 409 后重新载入。 */
+  onReload?: () => void;
 }
 
 type TFn = (key: string, params?: TranslationParams) => string;
@@ -125,16 +138,33 @@ function UsersIcon() {
   );
 }
 
-/** 纯视图：Modal 内容（无 hook），便于单测直接渲染 / 遍历回调。 */
+/** 纯视图：Modal 内容（无 hook），便于单测直接渲染 / 遍历回调。
+ *
+ * 「可编辑」由 `options.editor` 决定：传了就渲染 PlanEditor（成员/任务/模型编辑），
+ * 否则退回只读名册（既有静态断言与纯展示场景不变）。
+ */
 export function planModalView(
   t: TFn,
   plan: TeamPlanView,
-  options: { busy?: boolean; onApprove?: () => void; onClose?: () => void } = {},
+  options: {
+    busy?: boolean;
+    onApprove?: () => void;
+    onClose?: () => void;
+    cwd?: string | null;
+    saving?: boolean;
+    saveError?: string | null;
+    conflict?: boolean;
+    onSave?: (edits: { members: PlanMemberEditDraft[]; tasks: PlanTaskEditDraft[] }) => void;
+    onReload?: () => void;
+    /** 传 true 才渲染可编辑区（需要 React hook，无 DOM 的纯视图测试默认不传）。 */
+    editor?: boolean;
+  } = {},
 ) {
   const review = derivePlanReview(plan);
   const approveDisabled = isApproveDisabled(plan) || Boolean(options.busy);
   const ownerName = (ownerId: string | undefined) =>
     plan.members.find((member) => member.id === ownerId)?.name ?? t("teams.plan.unassigned");
+  const editable = options.editor === true && (plan.state === "draft" || plan.state === "review_pending");
   return (
     <div style={S.overlay} data-testid="team-plan-overlay" onClick={options.onClose}>
       <div
@@ -162,48 +192,63 @@ export function planModalView(
           </p>
         ) : null}
 
-        <section style={S.section} aria-label={t("teams.plan.roster")}>
-          <h4 style={S.h4}>
-            {t("teams.plan.roster")} ({plan.members.length})
-          </h4>
-          {plan.members.map((member) => (
-            <div key={member.id} style={S.member} data-member-id={member.id}>
-              <div style={S.memberName}>{member.name}</div>
-              <div style={S.mono}>
-                {member.agentType} · {member.runtime.providerId}/{member.runtime.modelId}
-                {member.runtime.effortLevel ? ` · ${member.runtime.effortLevel}` : ""}
-              </div>
-              {member.reason ? <p style={S.muted}>{member.reason}</p> : null}
-              {member.prompt ? <p style={S.prompt}>{member.prompt}</p> : null}
-            </div>
-          ))}
-        </section>
-
-        <section style={S.section} aria-label={t("teams.plan.tasks")}>
-          <h4 style={S.h4}>
-            {t("teams.plan.tasks")} ({plan.tasks.length})
-          </h4>
-          {plan.tasks.length === 0 ? (
-            <p style={S.muted}>{t("teams.plan.noTasks")}</p>
-          ) : (
-            plan.tasks.map((task) => (
-              <div key={task.id} style={S.task} data-task-id={task.id}>
-                <div>{task.subject}</div>
-                <div style={S.mono}>
-                  {t("teams.plan.owner")}: {ownerName(task.ownerId)}
-                  {task.dependencies.length > 0
-                    ? ` · ${t("teams.plan.dependencies")}: ${task.dependencies.join(", ")}`
-                    : ""}
-                </div>
-                {!task.ownerId || !plan.members.some((member) => member.id === task.ownerId) ? (
-                  <div style={S.alert} role="alert" data-testid="team-plan-unassigned">
-                    {t("teams.plan.assignRequired")}
+        {options.editor ? (
+          <PlanEditor
+            plan={plan}
+            cwd={options.cwd ?? null}
+            editable={editable}
+            saving={options.saving ?? false}
+            saveError={options.saveError ?? null}
+            conflict={options.conflict ?? false}
+            {...(options.onSave ? { onSave: options.onSave } : {})}
+            {...(options.onReload ? { onReload: options.onReload } : {})}
+          />
+        ) : (
+          <>
+            <section style={S.section} aria-label={t("teams.plan.roster")}>
+              <h4 style={S.h4}>
+                {t("teams.plan.roster")} ({plan.members.length})
+              </h4>
+              {plan.members.map((member) => (
+                <div key={member.id} style={S.member} data-member-id={member.id}>
+                  <div style={S.memberName}>{member.name}</div>
+                  <div style={S.mono}>
+                    {member.agentType} · {member.runtime.providerId}/{member.runtime.modelId}
+                    {member.runtime.effortLevel ? ` · ${member.runtime.effortLevel}` : ""}
                   </div>
-                ) : null}
-              </div>
-            ))
-          )}
-        </section>
+                  {member.reason ? <p style={S.muted}>{member.reason}</p> : null}
+                  {member.prompt ? <p style={S.prompt}>{member.prompt}</p> : null}
+                </div>
+              ))}
+            </section>
+
+            <section style={S.section} aria-label={t("teams.plan.tasks")}>
+              <h4 style={S.h4}>
+                {t("teams.plan.tasks")} ({plan.tasks.length})
+              </h4>
+              {plan.tasks.length === 0 ? (
+                <p style={S.muted}>{t("teams.plan.noTasks")}</p>
+              ) : (
+                plan.tasks.map((task) => (
+                  <div key={task.id} style={S.task} data-task-id={task.id}>
+                    <div>{task.subject}</div>
+                    <div style={S.mono}>
+                      {t("teams.plan.owner")}: {ownerName(task.ownerId)}
+                      {task.dependencies.length > 0
+                        ? ` · ${t("teams.plan.dependencies")}: ${task.dependencies.join(", ")}`
+                        : ""}
+                    </div>
+                    {!task.ownerId || !plan.members.some((member) => member.id === task.ownerId) ? (
+                      <div style={S.alert} role="alert" data-testid="team-plan-unassigned">
+                        {t("teams.plan.assignRequired")}
+                      </div>
+                    ) : null}
+                  </div>
+                ))
+              )}
+            </section>
+          </>
+        )}
 
         <div style={S.footer}>
           <button type="button" data-testid="team-plan-close" style={S.ghost} onClick={options.onClose} disabled={options.busy}>
@@ -224,7 +269,18 @@ export function planModalView(
   );
 }
 
-export function AgentTeamPlanCard({ plan, busy = false, error = null, onApprove }: Props) {
+export function AgentTeamPlanCard({
+  plan,
+  cwd = null,
+  busy = false,
+  saving = false,
+  saveError = null,
+  conflict = false,
+  error = null,
+  onApprove,
+  onSave,
+  onReload,
+}: Props) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
 
@@ -275,7 +331,20 @@ export function AgentTeamPlanCard({ plan, busy = false, error = null, onApprove 
           {error}
         </p>
       ) : null}
-      {open ? planModalView(t, plan, { busy, onApprove, onClose: () => setOpen(false) }) : null}
+      {open
+        ? planModalView(t, plan, {
+            busy,
+            onApprove,
+            onClose: () => setOpen(false),
+            editor: true,
+            cwd,
+            saving,
+            saveError,
+            conflict,
+            ...(onSave ? { onSave } : {}),
+            ...(onReload ? { onReload } : {}),
+          })
+        : null}
     </section>
   );
 }

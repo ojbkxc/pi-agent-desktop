@@ -156,8 +156,10 @@ lib/
   session-reader.ts   SessionManager wrappers + path cache + buildSessionContext adapter
   tool-presets.ts     PRESET_NONE/DEFAULT/FULL + getPresetFromTools()
   agent-teams-*.ts    team swimlane projection (`agent-teams-swimlane.ts`) and its stores, the plan
-                      store + approval prompt (`agent-teams-plan*.ts`), the guide/notice prefs, and
-                      the unattended-delivery seam the plan approve route posts through
+                      store (read), write path (`agent-teams-plan-write.ts`: lock + revision +
+                      graph check) and approval prompt (`agent-teams-plan.ts`), the
+                      guide/notice prefs, and the unattended-delivery seam the plan approve route
+                      posts through
   goal/               /goal mode: per-session JSON store (`goal-store.ts`), the pure state machine
                       and its two continuation gates (`goal-types.ts`), and the `pi-goal` extension
                       that turns agent_end into the next turn (`goal-extension.ts`)
@@ -195,7 +197,8 @@ components/
   AgentTeams/         agent-team surfaces: the workbench view (lanes / task board / member inspector /
                       comm feed / replay), the topbar strip, the composer toggle + armed chip + cost
                       dialog, the one-time guide, the `team_create` / `team_delete` inline cards, the
-                      plan-approval card (docs/agent-teams-design.md), and the `/goal` strip
+                      plan-approval card and its editable `PlanEditor` (per-member model / agent /
+                      task-owner edits; docs/agent-teams-design.md §12.4), and the `/goal` strip
                       (`GoalStrip.tsx`, display-only; its data comes from `GET /api/goals/[session]`)
   RelaySection.tsx    Settings › General › Remote relay: relay config, pairing QR, approvals, paired phones
   SettingsPanel.tsx   settings dialog; its General tab hosts the app intro, Version & Updates and the desktop-only switches
@@ -217,7 +220,8 @@ hooks/
   useAgentTeamsEnabled.ts  the Agent Teams switch: the global `enabled` flag vs the per-message `armed` flag
   useActiveTeamStrip.ts    header strip + inline card: session → team snapshot, phase, progress;
                            `deriveTeamStripPhase` is the one shared phase derivation
-  useTeamPlan.ts           plan-approval card: 2s poll of `/api/teams/[team]/plan`, approve posts a prompt
+  useTeamPlan.ts           plan-approval card: 2s poll of `/api/teams/[team]/plan`, approve posts a
+                           prompt, `save()` PATCHes member/task edits (409 → reload prompt)
   useGoalState.ts          /goal strip data: 2s poll while the goal is active, paused while the
                            tab is hidden, refreshed once per new message otherwise
 ```
@@ -288,7 +292,7 @@ Each one undid a real regression; the linked note has the reasoning.
 - The Cloudflare tunnel's hostname is trusted only while the tunnel is online **and** `PI_WEB_PASSWORD` is set; `publicAccess.origin` is written on `online` and cleared on stop/failure, so hand-editing the settings file alone never widens the host allow-list. Keep `/health` free of anything but `{status,gatewayId}`. ([fork-public-access](docs/agents/fork-public-access.md))
 - The cloudflared the Settings download needs is staged into the packaged server by `scripts/prepare-desktop.mjs` (`resources/server/scripts/`), and the downloaded binary lands in `~/.pi/agent/bin/cloudflared/`, never in the app's own resources — those can be read-only (macOS `.app`) and every upgrade rebuilds them. Never render a raw Node/stderr message as user copy: map the failure to an i18n code and keep the raw text in `title`. ([fork-public-access](docs/agents/fork-public-access.md))
 - Fork UI copy lives in `lib/i18n/locale-plugins.ts` under `FORK_MESSAGE_PATCHES` (en / zh-CN / zh-TW), **not** in `lib/i18n/messages/*.ts` — those are pi-web's upstream locales and a merge overwrites them. A key present in only some locales renders its own name in the UI, so `lib/i18n/usage.test.mjs` and `registry.test.mjs` gate every `t()` call site. ([fork-ui](docs/agents/fork-ui.md))
-- The plan-approval card must never write `plan.json` itself: `POST /api/teams/[team]/plan/approve` only delivers a prompt to the lead session, because a desktop-written approve misses `approvedSnapshot` and `isTeamExecutionApproved()` stays false, so the launch never starts. Approving does not auto-launch. ([agent-teams-design](docs/agent-teams-design.md))
+- The plan-approval card must never write `plan.json` itself. `POST /api/teams/[team]/plan/approve` only delivers a prompt to the lead session, because a desktop-written approve misses `approvedSnapshot` and `isTeamExecutionApproved()` stays false, so the launch never starts. Approving does not auto-launch. The editable card saves through `PATCH` → `lib/agent-teams-plan-write.ts` instead (file lock, `expectedRevision` 409, graph validation, **state preserved** — saving a `review_pending` plan must not drop it back to `draft`, or the user has to submit again). Delivery must target `resolveTeamLeadSession(team)`, never `plan.sessionId`: both are the same `PI_SESSION_ID` placeholder. **This desktop always reviews before launch**: the `tool_call` hook in `lib/pi-extension-builtins.ts` rewrites `team_create.spawn` to `false` for the lead (plus the `team-plan-approval` prompt section); nothing may bypass the review, and members must not get either. ([agent-teams-design](docs/agent-teams-design.md) §12.4)
 - The `/api/agent/running/events` heartbeat must stay a **real `data:` frame carrying the current snapshot** (never a bare SSE `:` comment, `app/api/agent/running/events/route.ts`), because the sidebar treats that stream as authoritative for running state: a half-open connection whose comments still flow would pin the last running set — and its spinner — on screen forever. The client's 75s silence watchdog (`components/SessionSidebar.tsx`, 2.5 × the 30s cadence) is what notices a half-open stream that `onerror`/`readyState === CLOSED` cannot. ([fork-sessions](docs/agents/fork-sessions.md))
 - A team's `config.json` `leadSessionId` is `'unknown-session'` whenever pi-team runs in this server (it reads `process.env.PI_SESSION_ID`, which the process never sets). `findTeamBySession()` / `listTeams()` must therefore keep resolving the real lead from a member session's `pi-web:subagent` snapshot — without it the lead session shows no team strip and the workbench is unreachable. Tickets are not the only way a team finishes: `team_create`-only teams never write a ticket, so their phase must come from lifecycle + `accepted.jsonl`, never stay `forming` forever. ([agent-teams-design](docs/agent-teams-design.md), [agent-teams-upstream-defects](docs/agents/agent-teams-upstream-defects.md))
 - On Windows the pi SDK's bash discovery only probes `%ProgramFiles%\Git` and PATH; keep `withWindowsBashFallback()` in both session assembly paths (`lib/rpc-manager.ts`, `lib/subagent-runtime.ts`), supplying `shellPath` **only when the SDK has none**. `lib/terminal-shells.ts` must walk git.exe's ancestors to find `<root>\bin\bash.exe` (Git for Windows also ships git.exe under `mingw64\bin`, and `win32.dirname()` collapses a drive path to `D:`). ([fork-desktop](docs/agents/fork-desktop.md))

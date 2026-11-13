@@ -1161,6 +1161,30 @@ completed / in_progress / blocked / available）；泳道 `taskAnchors[].status`
 （pending / in_progress / completed / aborted），`tasks[].status` 只有三态。三处口径目前**未收敛**，
 收敛方案另案处理；本节只记录事实，不预设实现方式。
 
+### 12.4 计划审批（2026-11-12）：可编辑弹框 + 默认走审批
+
+桌面侧把 cc-haha 的计划审批闭环补齐了，这一节是新契约，改相关代码前先读：
+
+- **桌面强制先审后跑**。`lib/pi-extension-builtins.ts` 的 `teamBuiltin` 在 `tool_call` 钩子里
+  把 `team_create` 的 `spawn` 改写成 `false`（SDK 的 `event.input` 可变，见
+  `node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts` 的注释），
+  并在 lead 的 system prompt 注入 `TEAM_PLAN_APPROVAL_GUIDE`（截面 `team-plan-approval`）
+  说明改写后的动作序列：`team_create(spawn=false)` → `team_plan submit` → 等用户 →
+  `team_plan approve(request_id)` → `team_plan launch`。只在 lead 上生效，成员不建团队。
+  没有「关掉审批」的开关——用户 2026-11-12 拍板「默认走审批」。
+- **弹框可编辑**。`components/AgentTeams/PlanEditor.tsx` 支持逐个成员改 `agentType` /
+  provider+model、批量设模型、跟随队长、恢复建议模型、任务负责人下拉。保存走
+  `PATCH /api/teams/[team]/plan` → `lib/agent-teams-plan-write.ts`：`plan.json.lock` 文件锁 +
+  `expectedRevision` 乐观并发（409）+ 图校验失败不落盘 + **保存后保持原状态**
+  （`review_pending` 不被打回 `draft`）。只覆盖 `agentType`/`runtime`/`ownerId`，其余字段
+  （`prompt`/`reason`/`difficulty`/`agentSnapshot`）逐字保留，并置 `runtimeSource: "human"`。
+- **批准仍只投递 prompt**。`POST .../plan/approve` 绝不写 `plan.json`（自写会漏
+  `approvedSnapshot`，`isTeamExecutionApproved()` 判假，团队起不来）。
+- **投递目标不能用 `plan.sessionId`**。它和 `config.json` 的 `leadSessionId` 同源（都读
+  `process.env.PI_SESSION_ID`，本服务进程从不设置）→ 恒为占位 `unknown-session`。审批路由与
+  无人值守扫描都改用 `resolveTeamLeadSession(team)`（`lib/agent-teams-swimlane-store.ts`，
+  从成员会话的 `pi-web:subagent.parentSessionId` 反推），反推不出来才回落原值。
+
 ---
 
 ## 附录 A：关键参考文件索引
