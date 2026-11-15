@@ -121,17 +121,21 @@ export function KeepaliveSection() {
   };
 
   const enabled = status?.enabled === true;
-  const heartbeatAge = formatDuration(status?.server.heartbeatAgeMs ?? null);
-  const uptime = formatDuration(status?.server.uptimeMs ?? null);
+  // 形状守卫：接口可能回 `{}`（未登记路由 / 旧版服务 / 畸形响应的测试桩），
+  // 只防 status 为 null 不够——status.server 缺席时 `status?.server.x` 会抛
+  // TypeError 并炸掉整个 Settings 面板（e2e settings-controls 踩过）。
+  const server = status?.server;
+  const heartbeatAge = formatDuration(server?.heartbeatAgeMs ?? null);
+  const uptime = formatDuration(server?.uptimeMs ?? null);
   const supervisor = status?.supervisor;
   const installed = supervisor?.record?.installed === true;
   const supervisorTarget = supervisor?.record?.installTarget ?? null;
   const restarts = supervisor?.record?.restarts ?? 0;
   const lastCheck = supervisor?.record?.lastCheckAt ?? null;
   const autofix = status?.autofix ?? null;
-  const interrupted = status?.interrupted?.sessionIds.length ?? 0;
-  const resumeCount = status?.resume.resumed.length ?? 0;
-  const resumeAt = status?.resume.lastAt ?? null;
+  const interrupted = status?.interrupted?.sessionIds?.length ?? 0;
+  const resumeCount = status?.resume?.resumed?.length ?? 0;
+  const resumeAt = status?.resume?.lastAt ?? null;
 
   const statusHint = (() => {
     if (!status) return t("settings.keepaliveLoading");
@@ -166,7 +170,7 @@ export function KeepaliveSection() {
             <span className="settings-option-title">{t("settings.keepaliveServer")}</span>
             <span className="settings-option-hint">
               {t("settings.keepaliveServerValue", {
-                pid: String(status?.server.pid ?? "-"),
+                pid: String(server?.pid ?? "-"),
                 uptime: uptime ?? "-",
               })}
             </span>
