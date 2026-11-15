@@ -7,6 +7,7 @@ import { readdir } from "fs/promises";
 import { isAbsolute, join, normalize as normalizePath, relative, resolve as resolvePath, sep } from "path";
 import type { AgentMessage, ImageContent, SessionEntry, SessionHeader, SessionInfo, SessionContext } from "./types";
 import { normalizeToolCalls } from "./normalize";
+import { withoutMessageSignatures } from "./message-signatures";
 import { getThinkingPreview } from "./message-display";
 import { projectIdentityKey } from "./project-identity";
 import { sessionPathKey } from "./session-path";
@@ -981,9 +982,10 @@ function entryToUiMessage(
       // Transcript system messages carry the prompt and tool loadout (Pi >= 0.86).
       // They are provider input, not conversation, so they never render.
       if (entry.message.role === "system") return null;
+      const displayMessage = withoutMessageSignatures(entry.message);
       // Tool-result details are projected to the fields the UI renders:
       // extensions can persist megabytes there (see lib/tool-result-details.ts).
-      const normalized = slimToolResultMessage(normalizeToolCalls(entry.message));
+      const normalized = slimToolResultMessage(normalizeToolCalls(displayMessage));
       let message = options.deferToolResultImages
         ? deferToolResultBase64Images(normalized, options.sessionId, entry.id)
         : normalized;
