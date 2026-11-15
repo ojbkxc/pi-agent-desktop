@@ -62,6 +62,16 @@ with `redirect: "manual"` and confirms the `gatewayId` is this process's own. A 
 hostname that answers with someone else's id is not trusted. Keep this route free of
 anything else.
 
+The probe fetches with the **undici package's own `fetch` plus an explicit direct
+`Agent` dispatcher**, deliberately bypassing both `globalThis.fetch` (which
+`applyGlobalFetchForProxy` swaps for the proxy-routed version in manual proxy mode)
+and the process-wide dispatcher (`undici.setGlobalDispatcher(EnvHttpProxyAgent)`). The
+connector strips `*_proxy` from its environment and always egresses directly, so a
+probe that honoured the proxy would fail — and be read as "the hostname does not reach
+this gateway" — exactly when the proxy is down while the tunnel is fine. This is an
+intentional divergence from cc-haha, whose probe *does* go through the proxy because
+its connector uses the proxy bridge.
+
 ## State machine (`lib/public-access/manager.ts`, `runtime.ts`)
 
 `unconfigured | disabled | connecting | online | reconnecting | failed`, each with a
