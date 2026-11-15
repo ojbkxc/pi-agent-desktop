@@ -3,6 +3,7 @@ import { lstat, realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { getLifecycle, resolveTeamHost } from "pi-team";
 import { enqueueTeamMutation, teamDirFor, teamsRootDir } from "@/lib/agent-teams-swimlane-store";
+import { readPlanRosterMembers } from "@/lib/agent-teams-roster";
 import {
   readTeamConfig,
   readLifecycleSnapshot,
@@ -111,6 +112,7 @@ async function validateTeamDirForRemoval(teamDirName: string): Promise<string | 
 
 const deps: TeamActionDeps = {
   readTeamConfig: (teamDirName) => readTeamConfig(teamDirName, teamDirFor),
+  readPlanMembers: (teamDirName) => readPlanRosterMembers(teamDirFor(teamDirName)),
   readLifecycle: (teamDirName) => readLifecycleSnapshot(teamDirName, teamDirFor),
   hasLifecycleInstance,
   async release(rawTeamName, memberName): Promise<LifecycleSnapshotEntry> {

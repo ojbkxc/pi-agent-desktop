@@ -31,6 +31,7 @@ import {
   type TeamFileLike,
   type TeamWorkbenchSnapshot,
 } from "./agent-teams-swimlane";
+import { mergeRosterMembers, readPlanRosterMembers } from "./agent-teams-roster";
 
 /**
  * 团队数据根目录：与 pi-team constants.getTeamsDir 一致（PI_TEAM_DIR 覆盖）。
@@ -575,7 +576,10 @@ export function readTeamQuotaLimits(env: NodeJS.ProcessEnv = process.env): { per
 /**
  * 读全部团队名册的 worker 数（口径对齐 pi-team countActiveWorkers teamTools.js:34-50，
  * 但 lead 判定升级为 resolveLeadNames 可靠链——改名 lead 不再虚占全局配额）。坏目录
- * 跳过。写路径（POST add）必须在 withQuotaLock 内使用；**只读路径（GET workload）直接
+ * 跳过。名册是 **config ∪ plan** 的合并口径（与泳道 buildRoster 一致）：config.json
+ * 只在 team_create 写一次，launch 派发的成员只进 plan——只数 config 会让 plan 独有
+ * 成员在全局配额里隐身（叠加上游 A2 的跨团队超卖）。plan.json 缺失/损坏按「无 plan」
+ * 容错。写路径（POST add）必须在 withQuotaLock 内使用；**只读路径（GET workload）直接
  * 调用、不得进 withQuotaLock**——它会落占位文件，GET 必须零写盘（lead 复核）。
  */
 export async function readGlobalRosterWorkers(excludeTeamDirName?: string): Promise<{ total: number }> {
@@ -591,7 +595,9 @@ export async function readGlobalRosterWorkers(excludeTeamDirName?: string): Prom
     const snapshot = await readTeamConfigSnapshot(dirName);
     if (!snapshot) continue;
     const leads = resolveLeadNames(snapshot);
-    total += snapshot.members.filter((member) => !leads.has(member.name)).length;
+    const planMembers = await readPlanRosterMembers(join(teamsRootDir(), dirName));
+    total += mergeRosterMembers(snapshot.members, planMembers)
+      .filter((member) => !leads.has(member.name)).length;
   }
   return { total };
 }

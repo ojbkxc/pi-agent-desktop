@@ -15,6 +15,8 @@
  * - `expectedRevision` 乐观并发：不匹配即 409（用户看到的提示是「计划已变更」）；
  * - 图校验（成员名合法、id/名字唯一、owner 必须存在、依赖无环）在写前做，
  *   校验失败**不落盘**；
+ * - 「尚无计划」的 404 只对**文件不存在**成立：plan.json 存在但损坏（JSON 解析失败/
+ *   内容不是对象）报明确错误（400），不谎报「无计划」；
  * - 只允许编辑 `draft` / `review_pending`；保存后**保持原状态**（评审中保存不该把
  *   计划打回草稿，否则用户又要重新提交一次）。
  */
@@ -82,7 +84,7 @@ export async function applyTeamPlanEdits(teamName: string, patch: PlanPatch): Pr
     retries: { ...PLAN_LOCK_RETRIES },
   });
   try {
-    const plan = readPlanSync(dir);
+    const plan = readPlanSync(dir, teamName);
     if (!plan) throw new TeamPlanWriteError(`团队「${teamName}」尚无计划`, 404);
     // 身份四字段必须与磁盘一致（对齐 pi-team requireCurrent）。
     if (
@@ -193,15 +195,36 @@ export function validatePlanGraph(plan: Record<string, unknown>): void {
   for (const task of tasks) visit(task.id);
 }
 
-function readPlanSync(dir: string): Record<string, unknown> | null {
+function readPlanSync(dir: string, teamName: string): Record<string, unknown> | null {
+  let raw: string;
   try {
-    const raw = JSON.parse(readFileSync(join(dir, "plan.json"), "utf8")) as unknown;
-    return typeof raw === "object" && raw !== null && !Array.isArray(raw)
-      ? raw as Record<string, unknown>
-      : null;
-  } catch {
-    return null;
+    raw = readFileSync(join(dir, "plan.json"), "utf8");
+  } catch (error) {
+    // 文件不存在 = 团队尚无计划（404 语义成立）；其它读错（EACCES/EISDIR…）如实上抛，
+    // 不吞成「无计划」。
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    // 文件存在但解析失败 = 损坏：明确报错，绝不谎报「尚无计划」。
+    throw new TeamPlanWriteError(
+      `团队「${teamName}」的 plan.json 已损坏（无法解析 JSON）：${
+        error instanceof Error ? error.message : String(error)
+      }。请修复该文件或删除后重新提交计划。`,
+      400,
+    );
+  }
+  if (!(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed))) {
+    // 合法 JSON 但不是对象（数组/标量）同样是损坏形态，同上处理。
+    throw new TeamPlanWriteError(
+      `团队「${teamName}」的 plan.json 已损坏（内容不是计划对象）。请修复该文件或删除后重新提交计划。`,
+      400,
+    );
+  }
+  return parsed as Record<string, unknown>;
 }
 
 /** 原子写：临时文件 + rename（Windows 瞬时错误有界退避），失败清临时。 */

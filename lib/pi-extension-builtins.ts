@@ -174,8 +174,12 @@ function teamBuiltin(
       // 团队」出现的 —— 没有这条记录用户永远看不到计划、也就永远无法批准。
       // 只写本仓库自己的 desktop-lead.json，绝不改 config.json 的 leadSessionId：
       // pi-team 的 incarnation() 要求它等于 process.env.PI_SESSION_ID（= 占位值）。
+      // **失败的结果不记**：tool_call 钩子的目录预检与 pi-team 自己都可能失败（撞目录、
+      // 重名、磁盘错误），失败结果若也写标记，会把一个没建成功的团队（甚至别人建的团队）
+      // 记到本会话名下，此后该团队被误判属于本会话。
       pi.on("tool_result", async (event, ctx) => {
         if (event.toolName !== TEAM_CREATE_TOOL_NAME) return undefined;
+        if (event.isError) return undefined;
         const input = event.input as { team_name?: unknown } | undefined;
         const rawName = typeof input?.team_name === "string" ? input.team_name.trim() : "";
         if (!rawName) return undefined;

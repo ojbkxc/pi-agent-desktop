@@ -19,6 +19,8 @@
  * outcome="pending-send"）出锁；段二（短票锁）只回写对应 clientRequestId 的 outcome，
  * 不触碰 assignment 业务字段。崩溃于「已 send 未回写」⇒ sidecar 停在 pending-send ⇒
  * 同 clientRequestId 重试会重新 send 一次（可能重复一条邮箱消息）——warnings 明示。
+ * 重发只在既有 assignment 仍为 pending 时放行；running（已领取执行）/ended/cancelled
+ * 一律 409——投递失败不代表成员没收到，盲目重发会重复投递。
  */
 
 import { randomUUID } from "node:crypto";
@@ -319,6 +321,17 @@ async function dispatchAssignmentLocked(deps: DispatchAssignmentDeps, input: Dis
       // pending-send（崩溃残留）或 failed：保留既有 assignment，重发投递（不新建）。
       const existing = assignmentViews(ticket).find((view) => view.id === mine.assignmentId);
       if (!existing) throw new AssignmentNotFoundError("调度记录存在，但对应的 assignment 已不在票上");
+      // 重发前校验状态（对齐改派段的口径）：投递失败不代表成员没收到——崩溃窗口里
+      // 邮箱可能已落盘并被领取执行。status 已不是 pending 时重发会造成重复投递：
+      // running = 已领取在执行，ended/cancelled = 已完成，均拒绝。
+      if (existing.status === "running") {
+        throw new AssignmentConflictError(
+          `该派活正在执行（running）——工单消息可能已送达并被领取。请等待完成，或先停止成员「${existing.assignee}」的当前执行再重发。`,
+        );
+      }
+      if (existing.status !== "pending") {
+        throw new AssignmentConflictError(`该派活已结束（${existing.status}），无需重发`);
+      }
       return {
         kind: "resend" as const,
         subject: ticketSubject(ticket),

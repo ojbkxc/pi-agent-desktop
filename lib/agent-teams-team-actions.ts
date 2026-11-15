@@ -19,6 +19,7 @@
  */
 import { readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { mergeRosterMembers, type PlanRosterMember } from "./agent-teams-roster";
 
 /** 停止团队时逐成员的生命周期操作（对应 release(tombstone:false)）。 */
 export type TeamLifecycleAction = "stop" | "reclaim";
@@ -85,6 +86,13 @@ export interface TeamActionDeps {
     rawName: string;
     members: Array<{ agentId: string; name: string; sessionId?: string }>;
   } | null>;
+  /**
+   * 按**目录名**读 plan.json 的成员（plan 独有成员的合并来源）。可选：不注入时只按
+   * config 名册停止（旧单测兼容）；route 必须注入——config.json 只在 team_create 写
+   * 一次，launch 派发的成员只进 plan/lifecycle，不补这层会让这些成员在 stop/reclaim
+   * 里整层漏掉（口径与泳道 buildRoster 一致，见 lib/agent-teams-roster.ts）。
+   */
+  readPlanMembers?: (teamDirName: string) => Promise<PlanRosterMember[]>;
   /** 按**目录名**读 lifecycle.json 的成员条目（缺文件返回空表）。 */
   readLifecycle: (teamDirName: string) => Promise<Record<string, LifecycleSnapshotEntry>>;
   /** 按**原始团队名**（config.name）判断本进程是否已有该团队的生命周期实例。 */
@@ -157,11 +165,15 @@ export async function runTeamLifecycleAction(
   if (!config) {
     return { ...base, ok: false, results: [], error: "团队不存在" };
   }
-  const members = config.members;
   const rawTeamName = config.rawName;
   if (!rawTeamName) {
     return { ...base, ok: false, results: [], error: "团队配置缺少 name，无法定位生命周期实例" };
   }
+  // plan 独有成员合并：config.json 只在 team_create 写一次，launch 派发的成员只进
+  // plan/lifecycle——只按 config 遍历会让这些成员在 stop/reclaim 里整层漏掉（口径与
+  // 泳道 buildRoster 一致：config 在前，plan 独有成员按 name 去重追加在后）。
+  const planMembers = deps.readPlanMembers ? await deps.readPlanMembers(teamDirName) : [];
+  const members = mergeRosterMembers(config.members, planMembers);
 
   // 2) 实例分支（v4 §2）：实例在 → 走 release 全链；实例不在 → 磁盘 + probe 双证据，
   //    不再直接 409（否则重启后盘上团队永远无法 reclaim）。两条路径都绝不裸 getLifecycle——

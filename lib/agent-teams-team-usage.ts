@@ -12,6 +12,7 @@
  */
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { mergeRosterMembers, readPlanRosterMembers } from "./agent-teams-roster";
 
 /** 单团队 du 的条目预算：超出即 truncated（不全局放大）。 */
 export const TEAM_USAGE_ENTRY_BUDGET = 5000;
@@ -164,7 +165,11 @@ export async function computeTeamUsage(
   };
 }
 
-/** config/lifecycle 的最小读取（与 team-actions 的磁盘口径一致；缺文件回 null/空表）。 */
+/** config/lifecycle 的最小读取（与 team-actions 的磁盘口径一致；缺文件回 null/空表）。
+ * 名册是 **config ∪ plan** 的合并口径（与泳道 buildRoster 一致）：config.json 只在
+ * team_create 写一次，launch 派发的成员只进 plan/lifecycle——只按 config 遍历会让
+ * plan 独有成员在 ended 判定里整层漏掉（运行中的 plan 独有成员会把「全员已停」的
+ * 判定提前放行）。plan.json 缺失/损坏按「无 plan」容错。 */
 export async function readTeamUsageConfig(
   teamDir: string,
 ): Promise<TeamUsageConfig | null> {
@@ -180,7 +185,8 @@ export async function readTeamUsageConfig(
       name: item.name as string,
       ...(typeof item.sessionId === "string" && item.sessionId ? { sessionId: item.sessionId } : {}),
     }));
-  return { rawName: typeof config.name === "string" ? config.name : "", members };
+  const planMembers = await readPlanRosterMembers(teamDir);
+  return { rawName: typeof config.name === "string" ? config.name : "", members: mergeRosterMembers(members, planMembers) };
 }
 
 /**
