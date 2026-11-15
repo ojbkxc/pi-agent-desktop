@@ -1,4 +1,5 @@
 import type { Content, Link, Parent, Root } from "mdast";
+import type { Element as HastElement, Root as HastRoot, RootContent as HastContent } from "hast";
 import { defaultUrlTransform, type Options as ReactMarkdownOptions } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
@@ -647,14 +648,51 @@ export const markdownPreviewRemarkPlugins: ReactMarkdownOptions["remarkPlugins"]
   remarkCurrencySafeMath,
 ];
 
+function hastText(node: HastContent): string {
+  return node.type === "text" ? node.value : node.type === "element" ? node.children.map(hastText).join("") : "";
+}
+
+/**
+ * Display math (`$$…$$`, a ```math fence: `<pre><code class="language-math">`)
+ * goes into a `<div data-math-source>` holding its LaTeX, which MarkdownBody
+ * gives a Copy button (upstream #1380). KaTeX then renders the formula inside
+ * the div; its glyphs are no source to copy. Runs after sanitizing, so the
+ * attribute is never one a user's own HTML could carry (the schema drops
+ * `data-*`), and inline math (no `<pre>`) stays as it is.
+ */
+function rehypeDisplayMathSource() {
+  return (tree: HastRoot): void => {
+    const visit = (parent: HastRoot | HastElement): void => {
+      parent.children = parent.children.map((child) => {
+        if (child.type !== "element") return child;
+        const code = child.tagName === "pre" && child.children.length === 1 ? child.children[0] : null;
+        const classes = code?.type === "element" && code.tagName === "code" ? code.properties.className : null;
+        if (Array.isArray(classes) && classes.includes("language-math")) {
+          return {
+            type: "element",
+            tagName: "div",
+            properties: { className: ["markdown-math-display"], dataMathSource: hastText(child).replace(/\n$/, "") },
+            children: [child],
+          };
+        }
+        visit(child);
+        return child;
+      });
+    };
+    visit(tree);
+  };
+}
+
 export const markdownRehypePlugins: ReactMarkdownOptions["rehypePlugins"] = [
   rehypeRaw,
   [rehypeSanitize, markdownSanitizeSchema],
+  rehypeDisplayMathSource,
   [rehypeKatex, { throwOnError: false, strict: false }],
 ];
 
 export const markdownPreviewRehypePlugins: ReactMarkdownOptions["rehypePlugins"] = [
   rehypeRaw,
   [rehypeSanitize, markdownSanitizeSchema],
+  rehypeDisplayMathSource,
   [rehypeKatex, { throwOnError: false, strict: false }],
 ];

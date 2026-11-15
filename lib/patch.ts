@@ -8,7 +8,12 @@ export interface SplitDiffCell {
 
 export type SplitDiffRow =
   | { type: "hunk"; text: string }
+  // Unchanged lines a diff leaves out between two hunks. count is null when the
+  // diff carries no line numbers to compute it from.
+  | { type: "gap"; count: number | null }
   | { type: "line"; left: SplitDiffCell; right: SplitDiffCell };
+
+export type SplitDiffGap = Extract<SplitDiffRow, { type: "gap" }>;
 
 export interface SplitDiffFile {
   oldPath?: string;
@@ -27,6 +32,9 @@ export function parseUnifiedPatch(text: string): SplitDiffFile[] | null {
   let pendingOldPath: string | undefined;
   let oldLineNo = 0;
   let newLineNo = 0;
+  // Where the previous hunk in this file ended on both sides, so the gap of
+  // unchanged lines it leaves out between hunks can be counted.
+  let prevHunkEnd: { old: number; new: number } | null = null;
   // Lines still expected in the current hunk body, from the @@ header counts.
   // While either is positive we are inside a hunk, where a line starting with
   // "--- "/"+++ " is a removed/added content line (e.g. "-- x"/"++ x"), not a
@@ -87,6 +95,17 @@ export function parseUnifiedPatch(text: string): SplitDiffFile[] | null {
       newLineNo = Number(hunk[3]);
       hunkOldRemaining = hunk[2] === undefined ? 1 : Number(hunk[2]);
       hunkNewRemaining = hunk[4] === undefined ? 1 : Number(hunk[4]);
+      // A side with no lines in the hunk names the line before it ("-5,0").
+      const oldStart = hunkOldRemaining === 0 ? oldLineNo + 1 : oldLineNo;
+      const newStart = hunkNewRemaining === 0 ? newLineNo + 1 : newLineNo;
+      if (prevHunkEnd) {
+        const oldGap = oldStart - prevHunkEnd.old;
+        const newGap = newStart - prevHunkEnd.new;
+        if (oldGap > 0 || newGap > 0) {
+          current.rows.push({ type: "gap", count: oldGap === newGap ? oldGap : null });
+        }
+      }
+      prevHunkEnd = { old: oldStart + hunkOldRemaining, new: newStart + hunkNewRemaining };
       current.rows.push({ type: "hunk", text: line });
       continue;
     }
@@ -131,4 +150,9 @@ export function parseUnifiedPatch(text: string): SplitDiffFile[] | null {
 
 function cleanPatchPath(path: string): string {
   return path.split("\t")[0].trim();
+}
+
+/** A gap row's known count as "N unchanged lines" in the UI language. */
+export function diffGapLabel(count: number, t: (key: string, params?: Record<string, string | number>) => string): string {
+  return count === 1 ? t("diff.unchangedLine") : t("diff.unchangedLines", { count });
 }

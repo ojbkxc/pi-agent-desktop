@@ -79,6 +79,8 @@ export interface AssistantMessage {
   stopReason?: string;
   errorMessage?: string;
   timestamp?: number;
+  /** From `timestamp` until the response ended, measured by pi (pi 1.1); absent for older messages. */
+  durationMs?: number;
   usage?: AgentUsage;
 }
 

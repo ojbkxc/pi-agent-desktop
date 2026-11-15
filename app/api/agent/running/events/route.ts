@@ -1,4 +1,4 @@
-import { getRunningRpcSessionIds, subscribeRunningSessions } from "@/lib/rpc-manager";
+import { getAwaitingInputRpcSessionIds, getRunningRpcSessionIds, subscribeRunningSessions } from "@/lib/rpc-manager";
 import { getSessionListVersion } from "@/lib/session-reader";
 
 export const dynamic = "force-dynamic";
@@ -41,14 +41,14 @@ export async function GET(req: Request) {
       // the session-list version: renames/deletes/creates in other windows bump
       // it, letting connected sidebars refetch without waiting for focus.
       const nextUnsubscribe = subscribeRunningSessions((ids) => {
-        encode({ type: "running", runningSessionIds: ids, sessionListVersion: getSessionListVersion() });
+        encode({ type: "running", runningSessionIds: ids, awaitingInputSessionIds: getAwaitingInputRpcSessionIds(), sessionListVersion: getSessionListVersion() });
       });
       if (closed) nextUnsubscribe();
       else unsubscribe = nextUnsubscribe;
 
       // Initial snapshot so the client renders the correct state immediately.
       // (A duplicate frame here is harmless: the client just sets the same set.)
-      encode({ type: "running", runningSessionIds: getRunningRpcSessionIds(), sessionListVersion: getSessionListVersion() });
+      encode({ type: "running", runningSessionIds: getRunningRpcSessionIds(), awaitingInputSessionIds: getAwaitingInputRpcSessionIds(), sessionListVersion: getSessionListVersion() });
 
       // Heartbeat keeps the connection alive through proxies/timeouts, and it must
       // carry the CURRENT snapshot rather than a bare SSE comment: the sidebar treats
@@ -58,7 +58,7 @@ export async function GET(req: Request) {
       // re-establishes the truth even when nothing changed server-side.
       if (!closed) heartbeat = setInterval(() => {
         if (closed) return;
-        const sent = encode({ type: "running", runningSessionIds: getRunningRpcSessionIds(), sessionListVersion: getSessionListVersion() });
+        const sent = encode({ type: "running", runningSessionIds: getRunningRpcSessionIds(), awaitingInputSessionIds: getAwaitingInputRpcSessionIds(), sessionListVersion: getSessionListVersion() });
         if (!sent) return;
         // A trailing comment still keeps intermediaries from idling the socket.
         try { controller.enqueue(encoder.encode(":\n\n")); }

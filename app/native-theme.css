@@ -1886,6 +1886,14 @@ pre, code {
   animation: session-unread-ring 1.6s ease-in-out infinite;
 }
 
+/* 停在扩展对话框上的 run（#1145）：琥珀呼吸点。与 unread ring 同一形状与节奏，
+ * 只有颜色（warning amber）和含义（"需要你来应答"，不是"还在干活"）不同。 */
+.session-awaiting-dot {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: session-unread-ring 1.6s ease-in-out infinite;
+}
+
 @keyframes session-unread-ring {
   0%, 100% { transform: scale(1); opacity: 0.32; }
   50% { transform: scale(2); opacity: 0; }
@@ -1893,7 +1901,8 @@ pre, code {
 
 @media (prefers-reduced-motion: reduce) {
   .session-running-spinner,
-  .session-unread-ring { animation: none; }
+  .session-unread-ring,
+  .session-awaiting-dot { animation: none; }
 }
 
 /* No top padding: the header opens with the 48px .sidebar-controls-row, which
@@ -5259,6 +5268,49 @@ html.dark {
   text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .markdown-body a:hover { text-decoration-color: var(--accent); }
+/* A display formula's Copy button (MarkdownBody's MathDisplay): on hover or
+   keyboard focus where the pointer can hover, always shown on touch screens. */
+.markdown-math-display {
+  position: relative;
+}
+.markdown-math-copy {
+  position: absolute;
+  top: 2px;
+  right: 0;
+}
+@media (hover: hover) {
+  .markdown-math-copy {
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+  .markdown-math-display:hover .markdown-math-copy,
+  .markdown-math-copy:focus-visible {
+    opacity: 1;
+  }
+}
+
+/* Firefox draws its audio controls without a background (bare buttons on the
+   page), Chrome inside a grey pill: both get the same frame from the theme. */
+.markdown-body audio {
+  display: block;
+  width: min(360px, 100%);
+  height: 36px;
+  margin: 8px 0;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  clip-path: inset(0 round 18px);
+}
+.markdown-body audio::-webkit-media-controls-enclosure {
+  background: transparent;
+}
+.markdown-body video {
+  display: block;
+  max-width: min(640px, 100%);
+  max-height: 360px;
+  margin: 8px 0;
+  border-radius: 6px;
+}
 .markdown-body .markdown-inline-code {
   background: var(--bg-subtle);
   border-radius: var(--radius-sm);
@@ -5620,6 +5672,31 @@ html.dark {
 }
 .html-preview-dialog-frame.is-themed {
   background: var(--bg);
+}
+
+/* A ```svg fence's <img> (components/SvgBlock.tsx). An SVG with neither a
+   viewBox nor a width and height has no size of its own: is-unsized gives it one. */
+.svg-block-image,
+.svg-zoom-image {
+  display: block;
+  height: auto;
+}
+/* An SVG with only a viewBox has a ratio but no size, so it would fill the
+   column: cap its height like a diagram's. */
+.svg-block-image {
+  width: auto;
+  max-width: 100%;
+  max-height: min(360px, 50dvh);
+}
+.svg-block-image.is-unsized {
+  width: 100%;
+  height: 240px;
+}
+.svg-zoom-image {
+  width: 100%;
+}
+.svg-zoom-image.is-unsized {
+  aspect-ratio: 2 / 1;
 }
 
 /* Error strip under a preview (components/HtmlPreviewErrorBar.tsx). */
