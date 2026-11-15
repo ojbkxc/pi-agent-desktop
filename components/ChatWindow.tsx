@@ -1876,6 +1876,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
               onApprove={() => void teamPlan.approve()}
               onSave={(edits) => void teamPlan.save(edits)}
               onReload={teamPlan.refresh}
+              onStop={() => void handleAbort()}
             />
           </div>
         )}

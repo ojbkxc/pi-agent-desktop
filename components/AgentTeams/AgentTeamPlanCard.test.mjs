@@ -38,6 +38,8 @@ const FAKE = {
   "teams.plan.close": "Close",
   "teams.plan.approve": "Approve",
   "teams.plan.approving": "Approving…",
+  "teams.plan.stop": "Stop team and main task",
+  "teams.plan.stopping": "Stopping team and main task…",
   "teams.plan.memberCount": "{count} members",
   "teams.plan.invalidNames": "Invalid member names: {names}",
   "teams.plan.state.draft": "Draft",
@@ -197,6 +199,41 @@ test("回调接线：启用时点批准触发 onApprove、点关闭触发 onClos
   assert.equal(disabledApprove.props.disabled, true);
   assert.equal(disabledApprove.props.onClick, undefined, "禁用按钮不接回调");
   assert.equal(approved, 1, "未再增加");
+});
+
+test("停止按钮（cc-haha team-plan-stop 移植）：canStop=Boolean(plan.parentPlanId)", () => {
+  const calls = [];
+  const tree = planModalView(tFake, view({ parentPlanId: "p-old" }), {
+    onStop: () => calls.push("stop"),
+    onClose: () => calls.push("close"),
+  });
+  const stop = byTestId(tree, "team-plan-stop");
+  assert.ok(stop, "带 parentPlanId 时显示停止按钮");
+  assert.equal(stop.props.children, "Stop team and main task", "文案非 key 原文");
+  stop.props.onClick();
+  assert.deepEqual(calls, ["stop"], "点击调 onStop（停 lead 生成），不误触 close");
+
+  // 无 parentPlanId：不显示（普通计划不提供停止入口）。
+  const noParent = planModalView(tFake, view(), { onStop: () => calls.push("stop") });
+  assert.equal(byTestId(noParent, "team-plan-stop"), undefined, "无 parentPlanId 不显示");
+
+  // 缺 onStop 回调：按「缺省回调不出现按钮」的既有口径隐藏。
+  const noCallback = planModalView(tFake, view({ parentPlanId: "p-old" }));
+  assert.equal(byTestId(noCallback, "team-plan-stop"), undefined, "缺 onStop 不显示");
+});
+
+test("停止按钮 stopping 态：文案切换 + 禁用 + 点击不触发", () => {
+  const calls = [];
+  const stopping = planModalView(tFake, view({ parentPlanId: "p-old" }), {
+    onStop: () => calls.push("stop"),
+    stopping: true,
+  });
+  const stop = byTestId(stopping, "team-plan-stop");
+  assert.equal(stop.props.children, "Stopping team and main task…", "进行态文案");
+  assert.equal(stop.props.disabled, true, "进行中禁用防重复点击");
+  assert.equal(stop.props.onClick, undefined, "禁用不接回调");
+  stop.props.onClick?.();
+  assert.deepEqual(calls, [], "stopping 态点击被拒");
 });
 
 test("状态标签键与徽标色覆盖四态（纯函数输出）", () => {

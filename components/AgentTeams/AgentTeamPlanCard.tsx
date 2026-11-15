@@ -29,6 +29,11 @@ import { PlanEditor, type PlanMemberEditDraft, type PlanTaskEditDraft } from "./
  * / interrupted 显示；无 plan、launching、running、cancelled 且无 parentPlanId 隐藏。
  * approve 成功 → 状态变 launching → 卡片自动消失。
  *
+ * 停止按钮（对齐 cc-haha AgentTeamsPlanCard.tsx:170-174）：`canStop = Boolean(plan.parentPlanId)`
+ * 时显示——只有「加入运行中团队的新增计划」才需要停 lead 会话生成；点击调 `onStop`
+ * （ChatWindow 接 `handleAbort` 停本会话生成）。点击后按钮禁用并显示「正在停止…」，
+ * 不主动复位（停止生效后计划流转自然退场）。
+ *
  * 纯展示 + 回调：数据由调用方用 `useTeamPlan(teamName)` 提供；approve 只是回调（由 hook
  * 投递给 lead，桌面不写盘），save 走 PATCH。本组件自判断可见性，不满足时返回 null。
  * 样式内联 + 主题 CSS 变量，不新增全局类。
@@ -49,6 +54,8 @@ interface Props {
   error?: string | null;
   /** 批准失败的原因（投递失败 / 409），由 useTeamPlan 记录。 */
   approveError?: string | null;
+  /** 点「停止」；停 lead 会话生成（由调用方接 abort，cc-haha stopGeneration 同款）。 */
+  onStop?: () => void;
   /** 点「批准」；由 hook 的 approve 投递给 lead。 */
   onApprove?: () => void;
   /** 保存编辑（PATCH）；缺省时保存按钮不出现。 */
@@ -130,6 +137,8 @@ const S: Record<string, CSSProperties> = {
   alert: { color: "var(--danger)", fontSize: "var(--fs-caption)", margin: "6px 0" },
   footer: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 },
   ghost: { border: "1px solid var(--border)", background: "transparent", color: "var(--text)", borderRadius: 7, padding: "5px 11px", fontSize: "var(--fs-caption)", cursor: "pointer" },
+  stop: { border: "1px solid var(--danger)", background: "transparent", color: "var(--danger)", borderRadius: 7, padding: "5px 12px", fontSize: "var(--fs-caption)", fontWeight: "var(--fw-semibold)", cursor: "pointer" },
+  stopOff: { border: "1px solid var(--danger)", background: "transparent", color: "var(--text-dim)", borderRadius: 7, padding: "5px 12px", fontSize: "var(--fs-caption)", fontWeight: "var(--fw-semibold)", cursor: "not-allowed" },
   approve: { border: "none", background: "var(--accent)", color: "var(--accent-contrast)", borderRadius: 7, padding: "5px 12px", fontSize: "var(--fs-caption)", fontWeight: "var(--fw-semibold)", cursor: "pointer" },
   approveOff: { border: "none", background: "var(--border)", color: "var(--text-dim)", borderRadius: 7, padding: "5px 12px", fontSize: "var(--fs-caption)", fontWeight: "var(--fw-semibold)", cursor: "not-allowed" },
 };
@@ -170,11 +179,17 @@ export function planModalView(
     onDirtyChange?: (dirty: boolean) => void;
     /** 批准失败的原因（投递失败 / 409 等），由 useTeamPlan 记录。 */
     approveError?: string | null;
+    /** 点「停止」（停 lead 会话生成）；缺省时停止按钮不出现。 */
+    onStop?: () => void;
+    /** 正在执行停止（按钮禁用并显示「正在停止…」）。 */
+    stopping?: boolean;
   } = {},
 ) {
   const review = derivePlanReview(plan);
   const approveDisabled =
     isApproveDisabled(plan) || !isPlanApprovable(plan) || Boolean(options.busy) || Boolean(options.dirty);
+  // cc-haha 同款口径：带 parentPlanId 的卡片（加入运行中团队的新增计划）才给停止按钮。
+  const canStop = Boolean(plan.parentPlanId) && Boolean(options.onStop);
   const ownerName = (ownerId: string | undefined) =>
     plan.members.find((member) => member.id === ownerId)?.name ?? t("teams.plan.unassigned");
   const editable = options.editor === true && (plan.state === "draft" || plan.state === "review_pending");
@@ -288,6 +303,17 @@ export function planModalView(
           >
             {options.busy ? t("teams.plan.approving") : t("teams.plan.approve")}
           </button>
+          {canStop ? (
+            <button
+              type="button"
+              data-testid="team-plan-stop"
+              style={options.stopping ? S.stopOff : S.stop}
+              onClick={options.stopping ? undefined : options.onStop}
+              disabled={Boolean(options.stopping)}
+            >
+              {options.stopping ? t("teams.plan.stopping") : t("teams.plan.stop")}
+            </button>
+          ) : null}
         </div>
       </div>
     </div>
@@ -303,6 +329,7 @@ export function AgentTeamPlanCard({
   conflict = false,
   error = null,
   approveError = null,
+  onStop,
   onApprove,
   onSave,
   onReload,
@@ -311,6 +338,9 @@ export function AgentTeamPlanCard({
   const [open, setOpen] = useState(false);
   // 可编辑区有未保存改动时，批准必须被拦住（否则按旧模型启动团队）。
   const [dirty, setDirty] = useState(false);
+  // 正在执行停止的 planId（按钮禁用 + 「正在停止…」）；对齐 cc-haha：不主动清，
+  // 停止生效后计划流转（取消/中断/批准）自然让卡片退场。
+  const [stoppingPlanId, setStoppingPlanId] = useState<string | null>(null);
 
   // 审批通过（state 变 launching）后卡片本就隐藏；这里顺手把 Modal 关掉，避免退场残留。
   useEffect(() => {
@@ -378,6 +408,15 @@ export function AgentTeamPlanCard({
             dirty,
             approveError,
             onDirtyChange: setDirty,
+            ...(onStop
+              ? {
+                  onStop: () => {
+                    setStoppingPlanId(plan.planId);
+                    onStop();
+                  },
+                }
+              : {}),
+            stopping: stoppingPlanId === plan.planId,
             ...(onSave ? { onSave } : {}),
             ...(onReload ? { onReload } : {}),
           })
