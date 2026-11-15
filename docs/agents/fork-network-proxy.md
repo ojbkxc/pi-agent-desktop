@@ -74,6 +74,12 @@ Next 那层补丁（dedupe / 请求内 trace / `next: { revalidate }` 缓存）�
 - **不生效范围**：应用自身的更新检查与安装包下载 —— 那条路走 Rust 的 tauri updater，
   是另一个进程，不读这里写的变量。界面文案里写明了这点（刻意不做，避免与 cc-haha 一样
   出现两个互相矛盾的「代理」设置项）。
+- **代理 URL 里的凭据不进环境变量**：`manual` 档允许填 `http://user:pass@host:port`（凭据留在
+  设置文件里，那是用户自己的本机文件），但写进 `HTTP_PROXY` / `HTTPS_PROXY` 前会剥掉
+  `user:pass@` —— 环境变量被**每个子进程**原样继承，MCP server 与 `npx` 装的技能包都能读到。
+  代价：undici 的 `ProxyAgent` 会从 URL 凭据生成 `Proxy-Authorization`，剥掉后进程内请求不再
+  自动带代理认证；这是有意的取舍，凭据不扩散比自动认证更重要。对外报告的 `activeProxy` 也是
+  剥掉后的 URL（`GET /api/network-proxy` 对被授权的远端用户可读，不能回显凭据）。
 - **不做 per-provider 覆盖**（cc-haha 有 `settings.providers.proxyMode`）：本仓的 provider
   配置在 `~/.pi/agent/models.json`，多一层覆盖多于收益，需要时再说。
 

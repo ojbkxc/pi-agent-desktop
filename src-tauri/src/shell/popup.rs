@@ -111,6 +111,24 @@ fn build_popup_items(
     Ok(out)
 }
 
+/// Clears the selection slot only when it still holds `nonce`'s sender.
+///
+/// The slot is single, the popups are not: while the first popup waits out its
+/// grace window a second popup parks its own sender over the first one's, and
+/// the first popup's cleanup runs afterwards. Clearing unconditionally would
+/// drop a click that is still on its way to the second popup (the click routing
+/// in `lib.rs` is nonce-checked; the slot itself has to be cleared the same way).
+fn clear_selection_slot_if_ours(
+    slot: &mut Option<(u64, std::sync::mpsc::Sender<String>)>,
+    nonce: u64,
+) {
+    if let Some((slot_nonce, _)) = slot.as_ref() {
+        if *slot_nonce == nonce {
+            *slot = None;
+        }
+    }
+}
+
 /// Shows `items` as a native popup menu and resolves to the id of the item the
 /// user picked, or `None` when it was dismissed. Nothing runs while the menu is
 /// open except the menu itself: the page gets the answer afterwards.
@@ -170,9 +188,53 @@ pub async fn show_popup_menu(
         .and_then(|id| id.strip_prefix(&wanted).map(str::to_string));
     if let Some(state) = app.try_state::<PopupMenuSelection>() {
         if let Ok(mut slot) = state.0.lock() {
-            *slot = None;
+            clear_selection_slot_if_ours(&mut slot, nonce);
         }
     }
     desktop_log(&app, &format!("popup #{nonce} selected {chosen:?}"));
     Ok(chosen)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A sender parked in the slot together with the nonce it was parked under.
+    /// The receiver is dropped here on purpose: the cleanup path only ever
+    /// touches the sender (a parked sender whose receiver is gone behaves like
+    /// one whose menu was dismissed).
+    fn parked(nonce: u64) -> (u64, std::sync::mpsc::Sender<String>) {
+        let (sender, _receiver) = std::sync::mpsc::channel::<String>();
+        (nonce, sender)
+    }
+
+    #[test]
+    fn cleanup_clears_its_own_popup_and_leaves_the_next_one() {
+        // The slot holds popup 2's sender, parked over popup 1's while popup 1
+        // was still inside its grace window (parking overwrites the slot).
+        let mut slot = Some(parked(2));
+
+        // Popup 1 finishing first must not drop popup 2's on-the-way click:
+        // the slot still holds popup 2's sender and is left alone.
+        clear_selection_slot_if_ours(&mut slot, 1);
+        assert_eq!(slot.as_ref().map(|(nonce, _)| *nonce), Some(2));
+
+        // Its own cleanup clears it.
+        clear_selection_slot_if_ours(&mut slot, 2);
+        assert!(slot.is_none());
+    }
+
+    #[test]
+    fn cleanup_clears_its_own_popup_when_nothing_superseded() {
+        let mut slot = Some(parked(7));
+        clear_selection_slot_if_ours(&mut slot, 7);
+        assert!(slot.is_none());
+    }
+
+    #[test]
+    fn cleanup_of_a_slot_already_cleared_stays_clear() {
+        let mut slot = None;
+        clear_selection_slot_if_ours(&mut slot, 3);
+        assert!(slot.is_none());
+    }
 }

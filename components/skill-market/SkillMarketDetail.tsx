@@ -7,6 +7,7 @@ import {
   formatBytes,
   formatDownloads,
   formatIsoDate,
+  safeMarketUrl,
   securityBadgeClass,
   sortMarketFiles,
   type MarketFileMeta,
@@ -60,18 +61,22 @@ export function MarketSecurityTab({ securityNote, reports }: MarketSecurityTabPr
       )}
       {reports && reports.length > 0 ? (
         <ul className="market-security-list">
-          {reports.map((report) => (
-            <li key={`${report.vendor}-${report.status}`}>
-              <span className={`market-badge ${securityBadgeClass(report.status)}`}>{report.vendor}</span>
-              <span className="market-security-text">{report.statusText}</span>
-              {report.summary && <p className="scheduled-hint">{report.summary}</p>}
-              {report.reportUrl && (
-                <a className="market-detail-link" href={report.reportUrl} target="_blank" rel="noopener noreferrer">
-                  {t("market.openReport")}
-                </a>
-              )}
-            </li>
-          ))}
+          {reports.map((report) => {
+            // 报告 URL 来自第三方源：协议白名单不过关就不渲染链接（见 safeMarketUrl）。
+            const reportLink = safeMarketUrl(report.reportUrl);
+            return (
+              <li key={`${report.vendor}-${report.status}`}>
+                <span className={`market-badge ${securityBadgeClass(report.status)}`}>{report.vendor}</span>
+                <span className="market-security-text">{report.statusText}</span>
+                {report.summary && <p className="scheduled-hint">{report.summary}</p>}
+                {reportLink && (
+                  <a className="market-detail-link" href={reportLink} target="_blank" rel="noopener noreferrer">
+                    {t("market.openReport")}
+                  </a>
+                )}
+              </li>
+            );
+          })}
         </ul>
       ) : (
         <p className="scheduled-hint">{t("market.noSecurityReports")}</p>
@@ -334,6 +339,8 @@ export function SkillMarketDetail({
   const skill = detail?.status === "ready" ? detail.skill : undefined;
   const installed = skill?.installState === "installed";
   const installedPath = skill?.installedInfo?.dirName;
+  // 作者主页来自第三方源：协议白名单不过关就不渲染外链（确认框里的来源也只用白名单值）。
+  const sourceUrl = skill ? safeMarketUrl(skill.pageUrl) : null;
 
   // 更新日志页签只在有 changelog 时出现：只能说出「这里什么都没有」的页签不值得占一个位置。
   const detailTabs: Tab[] = detailTabKeys(Boolean(skill?.changelog));
@@ -377,8 +384,8 @@ export function SkillMarketDetail({
             <span className="market-card-downloads">
               {t("market.downloads", { count: formatDownloads(skill.stats?.downloads ?? 0) })}
             </span>
-            {skill.pageUrl && (
-              <a className="market-detail-link" href={skill.pageUrl} target="_blank" rel="noopener noreferrer">
+            {sourceUrl && (
+              <a className="market-detail-link" href={sourceUrl} target="_blank" rel="noopener noreferrer">
                 {t("market.openSource")}
               </a>
             )}
@@ -418,7 +425,7 @@ export function SkillMarketDetail({
           {confirming && !installed && (
             <div className="market-confirm" role="alertdialog" aria-label={t("market.confirmTitle")}>
               <p className="market-confirm-title">{t("market.confirmTitle")}</p>
-              <p className="scheduled-hint">{t("market.confirmBody", { source: skill.pageUrl || skill.name })}</p>
+              <p className="scheduled-hint">{t("market.confirmBody", { source: sourceUrl || skill.name })}</p>
               <dl className="market-confirm-facts">
                 <div><dt>{t("market.fact.source")}</dt><dd>{t(`market.source.${skill.source}`)}</dd></div>
                 <div><dt>{t("market.fact.author")}</dt><dd>{skill.author?.handle || "—"}</dd></div>

@@ -209,6 +209,24 @@ export function formatBytes(size: number): string {
   return `${size} B`;
 }
 
+/**
+ * 市场数据里的外链协议白名单（`reportUrl` / `pageUrl`）。
+ *
+ * 这些 URL 来自第三方源（registry 的扫描报告、作者主页），不可信：`javascript:` /
+ * `data:` 之类进 `href` 会在点击时执行，所以只放行 http/https。解析失败或协议不符返回
+ * null —— 调用处不渲染链接（坏链接不值得占位）。
+ */
+export function safeMarketUrl(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 /** 安全结论 → 徽标色调类名（样式在 app/native-theme.css 的 .market-badge 一组里）。 */
 export function securityBadgeClass(status: string | undefined): string {
   if (status === "verified" || status === "benign") return "is-safe";

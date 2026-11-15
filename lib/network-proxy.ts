@@ -78,6 +78,31 @@ export function normalizeProxyUrl(raw: unknown): string {
   return withProtocol;
 }
 
+/**
+ * 剥掉代理 URL 的 userinfo（`http://user:pass@host:port` → `http://host:port/`）。
+ *
+ * 这个 URL 会原样写进 `process.env`，而环境变量被**每个子进程**原样继承 —— MCP server、
+ * `npx` 装的技能包都能读到 `HTTP_PROXY` 里的凭据。凭据留在设置文件里（用户自己写的本机
+ * 文件），但绝不扩散到环境。用 `new URL` 解析后清空用户名/口令再序列化：userinfo 以
+ * authority 里最后一个 `@` 结尾，正则替换「第一个 `@` 之前」会把口令里未编码的 `@` 漏在
+ * host 里（`user:p@ss@host` 会被切成半截）。
+ *
+ * 代价（有意的取舍）：undici 的 `ProxyAgent` 会从 URL 凭据生成 `Proxy-Authorization`
+ * （`node_modules/undici/lib/dispatcher/proxy-agent.js`），剥掉后进程内的请求不再带代理
+ * 认证 —— 凭据不进环境、不被每个子进程继承，比进程内自动带上代理认证更重要。
+ */
+export function stripProxyCredentials(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.username && !parsed.password) return url;
+    parsed.username = "";
+    parsed.password = "";
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 /** 读设置；文件缺失/损坏/字段非法一律回落「直连」。 */
 export function readNetworkProxySettings(settingsPath = getPiWebSettingsPath()): NetworkProxySettings {
   const fallback: NetworkProxySettings = { mode: "direct", url: "" };
@@ -227,6 +252,9 @@ export interface ResolvedProxyEnv {
  *
  * 注意 `direct` 与「system 探测不到」都会得到 `activeProxy: null`，但写法不同：
  * 前者 `NO_PROXY=*`（连外部环境变量一起忽略），后者保留用户的排除项。
+ *
+ * 生效的 URL 与写进 env 的值都会先剥掉 userinfo —— 环境变量被每个子进程继承，
+ * 代理凭据不能跟出去（见 `stripProxyCredentials`）。
  */
 export function resolveProxyEnv(
   settings: NetworkProxySettings,
@@ -247,7 +275,10 @@ export function resolveProxyEnv(
   if (!url) {
     return { activeProxy: null, env: { NO_PROXY: noProxyList(baseEnv) } };
   }
-  return { activeProxy: url, env: { HTTP_PROXY: url, HTTPS_PROXY: url, NO_PROXY: noProxyList(baseEnv) } };
+  // 写进环境变量（以及对外报告的生效 URL）前剥掉 userinfo：环境变量会被每个子进程继承，
+  // 凭据不能跟出去（见 stripProxyCredentials）。
+  const active = stripProxyCredentials(url);
+  return { activeProxy: active, env: { HTTP_PROXY: active, HTTPS_PROXY: active, NO_PROXY: noProxyList(baseEnv) } };
 }
 
 /** 环境变量里我们接管的键（大写是我们写的，小写是外部可能带的）。 */
