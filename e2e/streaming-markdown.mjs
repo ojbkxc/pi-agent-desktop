@@ -158,6 +158,23 @@ try {
   await set(page, "```js\nconst answer = 42;\n```"); await delay(120);
   assert.ok((await page.locator(".markdown-code-block").textContent()).includes("const answer = 42;"));
   assert.equal(await page.locator(".markdown-code-block .linenumber").count(), 0, "streaming keeps Pi's lightweight code view");
+  // A fence-only streaming document skips the markdown engine and renders straight (#1589): the language and
+  // code reach the fence renderer directly, and a parse-heavy growing fence costs no remark work.
+  await page.evaluate(() => window.markdownFixture.resetMetrics());
+  const fenceBody = Array.from({ length: 400 }, (_, i) => `const value${i} = ${i};`).join("\n");
+  let fenceText = "";
+  for (let i = 0; i < fenceBody.length; i += 512) {
+    fenceText = "```ts\n" + fenceBody.slice(0, i);
+    await set(page, fenceText);
+    await delay(12);
+  }
+  fenceText = "```ts\n" + fenceBody + "\n```";
+  await set(page, fenceText, false);
+  await delay(200);
+  const fenceMetrics = await page.evaluate(() => window.markdownFixture.metrics.parses);
+  assert.ok(fenceMetrics === 0, `fence-only streaming must not re-parse: parses=${fenceMetrics}`);
+  const fenceCode = await page.locator(".markdown-code-block").textContent();
+  assert.ok(fenceCode.includes("const value399 = 399;"), "the whole streamed fence renders");
   await set(page, "```js\nconst answer = 42;\n```", false);
   assert.ok((await page.locator(".markdown-code-block").textContent()).includes("const answer = 42;"));
   await set(page, ':::artifact{identifier="sample" type="code" title="Sample"}\n```js\nconst answer = 42;\n```\n:::'); await delay(120);

@@ -1,6 +1,6 @@
 "use client";
 import { registerAbortHandler } from "@/hooks/useKeyboardShortcuts";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { UnavailableWorkspaceNotice } from "@/lib/workspace-availability";
 import type { AgentMessage, AssistantContentBlock, AssistantMessage, BashExecutionMessage, BlockingExtensionUiRequest, ExtensionUiRequest, LeafChangeOptions, SessionInfo, SessionTreeNode, SessionWorkspaceKind, ToolResultMessage } from "@/lib/types";
@@ -29,6 +29,8 @@ import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { phaseLabel } from "@/lib/chat-phase-label";
 import { useAgentSession, type NoticeItem } from "@/hooks/useAgentSession";
+import { selectHasStreamingContent, selectIsStreaming, selectStreamingMessage, useStreamingSelector } from "@/hooks/useStreamingSelector";
+import type { StreamingStore } from "@/lib/streaming-message";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useScrollbarVisibility } from "@/hooks/useScrollbarVisibility";
 import { useArtifactPublisher } from "@/hooks/useArtifactPublisher";
@@ -303,7 +305,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
   const [restoreAnchorReady, setRestoreAnchorReady] = useState(false);
 
   const {
-    loading, error, messages, activeToolResults, entryIds, historyCursor, hasEarlierMessages, streamState,
+    loading, error, messages, activeToolResults, entryIds, historyCursor, hasEarlierMessages, streamingStore,
     agentRunning, bashRunning, pendingBash, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, toolPreset, thinkingLevel,
     retryInfo, contextUsage, forkingEntryId, summarizationRetry, automation, handleSetAutomation,
     isCompacting, compactError, compactNotice, compactResult, displayModel: displayModelValue, modelSwitching, sessionStats,
@@ -337,6 +339,11 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
     deferInitialScroll: Boolean(pendingScrollRestore),
     onScrollPositionChange,
   });
+  // Only whether a reply is streaming and has content yet: the chunks themselves
+  // re-render StreamingReply alone.
+  const isStreaming = useStreamingSelector(streamingStore, selectIsStreaming);
+  const hasStreamingContent = useStreamingSelector(streamingStore, selectHasStreamingContent);
+  const getStreamingMessage = useCallback(() => streamingStore.getState().streamingMessage, [streamingStore]);
   const sessionBusy = agentRunning || bashRunning;
   // A chat's folder and whether it may use the computer; the server owns both.
   const chatAccess = useChatAccess(session?.id, chatOnly && Boolean(session) && !isNew, handleChatAccessRebuilt);
@@ -931,7 +938,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
   const { isDragOver, handleDragEnter, handleDragOver, handleDragLeave, handleDrop } = useDragDrop(onDrop);
 
   // Stable Map identity: `messages` doesn't change during streaming updates
-  // (the streaming message lives in streamState), so memoized MessageViews
+  // (the streaming message lives in streaming store), so memoized MessageViews
   // skip re-rendering on every message_update event. An inline `new Map()`
   // here used to defeat MessageView's memo() on each streamed chunk.
   const toolResultsMap = useMemo(() => {
@@ -963,7 +970,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
     return history.reverse();
   }, [messages]);
 
-  const isEmptyNew = isNew && !loading && !error && messages.length === 0 && !streamState.isStreaming && !sessionBusy;
+  const isEmptyNew = isNew && !loading && !error && messages.length === 0 && !isStreaming && !sessionBusy;
   useScrollbarVisibility(scrollContainerRef, Boolean(session?.id) || !isEmptyNew);
 
   // The message scrollport always shows its (usually invisible) scrollbar track,
@@ -1032,7 +1039,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
     };
   }, [isEmptyNew, scrollContainerRef]);
 
-  const hasStreamingContent = Boolean(streamState.streamingMessage?.content.length);
+  // hasStreamingContent now comes from the streaming store selectors above.
   const messageCwd = chatOnly ? chatFolderCwd : session?.cwd ?? newSessionCwd ?? undefined;
   // Keys that do not change when a sent or streamed message gets its entry id
   // on the post-run reload; keying by the id remounted the sent bubble.
@@ -1144,14 +1151,19 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
     scrollUserMsgToTop,
   ]);
 
-  useLayoutEffect(() => {
+  // Each streamed chunk StreamingReply commits, and the bubble coming and going.
+  const updatePromptAnchor = useCallback(() => {
     promptAnchorUpdateRef.current?.();
-  }, [streamState.streamingMessage]);
+  }, []);
+  useLayoutEffect(updatePromptAnchor, [isStreaming, hasStreamingContent, updatePromptAnchor]);
 
+  // The artifact panel follows the live reply: it reads the message through the
+  // getter each commit, so a chunk re-renders StreamingReply alone.
+  const streamingArtifactMessage = useStreamingSelector(streamingStore, (state) => state.isStreaming ? state.streamingMessage : null);
   useArtifactPublisher(
     session?.id ?? sessionIdRef.current,
     messages,
-    streamState.isStreaming ? streamState.streamingMessage : null,
+    streamingArtifactMessage,
     // While an earlier message is being edited, sending would replace that
     // branch, so the request waits in the composer instead.
     (text) => {
@@ -1510,7 +1522,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
                     if (r === "assistant") { showTimestamp = false; break; }
                   }
                   // Hide on the currently-streaming tail (the streaming bubble owns the live timestamp)
-                  if (showTimestamp && streamState.isStreaming && idx === messages.length - 1) {
+                  if (showTimestamp && isStreaming && idx === messages.length - 1) {
                     showTimestamp = false;
                   }
                 }
@@ -1581,7 +1593,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
                   continue;
                 }
 
-                const isLiveTail = (sessionBusy || streamState.isStreaming) && endIdx === messages.length && userIdx === lastAnchorIdx;
+                const isLiveTail = (sessionBusy || isStreaming) && endIdx === messages.length && userIdx === lastAnchorIdx;
                 if (isLiveTail) {
                   for (let renderIdx = groupStartIdx; renderIdx < endIdx; renderIdx++) {
                     rendered.push(renderMessage(renderIdx));
@@ -1649,7 +1661,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
                   rendered.push(renderMessage(finalAssistantIdx, {
                     messageOverride: finalAnswerMessage,
                     writtenFiles,
-                    recoverTruncation: endIdx === messages.length && !streamState.isStreaming && !hasAssistantAnswer(finalAnswerMessage),
+                    recoverTruncation: endIdx === messages.length && !isStreaming && !hasAssistantAnswer(finalAnswerMessage),
                   }));
                 }
                 for (let renderIdx = finalAssistantIdx + 1; renderIdx < endIdx; renderIdx++) {
@@ -1670,8 +1682,8 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
                 </>
               );
             })()}
-            {streamState.isStreaming && hasStreamingContent && streamState.streamingMessage && (
-              <MessageView message={streamState.streamingMessage as AgentMessage} toolResults={toolResultsMap} isStreaming modelNames={modelNames} cwd={messageCwd} onOpenFile={openFile} onOpenSession={onOpenSession} />
+            {isStreaming && hasStreamingContent && (
+              <StreamingReply store={streamingStore} onCommit={updatePromptAnchor} toolResults={toolResultsMap} modelNames={modelNames} cwd={messageCwd} onOpenFile={openFile} onOpenSession={onOpenSession} />
             )}
 
             {agentRunning && !hasStreamingContent && (agentPhase || isCompacting) && (
@@ -2577,4 +2589,21 @@ function ExtensionCustomPanel({
     </div>
   );
 }
+
+// The reply being streamed: the one part of the chat a chunk re-renders.
+const StreamingReply = memo(function StreamingReply({ store, onCommit, toolResults, modelNames, cwd, onOpenFile, onOpenSession }: {
+  store: StreamingStore;
+  /** Runs after each chunk is in the DOM. */
+  onCommit: () => void;
+  toolResults: Map<string, ToolResultMessage>;
+  modelNames: Record<string, string>;
+  cwd?: string;
+  onOpenFile?: (filePath: string, page?: number) => void;
+  onOpenSession?: (sessionId: string) => void;
+}) {
+  const message = useStreamingSelector(store, selectStreamingMessage);
+  useLayoutEffect(onCommit, [message, onCommit]);
+  if (!message) return null;
+  return <MessageView message={message} toolResults={toolResults} isStreaming modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />;
+});
 

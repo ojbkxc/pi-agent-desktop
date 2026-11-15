@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState, useCallback, useEffect, useLayoutEffect, useMemo, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
+import React, { memo, useRef, useState, useCallback, useEffect, useLayoutEffect, useMemo, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
 import type { BuiltinSlashCommandResult, CompactResultInfo, QueuedMessages, SlashCommandInfo } from "@/hooks/useAgentSession";
 import type { SkillsResponse } from "@/lib/api-types";
 import type { ModelScopeWarning } from "@/lib/model-scope-warnings";
@@ -875,7 +875,9 @@ export function ModelScopeWarningBanner({
   );
 }
 
-export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
+// Memoized: its props hold still while a reply streams or a tool runs, and the
+// chat around it re-renders through both.
+export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatInput({
   onClearDraft, onSend, onAttachFiles, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, workspaceUnavailable, onRecheckWorkspace, modelScopeWarnings, onDismissModelScopeWarnings, onOpenModelsConfig, onModelChange, modelSwitching,
   defaultModel, onSetDefaultModel,
   onCompact, onAbortCompaction, isCompacting, compactError, compactNotice, compactResult, summarizationRetry, toolPreset, onToolPresetChange,
@@ -3496,4 +3498,4 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       />
     </fieldset>
   );
-});
+}));

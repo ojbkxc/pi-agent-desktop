@@ -59,8 +59,7 @@ import { useScopeWarningDismissal } from "@/hooks/useScopeWarningDismissal";
 import { useSessionAutomation, useSessionAutomationActions } from "@/hooks/useSessionAutomation";
 import { useForkAgentEvents, type PendingBash, type SummarizationRetry } from "@/hooks/useForkAgentEvents";
 import {
-  INITIAL_STREAMING_STATE,
-  streamReducer,
+  createStreamingStore,
   type ClientAssistantMessageEvent,
 } from "@/lib/streaming-message";
 
@@ -372,7 +371,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [entryIds, setEntryIds] = useState<string[]>([]);
   const [historyCursor, setHistoryCursor] = useState<string | null>(null);
   const [hasEarlierMessages, setHasEarlierMessages] = useState(false);
-  const [streamState, dispatch] = useReducer(streamReducer, INITIAL_STREAMING_STATE);
+  // Outside React state: a streamed chunk must not re-render the whole chat (see StreamingStore).
+  const [streamingStore] = useState(createStreamingStore);
+  const dispatch = streamingStore.dispatch;
   const [agentRunning, setAgentRunning] = useState(false);
   const [bashRunning, setBashRunning] = useState(false);
   const [pendingBash, setPendingBash] = useState<PendingBash | null>(null);
@@ -1387,7 +1388,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setActiveToolResults(new Map());
     dispatch({ type: "end" });
     return wasRunning;
-  }, []);
+  }, [dispatch]);
 
   const notifyPromptStage = useCallback((runId: number) => {
     if (notifiedPromptRunIdRef.current === runId) return false;
@@ -1941,7 +1942,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         handleForkAgentEvent(event);
         break;
     }
-  }, [addNotice, cancelEventStreamGrace, handleExtensionUiRequest, handleForkAgentEvent, loadSession, notifyPromptStage, onAgentEnd, reportCompactFailure, scheduleEventStreamClose, scrollToBottom, setCompactNotice, settleUiStage, syncLiveModel]);
+  }, [addNotice, cancelEventStreamGrace, dispatch, handleExtensionUiRequest, handleForkAgentEvent, loadSession, notifyPromptStage, onAgentEnd, reportCompactFailure, scheduleEventStreamClose, scrollToBottom, setCompactNotice, settleUiStage, syncLiveModel]);
   handleAgentEventRef.current = handleAgentEvent;
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
@@ -2113,7 +2114,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setPendingBash(null);
       setBashRunning(false);
     }
-  }, [addNotice, chatWorkspace, composerDraftKey, ensureEventsConnected, ensureNewSession, loadSession, promoteNewSession, restoreSubmission, session, t]);
+  }, [addNotice, chatWorkspace, composerDraftKey, dispatch, ensureEventsConnected, ensureNewSession, loadSession, promoteNewSession, restoreSubmission, session, t]);
   executeBashRef.current = executeBash;
 
   const handleAbort = useCallback(async () => {
@@ -2977,7 +2978,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     // The identity is the intentional trigger. The callbacks are stable for
     // the lifetime of this hook and including them would restart live sessions.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionIdentity]);
+  }, [sessionIdentity, dispatch]);
 
   useEffect(() => {
     onSystemPromptChange?.(systemPrompt);
@@ -3140,7 +3141,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   return {
     // State
-    data, loading, error, activeLeafId, messages, activeToolResults, entryIds, historyCursor, hasEarlierMessages, streamState,
+    data, loading, error, activeLeafId, messages, activeToolResults, entryIds, historyCursor, hasEarlierMessages, streamingStore,
     agentRunning, modelNames, modelList, modelError, modelScopeWarnings: visibleModelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel,
     retryInfo, contextUsage, systemPrompt, forkingEntryId, retryLoad, dismissModelScopeWarnings,
     isCompacting, compactError, compactNotice, compactResult, currentModel, displayModel, modelSwitching, sessionStats,
