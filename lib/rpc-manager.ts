@@ -11,7 +11,9 @@ import { resolveVisibleModels, selectInitialModelScope } from "./model-scope";
 import {
   createProjectCommandBashExtension,
   createProjectCommandBashOperations,
+  createProjectCommandPowerShellExtension,
   preferUserBashExtension,
+  preferUserPowerShellExtension,
 } from "./project-command-env";
 import { cacheSessionPath, getLatestModelChange, getLatestResponseModel, getSessionListVersion, invalidateSessionListCache, readLatestSessionEntryId, resolveSessionPath } from "./session-reader";
 import { getProjectTrustStatus, projectTrustReloadOptions } from "./project-trust";
@@ -1563,6 +1565,11 @@ export class AgentSessionWrapper {
       }
 
       case "reload": {
+        // A reload invalidates the extension ctx the running turn still holds,
+        // and the turn dies at its next extension hook (#1172). pi refuses too.
+        if (this.isSessionRunningForReplacement()) {
+          throw new Error("Wait for the current response to finish before reloading.");
+        }
         if (this.extensionUiAbortController.signal.aborted) {
           this.extensionUiAbortController = new AbortController();
         }
@@ -2383,6 +2390,23 @@ export class AgentSessionWrapper {
       navigateTree: (targetId, options) => this.navigateTreeKeepingToolSelection(targetId, options ?? {}),
       switchSession,
       reload: async () => {
+        // As pi's TUI: a command runs inside its own prompt, so the pending
+        // prompt does not count; only a streaming or compacting turn does.
+        const busy = this.inner.isStreaming
+          ? "Wait for the current response to finish before reloading."
+          : this.inner.isCompacting
+            ? "Wait for compaction to finish before reloading."
+            : null;
+        if (busy) {
+          this.emit({
+            type: "extension_ui_request",
+            id: randomUUID(),
+            method: "notify",
+            notifyType: "warning",
+            message: busy,
+          } as ExtensionUiRequest as AgentEvent);
+          return;
+        }
         this.extensionStatuses.clear();
         this.resetExtensionWidgetsForReload();
         this.syncProjectTrust();
@@ -3094,7 +3118,12 @@ export async function startRpcSession(
     const chatSessionRef: {
       current?: { resourceLoader: { getSkills(): { skills: { filePath: string; baseDir: string }[] } } };
     } = {};
-    const baseSettingsManager = SettingsManager.create(sessionCwd, agentDir);
+    // Trusted only by the folder's decision, as `syncProjectTrust()` reads it: created trusted
+    // by default, a session that resolves no trust on load (a subagent that loads no
+    // resources, Chat only) read the project settings of a folder never trusted.
+    const baseSettingsManager = SettingsManager.create(sessionCwd, agentDir, {
+      projectTrusted: getProjectTrustStatus(sessionCwd, agentDir).trusted,
+    });
     // Windows where Git is not under %ProgramFiles%: the SDK's own bash discovery only
     // probes that one root plus PATH, so `bash` would fail with "No bash shell found" in
     // every session. Only fills in an ABSENT shellPath (never overrides an explicit one)
@@ -3218,6 +3247,7 @@ export async function startRpcSession(
                 cwd: sessionCwd,
                 settings: settingsManager,
               }),
+              createProjectCommandPowerShellExtension({ cwd: sessionCwd }),
               createSubagentExtension(
                 SUBAGENT_CONTROLLER.extensionRuntime,
                 () => listSubagentProfiles(sessionCwd),
@@ -3227,7 +3257,9 @@ export async function startRpcSession(
               // runtime 作为团队宿主桥。只进普通会话，见 lib/pi-extension-builtins.ts。
               ...createPiExtensionBuiltins({ subagentController: SUBAGENT_CONTROLLER }),
             ],
-            extensionsOverride: (base) => preferUserBashExtension(preferPiWebSubagentExtension(base)),
+            extensionsOverride: (base) => preferUserPowerShellExtension(
+              preferUserBashExtension(preferPiWebSubagentExtension(base)),
+            ),
           },
       ...(trustReloadOptions ? { resourceLoaderReloadOptions: trustReloadOptions } : {}),
     });
