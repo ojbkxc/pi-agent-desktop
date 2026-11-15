@@ -41,11 +41,27 @@ const providers: Record<MarketSource, MarketProvider> = {
 /** 安装标记文件名：卸载只看这个文件，且安装后它是「这份目录由市场写」的唯一凭据。 */
 export const MARKET_META_FILENAME = ".market-meta.json";
 
-/** 单 slug 的安装锁：同一个技能同时只允许一次安装（重复点击、两个窗口）。 */
+/**
+ * 单 slug 的安装锁：同一个技能同时只允许一次安装（重复点击、两个窗口）。
+ *
+ * key = `${source}:${slug}:${owner ?? ""}`：clawhub 的 slug 跨 owner 可重复，不同 owner
+ * 的安装互不阻塞。卸载的 key 是 `${source}:${slug}`（两段）——它不认 owner，因为目录名
+ * `<source>-<slug>` 不带 owner，任何 owner 的安装都写同一目录：卸载注册后先等这个目录上
+ * 所有 owner 的安装任务结束再删目录，否则安装会把 tmp 目录换进刚删掉的目录（技能
+ * 「卸载后复活」）；安装看到卸载在途则直接拒绝，避免把 tmp 换进正在被删的目录。
+ */
 const registry = globalThis as typeof globalThis & { __piMarketInstalls?: Map<string, Promise<unknown>> };
 
 function inFlight(): Map<string, Promise<unknown>> {
   return registry.__piMarketInstalls ??= new Map();
+}
+
+/** 该目录下仍在进行中的安装任务（key 形如 `<source>:<slug>:<owner>`，不含卸载自己）。 */
+function pendingInstallsForDirectory(source: MarketSource, slug: string): Array<Promise<unknown>> {
+  const prefix = `${source}:${slug}:`;
+  return [...inFlight().entries()]
+    .filter(([key]) => key.startsWith(prefix))
+    .map(([, task]) => task);
 }
 
 interface MarketMeta {
@@ -229,7 +245,7 @@ async function performInstall(source: MarketSource, slug: string, owner: string 
   }
 }
 
-/** 安装一个市场技能。同一个 slug 同时只允许一次安装。 */
+/** 安装一个市场技能。同一个 slug + owner 同时只允许一次安装。 */
 export async function installMarketSkill(
   source: MarketSource,
   slug: string,
@@ -238,10 +254,14 @@ export async function installMarketSkill(
   if (!MARKET_SLUG_PATTERN.test(slug)) {
     throw new MarketUpstreamError(source, "notInstallable", `非法 slug：${slug}`);
   }
-  const key = `${source}:${slug}`;
+  const key = `${source}:${slug}:${owner ?? ""}`;
   const running = inFlight().get(key);
   if (running) {
     throw new MarketUpstreamError(source, "installInProgress", `${slug} 正在安装中`);
+  }
+  // 同一目录上的卸载在途时直接拒绝：否则 tmp 目录会换进正在被删的目录。
+  if (inFlight().has(`${source}:${slug}`)) {
+    throw new MarketUpstreamError(source, "installInProgress", `${slug} 正在卸载中，请稍后再安装`);
   }
   const task = performInstall(source, slug, owner);
   inFlight().set(key, task.catch(() => {}));
@@ -270,8 +290,24 @@ export async function uninstallMarketSkill(source: MarketSource, slug: string): 
       `${dirName} 不是市场安装的技能（缺少 ${MARKET_META_FILENAME}），拒绝删除`,
     );
   }
-  await rm(target, { recursive: true, force: true });
-  return { removedPath: target };
+  const key = `${source}:${slug}`;
+  const running = inFlight().get(key);
+  if (running) {
+    throw new MarketUpstreamError(source, "installInProgress", `${slug} 正在卸载中`);
+  }
+  // 先注册再动手：注册后任何新安装都会看到卸载在途而拒绝；任务体内先等这个目录上所有
+  // owner 的安装结束（目录名不带 owner，任何 owner 的安装都写同一目录），再删目录。
+  const task = (async (): Promise<UninstallResult> => {
+    for (const pending of pendingInstallsForDirectory(source, slug)) await pending;
+    await rm(target, { recursive: true, force: true });
+    return { removedPath: target };
+  })();
+  inFlight().set(key, task.catch(() => {}));
+  try {
+    return await task;
+  } finally {
+    inFlight().delete(key);
+  }
 }
 
 /**

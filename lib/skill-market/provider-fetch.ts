@@ -99,7 +99,8 @@ async function fetchOnce(source: MarketSource, url: string, init?: RequestInit):
 
 /**
  * 一个上游请求：10s 超时 + 一次重试（仅网络类失败与 5xx/429；4xx 不重试）。
- * 结果写入来源健康表。
+ * 结果写入来源健康表。**只有 2xx 记 ok**：429 重试耗尽后 response.ok 为 false 而
+ * `status < 500` 为 true，按 status 记健康会把限流记成正常，顶部状态条与 sourceErrors 自相矛盾。
  */
 export async function providerFetch(source: MarketSource, url: string, init?: RequestInit): Promise<Response> {
   if (isProviderDisabled(source)) {
@@ -113,7 +114,7 @@ export async function providerFetch(source: MarketSource, url: string, init?: Re
         lastError = new MarketUpstreamError(source, "upstreamError", `${source} responded ${response.status}`);
         if (attempt === 0) continue;
       }
-      record(source, response.ok || response.status < 500
+      record(source, response.ok
         ? { status: "ok", at: Date.now() }
         : { status: "failed", at: Date.now(), message: `HTTP ${response.status}` });
       return response;

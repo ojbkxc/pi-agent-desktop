@@ -21,6 +21,8 @@ const {
   MarketLoadMore,
   MarketDisclaimer,
   MarketSourceStatusBar,
+  MarketInstalledGrid,
+  SkillMarketView,
 } = await jiti.import("./SkillMarketView.tsx");
 const helpers = await jiti.import("./market-helpers.ts");
 const insights = await jiti.import("./skill-insights.ts");
@@ -458,4 +460,70 @@ test("能力面板：有命中时渲染标题 / 证据 / 级别 / 免责说明",
 
 test("能力面板：无命中时整块不渲染", () => {
   assert.equal(render(React.createElement(CapabilityPanel, { capabilities: [] })), "");
+});
+
+/* ── 已安装页签（缺陷1 回归锚点）───────────────────────────────────────── */
+
+test("已安装页签：最小 MarketMeta（无 name/summary/tags/iconUrl/stats）渲染不崩且给兜底", () => {
+  // 回归锚点：`/api/market/installed` 曾直接返回 `.market-meta.json` 的最小元数据
+  // （只有 source/slug/owner/version/installedAt/files），卡片 `item.name.slice(0, 1)`
+  // 直接 TypeError 把整页崩掉（AppShell 无 error boundary）。现在两层兜底：路由从精选
+  // 快照补全 + 卡片自身防御回退；这里用「补全前」的最小形状验证渲染不崩。
+  const minimal = {
+    source: "clawhub",
+    slug: "pdf-tools",
+    owner: "someone",
+    version: "1.2.0",
+    installedAt: "2026-11-14T00:00:00.000Z",
+    files: 4,
+    dirName: "clawhub-pdf-tools",
+    path: "/home/user/.pi/agent/skills/clawhub-pdf-tools",
+  };
+  const html = render(React.createElement(MarketInstalledGrid, {
+    items: [minimal],
+    activeId: null,
+    installedRoot: "/home/user/.pi/agent/skills",
+    onOpen: () => {},
+  }));
+  const body = text(html);
+  assert.ok(body.includes("pdf-tools"), "名字缺失时回退 slug");
+  assert.ok(html.includes(">P</span>"), "首字母块用 slug 首字母兜底");
+  assert.ok(body.includes("No description provided."), "摘要缺失给兜底文案");
+  assert.ok(body.includes("Not scanned"), "安全结论缺失落到 unknown");
+  assert.ok(body.includes("/home/user/.pi/agent/skills"), "技能根目录展示行");
+  assert.ok(!body.includes("market."), "不得渲染裸 i18n 键");
+});
+
+test("已安装页签：安装态条目渲染卡片与已安装标记、选中高亮", () => {
+  const html = render(React.createElement(MarketInstalledGrid, {
+    items: [{
+      ...item,
+      installState: "installed",
+      installedInfo: { version: "4.0.5", installedAt: "2026-11-14T00:00:00.000Z", dirName: "clawhub-demo" },
+    }],
+    activeId: "clawhub:demo",
+    installedRoot: "/root",
+    onOpen: () => {},
+  }));
+  const body = text(html);
+  assert.ok(body.includes("Installed"), "安装态卡片带已安装标记");
+  assert.ok(body.includes("Demo Skill"), "完整条目正常渲染名字");
+  assert.ok(html.includes("is-active"), "选中卡高亮");
+  assert.ok(!body.includes("market."), "不得渲染裸 i18n 键");
+});
+
+test("已安装页签：空清单只渲染网格壳与根目录行", () => {
+  const html = render(React.createElement(MarketInstalledGrid, {
+    items: [], activeId: null, installedRoot: "/root", onOpen: () => {},
+  }));
+  assert.ok(html.includes("/root"), "空清单仍给技能根目录行");
+  assert.ok(!text(html).includes("market."), "不得渲染裸 i18n 键");
+});
+
+test("整页骨架：SkillMarketView 首屏渲染不崩（SSR 无副作用，无裸 i18n 键）", () => {
+  const html = render(React.createElement(SkillMarketView, { onRevealInstalled: () => {} }));
+  assert.ok(html.includes("market-view"), "页面容器");
+  assert.ok(html.includes('data-testid="market-skeleton"'), "首屏骨架");
+  assert.ok(html.includes('data-testid="market-disclaimer"'), "首屏免责声明");
+  assert.ok(!text(html).includes("market."), "不得渲染裸 i18n 键");
 });

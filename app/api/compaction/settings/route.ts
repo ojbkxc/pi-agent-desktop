@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { filterProvidersWithoutStoredCredential } from "@/lib/model-scope";
 import {
   COMPACTION_LIMITS,
   defaultCompactionPolicy,
@@ -20,7 +21,14 @@ const CANDIDATES_UNAVAILABLE = "Model list is temporarily unavailable.";
 async function listCandidates(): Promise<{ candidates: CompactionModelCandidate[]; error?: string }> {
   try {
     const modelRuntime = await createModelRuntimeWithExtensions();
-    return { candidates: toCompactionModelCandidates(await modelRuntime.getAvailable()) };
+    // 与对话选择器 / Settings›Models 同口径：内置 provider 没有 auth.json 存储凭据时
+    // 不列它的模型（env token 不算凭据，见 e97dfb67），否则 compaction 模型选择器会
+    // 显示用户根本用不了的内置模型。
+    const models = await filterProvidersWithoutStoredCredential(
+      await modelRuntime.getAvailable(),
+      modelRuntime,
+    );
+    return { candidates: toCompactionModelCandidates(models) };
   } catch {
     return { candidates: [], error: CANDIDATES_UNAVAILABLE };
   }

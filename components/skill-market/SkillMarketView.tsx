@@ -326,6 +326,44 @@ export function MarketLoadMore({
   );
 }
 
+export interface MarketInstalledGridProps {
+  /** 已安装清单（`/api/market/installed` 的 items，服务端已补全成卡片形状）。 */
+  items: MarketListItem[];
+  /** 当前选中的技能 id（详情面板打开时高亮整卡）。 */
+  activeId: string | null;
+  /** 技能根目录展示行。 */
+  installedRoot: string;
+  onOpen: (id: string) => void;
+}
+
+/**
+ * 已安装页签的卡片网格（从整页抽出以便单测）。
+ *
+ * 条目来自 `/api/market/installed`：`.market-meta.json` 只有 source/slug/owner 等最小元数据，
+ * 服务端已从精选快照补全编辑性字段（补不上时回退 slug 当名字）；这里只负责渲染，
+ * 卡片自身还有一层防御回退兜底，任何一层缺失都不会让整页崩。
+ */
+export function MarketInstalledGrid({ items, activeId, installedRoot, onOpen }: MarketInstalledGridProps) {
+  const { t } = useI18n();
+  return (
+    <>
+      <ul className="market-grid" aria-label={t("market.tab.installedLabel")}>
+        {items.map((item) => (
+          <li key={item.id}>
+            <SkillMarketCard
+              item={item}
+              installed={item.installState === "installed"}
+              active={activeId === item.id}
+              onOpen={() => onOpen(item.id)}
+            />
+          </li>
+        ))}
+      </ul>
+      {installedRoot && <p className="scheduled-hint market-root">{installedRoot}</p>}
+    </>
+  );
+}
+
 /* --------------------------------------------------------------------------
    整页
    -------------------------------------------------------------------------- */
@@ -416,7 +454,12 @@ export function SkillMarketView({ onRevealInstalled }: Props) {
         setError(err instanceof Error ? err.message : String(err));
       }
     } finally {
-      if (generation === listSeqRef.current) setLoading(false);
+      // 复位 loadingMore：翻页在途时改筛选会触发本函数，翻页自己的 finally 因代际过期
+      // 不再复位 loadingMore——不在这里补一次，哨兵 effect 会永远被 loadingMore 挡住。
+      if (generation === listSeqRef.current) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
     }
   }, [requestPage]);
 
@@ -600,29 +643,37 @@ export function SkillMarketView({ onRevealInstalled }: Props) {
               </div>
             ) : (
               <>
-                <ul className="market-grid" aria-label={tab === "installed" ? t("market.tab.installedLabel") : t("market.resultsLabel")}>
-                  {list.map((item) => (
-                    <li key={item.id}>
-                      <SkillMarketCard
-                        item={item}
-                        installed={item.installState === "installed" || installedIds.has(item.id)}
-                        active={selectedKey === item.id}
-                        onOpen={() => setSelected(item.id)}
+                {tab === "browse" ? (
+                  <>
+                    <ul className="market-grid" aria-label={t("market.resultsLabel")}>
+                      {list.map((item) => (
+                        <li key={item.id}>
+                          <SkillMarketCard
+                            item={item}
+                            installed={item.installState === "installed" || installedIds.has(item.id)}
+                            active={selectedKey === item.id}
+                            onOpen={() => setSelected(item.id)}
+                          />
+                        </li>
+                      ))}
+                    </ul>
+                    {nextCursor && (
+                      <MarketLoadMore
+                        canAutoLoad={canAutoLoad}
+                        loadingMore={loadingMore}
+                        loadMoreError={loadMoreError}
+                        onLoadMore={() => void loadMore()}
+                        sentinelRef={sentinelRef}
                       />
-                    </li>
-                  ))}
-                </ul>
-                {tab === "browse" && nextCursor && (
-                  <MarketLoadMore
-                    canAutoLoad={canAutoLoad}
-                    loadingMore={loadingMore}
-                    loadMoreError={loadMoreError}
-                    onLoadMore={() => void loadMore()}
-                    sentinelRef={sentinelRef}
+                    )}
+                  </>
+                ) : (
+                  <MarketInstalledGrid
+                    items={list}
+                    activeId={selectedKey}
+                    installedRoot={installedRoot}
+                    onOpen={setSelected}
                   />
-                )}
-                {tab === "installed" && installedRoot && (
-                  <p className="scheduled-hint market-root">{installedRoot}</p>
                 )}
               </>
             )}

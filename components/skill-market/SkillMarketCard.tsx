@@ -26,8 +26,11 @@ interface Props {
  */
 export function SkillMarketCard({ item, installed, active, onOpen }: Props) {
   const { t, locale } = useI18n();
-  const summary = skillSummary(item, locale);
-  const tags = visibleTags(item, locale);
+  // 防御回退：已安装清单来自 `.market-meta.json`（只有 source/slug/owner），快照补不上时
+  // name/tags 可能缺失——卡片不许因此崩（`item.name.slice` 曾是整页崩溃点）。
+  const displayName = item.name || item.slug || "—";
+  const summary = skillSummary(item, locale) ?? "";
+  const tags = visibleTags(item, locale) ?? [];
   const extraTags = Math.max(0, tags.length - MAX_VISIBLE_TAGS);
   return (
     <button
@@ -35,13 +38,13 @@ export function SkillMarketCard({ item, installed, active, onOpen }: Props) {
       className={`market-card${active ? " is-active" : ""}`}
       onClick={onOpen}
       aria-current={active ? "true" : undefined}
-      title={summary || item.name}
+      title={summary || displayName}
     >
       <span className="market-card-head">
         {item.iconUrl
           ? <img className="market-card-icon" src={item.iconUrl} alt="" loading="lazy" referrerPolicy="no-referrer" />
-          : <span className="market-card-icon is-fallback" aria-hidden="true">{item.name.slice(0, 1).toUpperCase()}</span>}
-        <span className="market-card-name">{item.name}</span>
+          : <span className="market-card-icon is-fallback" aria-hidden="true">{displayName.slice(0, 1).toUpperCase()}</span>}
+        <span className="market-card-name">{displayName}</span>
         {item.featured && (
           <span className="market-card-featured" title={t("market.featured")}>
             {t("market.featured")}
