@@ -106,6 +106,7 @@ app/api/
   skills/install/route.ts         POST install skills through npx skills add
   skills/search/route.ts          GET/POST skills.sh search
   scheduled-tasks/**              GET/POST tasks, PATCH/DELETE [id], POST [id]/run, GET [id]/runs, POST run seen, POST preview, GET events (SSE)
+  autofix/**                       GET list+summary, POST create+start; [id] GET/POST(stop·resume)/DELETE; /resume POST; /events SSE (自动修 Bug，see fork-autofix.md)
   worktrees/route.ts              GET list / POST create / PUT switch branch / DELETE git worktrees
   worktrees/fetch/route.ts        POST git fetch --prune + fresh branch lists
   desktop/read-images/route.ts    POST read natively-picked images into attachment payloads
@@ -148,6 +149,7 @@ lib/
                       .market-meta.json marker; see docs/agents/fork-skill-market.md)
   rpc-manager.ts      AgentSessionWrapper + registry + startRpcSession
   scheduled-tasks/    scheduler, runner, cron, store, run index for scheduled tasks (see docs/agents/scheduled-tasks.md)
+  autofix/            自动修 Bug 驱动引擎：types/prompt/detect/store/verify/runner/events/client（see docs/agents/fork-autofix.md）
   public-access/      Cloudflare tunnel: config validation, the cloudflared spawner, the gateway probe, the state machine, the binary resolver and install (see docs/agents/fork-public-access.md)
   server-port.ts      read/write the saved listener port (mirrored by bin/pi-web-settings.js for launchers that cannot load the SDK)
   network-proxy.ts    the session-traffic proxy (direct / system / manual): the saved setting, the
@@ -188,6 +190,7 @@ components/
                       infinite-scroll card grid, detail with file preview + security reports,
                       install confirmation) and its sidebar row
   scheduled/          Scheduled page (list, detail, editor, run history) and its sidebar row
+  AutofixView.tsx / AutofixSidebarRow.tsx  自动修 Bug 任务页 + 侧栏入口（see docs/agents/fork-autofix.md）
   tasks/              Tasks page (waiting / running / recent across projects) and its sidebar row
   RemoteAccessSection.tsx  Settings › General › Remote access (Tailscale) and "Notify this device"
   ServerSection.tsx   Settings › General › Server: the listener port and the Cloudflare tunnel switch,
@@ -215,6 +218,7 @@ hooks/
   useDragDrop.ts           shared drag/drop state
   useIsMobile.ts           responsive breakpoint
   useScheduledTasks.ts     shared store + SSE for scheduled tasks
+  useAutofix.ts            shared store + SSE for 自动修 Bug (see docs/agents/fork-autofix.md)
   useKeyboardShortcuts.ts  Esc stops the running agent unless a field or nearer handler took it; Ctrl+Alt+N
   useTheme.ts              theme state
   useAgentTeamsEnabled.ts  the Agent Teams switch: the global `enabled` flag vs the per-message `armed` flag
@@ -244,6 +248,7 @@ Read the doc for the area you touch before changing it. Upstream docs (no prefix
 - [settings-ui.md](docs/agents/settings-ui.md): Plugins and Skills routes, sidebar group switches, the shared `SettingsUi` blocks every settings panel and add pane uses. Files: `app/api/plugins/**`, `app/api/skills/**`, `components/SettingsUi.tsx`, `components/settings-ui-helpers.ts`, `components/SkillsConfig.tsx`, `components/PluginsConfig.tsx`; also before adding a settings section or add pane.
 - [subagents.md](docs/agents/subagents.md): the built-in subagent setting, profiles and their files, run status, completion notifications. Files: `lib/subagent*.ts`, `app/api/subagents/**`, `components/AgentsConfig.tsx`.
 - [scheduled-tasks.md](docs/agents/scheduled-tasks.md): scheduled tasks (the Scheduled page): server-side scheduler and its lease, catch-up and overlap rules, read-only default, the run index that hides runs from the project tree, why shared state is on `globalThis`. Files: `lib/scheduled-tasks/**`, `app/api/scheduled-tasks/**`, `instrumentation-node.ts`, `hooks/useScheduledTasks.ts`, `components/scheduled/**`, the Scheduled row in `components/SessionSidebar.tsx`, the page overlay in `components/AppShell.tsx`.
+- [fork-autofix.md](docs/agents/fork-autofix.md): 自动修 Bug（dsh Executor 式「每任务一个 Session + 一个工作目录」）。判据在引擎侧：每轮 agent 回合结束后由 `lib/autofix/verify.ts` 跑 `verifyCommand`（package.json 探测 test→typecheck→check→lint），exit 0 才落 succeeded；失败输出尾喂回下一轮；轮次上限（默认 20）触顶落 exhausted；阻断型扩展对话框落 stopped。进度原子写 `<agent dir>/autofix/tasks/<uuid>.json`（task/cwd/verifyCommand/status/round/maxRounds/lastError/sessionId/pid/updatedAt/rounds），供挂机保活（`lib/keepalive`）按「pid 活=永不孤儿」口径接续；出口 `resumeAutofixTasks` / `summarizeAutofixTasks` / `startAutofixSweepLoop`（60s，挂 instrumentation，`PI_WEB_DISABLE_SCHEDULER=1` 静默）。修复会话钉工具集 `read/bash/edit/write/grep/find/ls`、写 `pi-web:autofix` 条目。任务页 = 侧栏「自动修 Bug」行 + AppShell `?view=autofix` 覆盖视图。文件：`lib/autofix/**`、`app/api/autofix/**`、`components/AutofixView.tsx`、`components/AutofixSidebarRow.tsx`、`hooks/useAutofix.ts`、`app/native-theme.css` 的 `.autofix-*`、`lib/i18n/locale-plugins.ts` 的 `autofix.*`。
 - [artifacts.md](docs/agents/artifacts.md): inline HTML/SVG/React previews and `:::artifact` blocks, output vs process files on the Artifacts page: what renders where, the sandbox rules and the desktop `about:srcdoc` allowance, the auto-run rule for scripted pages, the bundled React runtime (inlined, because sandboxed frames cannot reach localhost; `npm run preview-runtime` regenerates it), the fix flow and the prompt switch, the cross-session Artifacts page. Files: `lib/artifacts.ts`, `lib/artifact-store.ts`, `lib/artifact-index.ts`, `lib/file-output-role.ts`, `lib/artifact-file-roles.ts`, `lib/artifact-favorites.ts`, `components/artifacts/**`, `lib/html-preview.ts`, `lib/artifact-settings.ts`, `lib/artifact-guide-extension.ts`, `hooks/useArtifactPublisher.ts`, `hooks/useHtmlPreviewFrame.ts`, `lib/preview-runtime.ts`, `scripts/build-preview-runtime.mjs`, `public/preview-runtime/`, `components/Artifact*.tsx`, `components/HtmlPreview*.tsx`, `components/artifact-tabs.ts`, `app/api/artifacts/**`, `is_inline_frame_document` in `src-tauri/src/lib.rs`.
 - [remote-relay.md](docs/remote-relay.md): the end-to-end encrypted relay (Noise IK over a dumb relay, phone shell + tunnel service worker, pairing, request mark). Files: `lib/relay/**`, `relay/` (server, Docker), `relay-shell/` (`npm run relay:shell`), `app/api/relay/**`, `components/RelaySection.tsx`, `e2e/relay.mjs`; deploying: [remote-relay-deploy.md](docs/remote-relay-deploy.md). A request carrying the relay mark comes from a paired phone: it is never local (`isLocalRequest`), and local-only routes must ask `isLocalRequest()`, never a loopback Host.
 - [client-platform.md](docs/agents/client-platform.md): mobile software keyboard and viewport height, completion sound. Files: `hooks/useViewportHeight.ts`, `hooks/useAudio.ts`, the keyboard-open CSS.
