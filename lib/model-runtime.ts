@@ -1,6 +1,7 @@
 import {
   createAgentSessionServices,
   getAgentDir,
+  SettingsManager,
   ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
@@ -33,4 +34,30 @@ export async function createModelRuntimeWithExtensions(
     resourceLoaderOptions: { noPromptTemplates: true, noThemes: true },
   });
   return services.modelRuntime;
+}
+
+// SettingsManager queues its first `deviceId` write, so a second login in this
+// process that read the file again first would find no `deviceId` and mint
+// another UUID. pi-ai documents the getter as "must return the same ID on every
+// later call", so cache one per agent dir (fork layer; upstream #1526 creates a
+// fresh SettingsManager per login, which re-reads the not-yet-written file).
+const loginSettingsManagers = new Map<string, ReturnType<typeof SettingsManager.create>>();
+
+/**
+ * The options pi's TUI passes to `ModelRuntime.login()`. Sign in with ChatGPT
+ * (the `openai` provider's OAuth) refuses to start without this installation's
+ * device ID; pi creates it on first use and keeps it as `deviceId` in the
+ * global settings.json, so the TUI and Pi Web sign in as the same host.
+ * `flush()` waits for that first write.
+ */
+export function createLoginOptions(agentDir = getAgentDir()) {
+  let settingsManager = loginSettingsManagers.get(agentDir);
+  if (!settingsManager) {
+    settingsManager = SettingsManager.create(agentDir, agentDir);
+    loginSettingsManagers.set(agentDir, settingsManager);
+  }
+  return {
+    options: { getDeviceId: () => settingsManager.getOrCreateDeviceId() },
+    flush: () => settingsManager.flush(),
+  };
 }
