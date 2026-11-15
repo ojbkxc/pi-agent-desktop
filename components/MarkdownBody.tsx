@@ -1,7 +1,8 @@
 "use client";
 
-import { createContext, memo, useContext, useEffect, useMemo, useState, type ComponentProps, type MouseEvent } from "react";
+import { createContext, memo, useContext, useEffect, useMemo, useState, type ComponentProps, type MouseEvent, type ReactNode } from "react";
 import { type Components, type ExtraProps } from "react-markdown";
+import { copyText } from "@/lib/clipboard";
 import { useStreamingMarkdownText } from "@/hooks/useStreamingMarkdown";
 import { StreamingMarkdown } from "./StreamingMarkdown";
 import { useFileContextMenu } from "@/hooks/useFileContextMenu";
@@ -9,9 +10,11 @@ import { useI18n } from "@/hooks/useI18n";
 import { fenceFilePaths, inlineCodeFilePath } from "@/lib/file-context-menu";
 import { parsePdfPageFragment, resolveLocalFileHref, shouldOpenLocalFileInApp } from "@/lib/file-links";
 import { encodeFilePathForApi } from "@/lib/file-paths";
+import { isAudioPath, isVideoPath } from "@/lib/file-types";
 import { markdownRehypePlugins, markdownRemarkPlugins, markdownUrlTransform, markdownUserRemarkPlugins, normalizeDisplayMath } from "@/lib/markdown";
 import { ImagePreview } from "./ImagePreview";
 import { MermaidBlock, CodeBlock } from "./MermaidBlock";
+import { SvgBlock } from "./SvgBlock";
 import { HtmlPreviewBlock } from "./HtmlPreviewBlock";
 import { htmlPreviewKind } from "@/lib/html-preview";
 import { ArtifactCard } from "./ArtifactCard";
@@ -36,6 +39,32 @@ interface MarkdownBodyProps {
   artifacts?: boolean;
 }
 
+/**
+ * A display formula with a Copy button for its LaTeX, as code fences have
+ * (upstream #1380). The button sits outside KaTeX's scroller, so it stays put
+ * while a wide formula scrolls; it shows on hover where there is one.
+ */
+function MathDisplay({ source, children }: { source: string; children: ReactNode }) {
+  const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    // A refused copy is silent: no "Copied", and the rejection is handled
+    // so it never surfaces as an unhandled one (lib/clipboard.ts).
+    copyText(source).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }, () => {});
+  };
+  return (
+    <div className="markdown-math-display">
+      {children}
+      <button type="button" onClick={copy} className="markdown-code-action markdown-math-copy">
+        {copied ? t("i18n.copied") : t("i18n.copy")}
+      </button>
+    </div>
+  );
+}
+
 function MarkdownImage({
   src,
   alt,
@@ -46,15 +75,25 @@ function MarkdownImage({
   delete props.node;
   const href = typeof src === "string" ? src : undefined;
   const filePath = href ? resolveLocalFileHref(href, cwd) : null;
-  const imageSrc = filePath
+  const mediaSrc = filePath
     ? `/api/files/${encodeFilePathForApi(filePath)}?type=read`
     : href;
+  // `![](take.wav)` is how a model shows a sound or clip it made, and an <img>
+  // cannot play it. The file API already streams both with range requests.
+  const mediaPath = filePath ?? href?.split(/[?#]/, 1)[0] ?? "";
+  const label = alt?.trim() ? alt : undefined;
+  if (isAudioPath(mediaPath)) {
+    return <audio controls preload="metadata" src={mediaSrc} aria-label={label} />;
+  }
+  if (isVideoPath(mediaPath)) {
+    return <video controls playsInline preload="metadata" src={mediaSrc} aria-label={label} />;
+  }
   // Dynamic local paths are served directly by the file API.
   // eslint-disable-next-line @next/next/no-img-element
-  const image = <img src={imageSrc} alt={alt ?? ""} loading="lazy" {...props} />;
-  if (!imageSrc || insideLink) return image;
+  const image = <img src={mediaSrc} alt={alt ?? ""} loading="lazy" {...props} />;
+  if (!mediaSrc || insideLink) return image;
   return (
-    <ImagePreview src={imageSrc} alt={alt ?? ""} className="markdown-image">
+    <ImagePreview src={mediaSrc} alt={alt ?? ""} className="markdown-image">
       {image}
     </ImagePreview>
   );
@@ -183,6 +222,9 @@ function buildComponents(
             />
           );
         }
+        if (lang === "svg") {
+          return <SvgBlock code={raw.replace(/\n$/, "")} isStreaming={isStreaming} />;
+        }
         const previewKind = htmlPreviewKind(lang, raw);
         if (previewKind) {
           return (
@@ -249,6 +291,11 @@ function buildComponents(
     },
     img(props) {
       return <MarkdownImage cwd={cwd} {...props} />;
+    },
+    div({ node, children, ...props }) {
+      const source = node?.properties?.dataMathSource;
+      if (typeof source === "string") return <MathDisplay source={source}>{children}</MathDisplay>;
+      return <div {...props}>{children}</div>;
     },
     table({ children }) {
       return (

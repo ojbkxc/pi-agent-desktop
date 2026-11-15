@@ -21,6 +21,8 @@ import { parsePdfPageFragment, resolveLocalFileHref, shouldOpenLocalFileInApp } 
 import { parseFrontmatter } from "@/lib/frontmatter";
 import { markdownPreviewRehypePlugins, markdownPreviewRemarkPlugins, markdownUrlTransform, normalizeDisplayMath } from "@/lib/markdown";
 import { CodeBlock, MermaidBlock } from "./MermaidBlock";
+import { DelimitedTable } from "./DelimitedTable";
+import { isDelimitedTablePath } from "@/lib/delimited-table";
 import { FrontmatterCard } from "./FrontmatterCard";
 import { parseUnifiedPatch } from "@/lib/patch";
 import type { GitFileDiffResponse } from "@/lib/git-types";
@@ -370,7 +372,7 @@ function diffLines(patch: string): DiffLine[] {
   if (!files) return [];
 
   return files.flatMap((file) => file.rows.flatMap((row): DiffLine[] => {
-    if (row.type === "hunk") return [];
+    if (row.type === "hunk" || row.type === "gap") return [];
     if (row.left.type === "context" && row.right.type === "context") {
       return [{
         type: "unchanged",
@@ -1335,9 +1337,12 @@ function TextFileViewer({
   const language = data?.language ?? "text";
   const isHtml = language === "html";
   const isMarkdown = language === "markdown";
+  const isDelimitedTable = isDelimitedTablePath(filePath);
   const htmlHasScripts = isHtml && /<script\b/i.test(viewerContent);
   const htmlPreviewUrl = getFileApiUrl(filePath, "serve", sourceSessionId, { v: htmlPreviewRevision });
-  const hasPreview = !data?.truncated && (isHtml || isMarkdown);
+  // A delimited table also previews a truncated first chunk, leaving out the
+  // cut last record until "Load more" brings the rest.
+  const hasPreview = isDelimitedTable || (!data?.truncated && (isHtml || isMarkdown));
   // Only the first chunk of a large file is loaded, so preview is unavailable
   // until the rest arrives; a preview default falls back to source instead of
   // rendering a partial document. The mode returns to preview once the whole
@@ -1709,6 +1714,13 @@ function TextFileViewer({
               title={t("i18n.htmlPreview")}
             />
           )
+        ) : isDelimitedTable && effectiveDisplayMode === "preview" ? (
+          <DelimitedTable
+            content={content}
+            filePath={filePath}
+            complete={!data?.truncated}
+            scrollRef={contentRef}
+          />
         ) : isMarkdown && effectiveDisplayMode === "preview" ? (
           <div
             className="markdown-body markdown-file-preview"

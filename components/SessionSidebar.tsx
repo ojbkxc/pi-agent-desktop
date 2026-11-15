@@ -28,6 +28,7 @@ import { groupByProject } from "@/lib/project-group";
 import { getProjectDisplayName, getProjectDisplayNames } from "@/lib/project-display";
 import { notifyDesktop } from "@/lib/desktop-notify";
 import { revealItemInDirNative } from "@/lib/desktop-native";
+import { countFaviconUnread, syncFaviconBadge } from "@/lib/favicon-badge";
 import { isTauriDesktop } from "@/lib/desktop-updater";
 import {
   canUseNativeMenu,
@@ -89,6 +90,12 @@ interface Props {
   /** Fired when a session that is not currently selected finishes running.
    *  Lets the app play a cross-workspace completion tone. */
   onBackgroundTaskDone?: () => void;
+  /**
+   * Sessions that finished while the tab was hidden (upstream #1484): usually the
+   * selected one, which `unreadSessionIds` excludes. Counted by the favicon
+   * until the tab is opened again; never persisted, never dotted.
+   */
+  hiddenFinishedSessionIds?: Set<string>;
   onRunningSessionIdsChange?: (ids: Set<string>) => void;
   onSessionsChange?: (sessions: SessionInfo[]) => void;
   onProjectsChange?: (projectRoots: string[]) => void;
@@ -307,7 +314,7 @@ function readIdSetPref(key: Parameters<typeof getPrefJson>[0]): Set<string> {
     : new Set();
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onChatWorkspaceCwdChange, onProjectsChange, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange, headerControls, onOpenTerminal, onOpenScheduled, scheduledOpen = false, onOpenAutofix, autofixOpen = false, onOpenArtifacts, artifactsOpen = false, onOpenTasks, tasksOpen = false, onOpenMarket, marketOpen = false }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onChatWorkspaceCwdChange, onProjectsChange, onBackgroundTaskDone, hiddenFinishedSessionIds, onRunningSessionIdsChange, onSessionsChange, headerControls, onOpenTerminal, onOpenScheduled, scheduledOpen = false, onOpenAutofix, autofixOpen = false, onOpenArtifacts, artifactsOpen = false, onOpenTasks, tasksOpen = false, onOpenMarket, marketOpen = false }: Props) {
   const { t } = useI18n();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [chatWorkspaceCwd, setChatWorkspaceCwd] = useState<string | null>(null);
@@ -497,6 +504,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // The chat whose conversation is being copied into a project (the picker is open for it).
   const [continueChat, setContinueChat] = useState<SessionInfo | null>(null);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
+  // A subset of the running set: runs parked on an extension's dialog the person must answer.
+  const [awaitingInputSessionIds, setAwaitingInputSessionIds] = useState<Set<string>>(() => new Set());
   // Sessions whose completion is deliberately silent (team members run in the background and
   // report through their team). /api/sessions and /api/agent/running both return this.
   const [suppressedCompletionSessionIds, setSuppressedCompletionSessionIds] = useState<Set<string>>(() => new Set());
@@ -570,6 +579,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         sessions: SessionInfo[];
         sessionListVersion: number;
         runningSessionIds?: string[];
+        awaitingInputSessionIds?: string[];
         completionNotificationSuppressedSessionIds?: string[];
         chatWorkspaceCwd?: string | null;
       };
@@ -581,6 +591,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       // live SSE stream is connected, a slow session-list fetch cannot overwrite it.
       if (!sseAuthoritativeRef.current) {
         setRunningSessionIds(new Set(data.runningSessionIds ?? []));
+        setAwaitingInputSessionIds(new Set(data.awaitingInputSessionIds ?? []));
       }
       // No SSE source for this one, so the fetched value always wins.
       setSuppressedCompletionSessionIds(new Set(data.completionNotificationSuppressedSessionIds ?? []));
@@ -646,6 +657,17 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   useEffect(() => {
     saveUnreadSessionIds(unreadSessionIds);
   }, [unreadSessionIds]);
+
+  // The tab strip's favicon mirrors what the rows show (upstream #1483): a persistent
+  // badge after the completion sound fades, cleared the same way the blue dot is.
+  // Sessions that finished while the tab was hidden count too (upstream #1484): the rows
+  // exclude the selected session ("already looking"), which is false while hidden.
+  useEffect(() => {
+    syncFaviconBadge({
+      awaiting: awaitingInputSessionIds.size,
+      unread: countFaviconUnread(unreadSessionIds, hiddenFinishedSessionIds),
+    });
+  }, [awaitingInputSessionIds, unreadSessionIds, hiddenFinishedSessionIds]);
 
   useEffect(() => {
     if (collapsedProjects.size === 0) removePref(APP_PREF_KEYS.collapsedProjects);
@@ -713,10 +735,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         // Any decoded frame proves the stream is alive, heartbeat frames included.
         if (!closed) armSilenceWatchdog();
         try {
-          const data = JSON.parse(e.data) as { type?: string; runningSessionIds?: string[]; sessionListVersion?: number };
+          const data = JSON.parse(e.data) as { type?: string; runningSessionIds?: string[]; awaitingInputSessionIds?: string[]; sessionListVersion?: number };
           if (data.type === "running") {
             sseAuthoritativeRef.current = true;
             setRunningSessionIds(new Set(data.runningSessionIds ?? []));
+            setAwaitingInputSessionIds(new Set(data.awaitingInputSessionIds ?? []));
           }
           if (typeof data.sessionListVersion === "number"
             && data.sessionListVersion !== sessionListVersionRef.current) {
@@ -1499,6 +1522,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         familySessions={[family.root, ...family.subagents]}
         selectedSessionId={selectedSessionId}
         runningSessionIds={runningSessionIds}
+        awaitingInputSessionIds={awaitingInputSessionIds}
         teamRunningSessionIds={teamRunningSessionIds}
         unreadSessionIds={unreadSessionIds}
         onSelectSession={handleSelectSessionFromList}
@@ -1699,6 +1723,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 familySessions={nodeFamily ? [nodeFamily.root, ...nodeFamily.subagents] : undefined}
                 selectedSessionId={selectedSessionId}
                 runningSessionIds={runningSessionIds}
+                awaitingInputSessionIds={awaitingInputSessionIds}
                 teamRunningSessionIds={teamRunningSessionIds}
                 unreadSessionIds={unreadSessionIds}
                 onSelectSession={handleSelectSessionFromList}
@@ -1749,6 +1774,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                       familySessions={nodeFamily ? [nodeFamily.root, ...nodeFamily.subagents] : undefined}
                       selectedSessionId={selectedSessionId}
                       runningSessionIds={runningSessionIds}
+                      awaitingInputSessionIds={awaitingInputSessionIds}
                       teamRunningSessionIds={teamRunningSessionIds}
                       unreadSessionIds={unreadSessionIds}
                       onSelectSession={handleSelectSessionFromList}
@@ -1786,6 +1812,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             archiveActions={sessionArchiveActions(family.root.id)}
             selectedSessionId={selectedSessionId}
             runningSessionIds={runningSessionIds}
+            awaitingInputSessionIds={awaitingInputSessionIds}
             teamRunningSessionIds={teamRunningSessionIds}
             unreadSessionIds={unreadSessionIds}
             onSelectSession={handleSelectSessionFromList}
@@ -2368,6 +2395,7 @@ function SessionFamilyItem({
   depth = 0,
   selectedSessionId,
   runningSessionIds,
+  awaitingInputSessionIds,
   unreadSessionIds,
   teamRunningSessionIds,
   onSelectSession,
@@ -2384,6 +2412,8 @@ function SessionFamilyItem({
   depth?: number;
   selectedSessionId: string | null;
   runningSessionIds: Set<string>;
+  /** runningSessionIds 的子集：停在扩展阻塞对话框上的 run（/api/agent/running）。 */
+  awaitingInputSessionIds: Set<string>;
   unreadSessionIds: Set<string>;
   /** 逐会话团队运行点：包含该会话 id 时，其团队正在跑（见 teamRunningSessionIds）。 */
   teamRunningSessionIds?: Set<string>;
@@ -2419,6 +2449,9 @@ function SessionFamilyItem({
           isRunning={familySessions
             ? familySessions.some((session) => runningSessionIds.has(session.id))
             : runningSessionIds.has(node.session.id)}
+          isAwaiting={familySessions
+            ? familySessions.some((session) => awaitingInputSessionIds.has(session.id))
+            : awaitingInputSessionIds.has(node.session.id)}
           isTeamRunning={familySessions
             ? familySessions.some((session) => Boolean(teamRunningSessionIds?.has(session.id)))
             : Boolean(teamRunningSessionIds?.has(node.session.id))}
@@ -2444,6 +2477,7 @@ function SessionFamilyItem({
               depth={depth + 1}
               selectedSessionId={selectedSessionId}
               runningSessionIds={runningSessionIds}
+              awaitingInputSessionIds={awaitingInputSessionIds}
               unreadSessionIds={unreadSessionIds}
               teamRunningSessionIds={teamRunningSessionIds}
               onSelectSession={onSelectSession}
@@ -2481,6 +2515,32 @@ function RunningSessionIndicator() {
           strokeWidth="2"
           strokeLinecap="round"
         />
+      </svg>
+    </span>
+  );
+}
+
+/** 会话停在扩展的阻塞对话框上（#1145）：琥珀呼吸点占 spinner 的槽位——同尺寸、
+ * 同节奏（session-unread-ring 的动画），只有颜色和含义变了：这条 run 需要人来应答。 */
+function AwaitingInputIndicator() {
+  const { t } = useI18n();
+  return (
+    <span
+      title={t("sidebar.agentAwaitingInput")}
+      aria-label={t("sidebar.agentAwaitingInput")}
+      style={{
+        width: 14,
+        height: 14,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+        color: "#d97706",
+      }}
+    >
+      <svg className="session-awaiting-dot" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true" style={{ display: "block" }}>
+        <circle cx="7" cy="7" r="2.5" fill="currentColor" />
+        <circle cx="7" cy="7" r="3" stroke="currentColor" strokeWidth="1.4" opacity="0.32" />
       </svg>
     </span>
   );
@@ -2564,6 +2624,7 @@ function SessionItem({
   session,
   isSelected,
   isRunning,
+  isAwaiting,
   isUnread,
   isTeamRunning,
   onClick,
@@ -2581,6 +2642,8 @@ function SessionItem({
   session: SessionInfo;
   isSelected: boolean;
   isRunning?: boolean;
+  /** 停在扩展对话框上的 run（isRunning 的子集）：行首的琥珀呼吸点替代 spinner。 */
+  isAwaiting?: boolean;
   isUnread?: boolean;
   /** 该会话所属团队正在跑 → 行上打团队运行点（E1 缺口 3）。 */
   isTeamRunning?: boolean;
@@ -2907,7 +2970,9 @@ function SessionItem({
               chat-bubble glyph for every session. Subagent child rows carry
               the robot glyph instead of the chat bubble. */}
           {isRunning ? (
-            <RunningSessionIndicator />
+            isAwaiting
+              ? <AwaitingInputIndicator />
+              : <RunningSessionIndicator />
           ) : isUnread ? (
             <UnreadSessionIndicator />
           ) : isSubagentChild ? (

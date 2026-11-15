@@ -168,29 +168,44 @@ test("renders completed write tool content as readable file text, including alia
   }
 });
 
-test("keeps generic input for extra write arguments, empty or non-text content, streaming, and other tools", () => {
-  const cases = [
-    { input: { path: "notes.md", content: "text", mode: "append" } },
-    { input: { path: "empty.txt", content: "" } },
-    { input: { path: "empty.txt", content: null } },
-    { input: { path: "long/".repeat(30) + "file.txt", content: "text" } },
-    { input: { path: "one.txt", file_path: "two.txt", content: "text" } },
-    { input: { path: 42, content: "text" } },
-    { input: { content: "text" } },
-    { input: { path: "empty.txt" } },
-    { input: { path: "a.ts", content: "partial" }, rawInput: '{"path":"a.ts","content":"one\\ntwo' },
-    { toolName: "other_tool", input: { path: "notes.md", content: "text" } },
+test("shows every flat argument as a row when the file-text view does not apply, and keeps JSON only for streamed input", () => {
+  // Upstream #1324: a write with another argument, an empty value, an oversized
+  // path or a non-string path loses the file-text view, and its flat arguments
+  // become rows. Only input still streaming keeps the raw JSON.
+  const rowsCases = [
+    { input: { path: "notes.md", content: "text", mode: "append" }, expect: "append" },
+    { input: { path: "empty.txt", content: "" }, expect: "(empty)" },
+    { input: { path: "empty.txt", content: null }, expect: "null" },
+    { input: { path: "long/".repeat(30) + "file.txt", content: "text" }, expect: "text" },
+    { input: { path: "one.txt", file_path: "two.txt", content: "text" }, expect: "two.txt" },
+    { input: { path: 42, content: "text" }, expect: "42" },
+    { input: { content: "text" }, expect: "text" },
+    { input: { path: "empty.txt" }, expect: "empty.txt" },
+    { toolName: "other_tool", input: { path: "notes.md", content: "text" }, expect: "notes.md" },
   ];
-  for (const [index, fields] of cases.entries()) {
+  for (const [index, fields] of rowsCases.entries()) {
     const block = { type: "toolCall", toolCallId: `call-write-fallback-${index}`, toolName: "write", ...fields };
     clearExpandedToolCalls();
     setToolCallExpanded(block.toolCallId, true);
     try {
       const html = renderMessage({ role: "assistant", content: [block] });
-      assert.ok(textOf(html).includes(getToolCallInputText(block)), String(index));
+      assert.ok(html.includes("<table"), String(index));
+      assert.ok(textOf(html).includes(fields.expect), String(index));
+      assert.ok(!textOf(html).includes(JSON.stringify(block.input, null, 2).slice(0, 20)), String(index));
     } finally {
       clearExpandedToolCalls();
     }
+  }
+
+  const streaming = { type: "toolCall", toolCallId: "call-write-fallback-streaming", toolName: "write", input: { path: "a.ts", content: "partial" }, rawInput: '{"path":"a.ts","content":"one\\ntwo' };
+  clearExpandedToolCalls();
+  setToolCallExpanded(streaming.toolCallId, true);
+  try {
+    const html = renderMessage({ role: "assistant", content: [streaming] });
+    assert.ok(!html.includes("<table"));
+    assert.ok(textOf(html).includes(getToolCallInputText(streaming)));
+  } finally {
+    clearExpandedToolCalls();
   }
 });
 
@@ -640,7 +655,12 @@ test("keeps the generic view for a codemode call whose input is still streaming 
   const other = { type: "toolCall", toolCallId: "call-codemode-other", toolName: "codemode", input: { script: "x" } };
   setToolCallExpanded(other.toolCallId, true);
   t.after(() => setToolCallExpanded(other.toolCallId, false));
-  assert.match(textOf(renderCodemode(other)), /"script": "x"/);
+  // An argument this view does not understand is still an argument: no script box,
+  // but the flat row shows it (upstream #1324).
+  const otherHtml = renderCodemode(other);
+  assert.match(otherHtml, /<table/);
+  assert.match(otherHtml, />x<\/td>/);
+  assert.doesNotMatch(textOf(otherHtml), /"script": "x"/);
 });
 
 test("labels an MCP call server/tool and indents a JSON result", (t) => {

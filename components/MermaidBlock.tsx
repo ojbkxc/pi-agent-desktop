@@ -44,12 +44,178 @@ const ZOOM_MAX = 3;
 export function downloadMermaidSvg(svg: SVGSVGElement): void {
   // Mermaid's HTML serialization can leave void tags such as <br> unclosed.
   const xml = new XMLSerializer().serializeToString(svg);
+  downloadSvgFile(xml, "mermaid-diagram.svg");
+}
+
+/** Downloads `xml` as an SVG file (Mermaid and SvgBlock share it). */
+export function downloadSvgFile(xml: string, filename: string): void {
   const url = URL.createObjectURL(new Blob([xml], { type: "image/svg+xml;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
-  link.download = "mermaid-diagram.svg";
+  link.download = filename;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+// What a previewed fence (mermaid here, svg in components/SvgBlock.tsx) shares:
+// the header with its toggle and download button, and the zoom viewer.
+
+export function PreviewToggleButton({ isStreaming, previewVisible, onToggle, title }: {
+  isStreaming?: boolean;
+  previewVisible: boolean;
+  onToggle: () => void;
+  /** What a click shows: the source while the preview is visible, else the preview. */
+  title: string;
+}) {
+  const { t } = useI18n();
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      disabled={isStreaming}
+      title={isStreaming ? t("i18n.previewAfterStreaming") : title}
+      className={["markdown-code-action", previewVisible ? "is-active" : ""].filter(Boolean).join(" ")}
+    >
+      {previewVisible ? t("i18n.source") : t("i18n.preview")}
+    </button>
+  );
+}
+
+export function SvgDownloadButton({ onClick }: { onClick: () => void }) {
+  const { t } = useI18n();
+  return (
+    <button
+      type="button"
+      className="markdown-code-action"
+      title={`${t("i18n.downloadFile")} (SVG)`}
+      aria-label={`${t("i18n.downloadFile")} (SVG)`}
+      onClick={onClick}
+    >
+      SVG
+    </button>
+  );
+}
+
+export function PreviewFrame({ lang, actions, children }: { lang: string; actions: ReactNode; children: ReactNode }) {
+  return (
+    <div className="markdown-code-block">
+      <div className="markdown-code-header">
+        <span className="markdown-code-lang">{lang}</span>
+        <div className="markdown-code-actions">{actions}</div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+export function DiagramZoomDialog({ title, label, onClose, children }: {
+  title: string;
+  label: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const { t } = useI18n();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [zoom, setZoom] = useState(1);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    dialog.showModal();
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      if (dialog.open) dialog.close();
+    };
+  }, []);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="mermaid-zoom-dialog"
+      aria-label={label}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || isImeComposing(event)) return;
+        event.preventDefault();
+        onClose();
+      }}
+    >
+      <div className="mermaid-zoom-layout">
+        <div className="mermaid-zoom-toolbar">
+          <span className="mermaid-zoom-title">{title}</span>
+          <div className="mermaid-zoom-actions">
+            <div className="mermaid-zoom-stepper">
+              <button
+                type="button"
+                onClick={() => setZoom((value) => Math.max(ZOOM_MIN, value - ZOOM_STEP))}
+                disabled={zoom <= ZOOM_MIN}
+                title={t("i18n.zoomOut")}
+                aria-label={t("i18n.zoomOut")}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                  <path d="M5 12h14" />
+                </svg>
+              </button>
+              <span className="mermaid-zoom-value">{Math.round(zoom * 100)}%</span>
+              <button
+                type="button"
+                onClick={() => setZoom((value) => Math.min(ZOOM_MAX, value + ZOOM_STEP))}
+                disabled={zoom >= ZOOM_MAX}
+                title={t("i18n.zoomIn")}
+                aria-label={t("i18n.zoomIn")}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+              </button>
+            </div>
+            <button
+              type="button"
+              className="mermaid-zoom-icon-button"
+              onClick={() => setZoom(1)}
+              title={t("i18n.fitToWidth")}
+              aria-label={t("i18n.fitToWidth")}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className="mermaid-zoom-icon-button"
+              onClick={onClose}
+              title={t("i18n.close")}
+              aria-label={t("i18n.close")}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                <path d="M6 6l12 12M18 6 6 18" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div
+          className="mermaid-zoom-viewport"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) onClose();
+          }}
+        >
+          <div
+            className="mermaid-zoom-canvas"
+            style={{ width: `${zoom * 100}%` }}
+          >
+            {children}
+          </div>
+        </div>
+      </div>
+    </dialog>
+  );
 }
 
 type RenderState =
@@ -186,7 +352,11 @@ export function MermaidBlock({ code, isStreaming, defaultPreview = false, fit = 
             dangerouslySetInnerHTML={{ __html: renderState.svg }}
           />
         )}
-        {zoomOpen && <MermaidZoomDialog svg={renderState.svg} onClose={() => setZoomOpen(false)} />}
+        {zoomOpen && (
+          <DiagramZoomDialog title={t("i18n.mermaidDiagram")} label={t("i18n.mermaidViewer")} onClose={() => setZoomOpen(false)}>
+            <div dangerouslySetInnerHTML={{ __html: renderState.svg }} />
+          </DiagramZoomDialog>
+        )}
       </>
     );
 
@@ -215,110 +385,6 @@ export function MermaidBlock({ code, isStreaming, defaultPreview = false, fit = 
       </div>
       {body}
     </div>
-  );
-}
-
-function MermaidZoomDialog({ svg, onClose }: { svg: string; onClose: () => void }) {
-  const { t } = useI18n();
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const [zoom, setZoom] = useState(1);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    dialog.showModal();
-
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      if (dialog.open) dialog.close();
-    };
-  }, []);
-
-  return (
-    <dialog
-      ref={dialogRef}
-      className="mermaid-zoom-dialog"
-      aria-label={t("i18n.mermaidViewer")}
-      onCancel={(event) => {
-        event.preventDefault();
-        onClose();
-      }}
-      onKeyDown={(event) => {
-        if (event.key !== "Escape" || isImeComposing(event)) return;
-        event.preventDefault();
-        onClose();
-      }}
-    >
-      <div className="mermaid-zoom-layout">
-        <div className="mermaid-zoom-toolbar">
-          <span className="mermaid-zoom-title">{t("i18n.mermaidDiagram")}</span>
-          <div className="mermaid-zoom-actions">
-            <div className="mermaid-zoom-stepper">
-              <button
-                type="button"
-                onClick={() => setZoom((value) => Math.max(ZOOM_MIN, value - ZOOM_STEP))}
-                disabled={zoom <= ZOOM_MIN}
-                title={t("i18n.zoomOut")}
-                aria-label={t("i18n.zoomOut")}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-                  <path d="M5 12h14" />
-                </svg>
-              </button>
-              <span className="mermaid-zoom-value">{Math.round(zoom * 100)}%</span>
-              <button
-                type="button"
-                onClick={() => setZoom((value) => Math.min(ZOOM_MAX, value + ZOOM_STEP))}
-                disabled={zoom >= ZOOM_MAX}
-                title={t("i18n.zoomIn")}
-                aria-label={t("i18n.zoomIn")}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-                  <path d="M12 5v14M5 12h14" />
-                </svg>
-              </button>
-            </div>
-            <button
-              type="button"
-              className="mermaid-zoom-icon-button"
-              onClick={() => setZoom(1)}
-              title={t("i18n.fitToWidth")}
-              aria-label={t("i18n.fitToWidth")}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className="mermaid-zoom-icon-button"
-              onClick={onClose}
-              title={t("i18n.close")}
-              aria-label={t("i18n.close")}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-                <path d="M6 6l12 12M18 6 6 18" />
-              </svg>
-            </button>
-          </div>
-        </div>
-        <div
-          className="mermaid-zoom-viewport"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) onClose();
-          }}
-        >
-          <div
-            className="mermaid-zoom-canvas"
-            style={{ width: `${zoom * 100}%` }}
-            dangerouslySetInnerHTML={{ __html: svg }}
-          />
-        </div>
-      </div>
-    </dialog>
   );
 }
 

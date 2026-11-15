@@ -402,3 +402,14 @@ test("performDelete 无论成败都在 finally 复位 deleting", () => {
   assert.match(tryBody, /setConfirmDelete\(false\);/);
   assert.match(body, /setDeleteError\(message\);/);
 });
+
+test("the favicon counts sessions that finished while the tab was hidden (#1484)", () => {
+  // The rows exclude the selected session ("already looking"), which is false
+  // while hidden: the badge takes those ids as a separate prop instead.
+  assert.match(source, /hiddenFinishedSessionIds\?: Set<string>;/);
+  assert.match(source, /countFaviconUnread\(unreadSessionIds, hiddenFinishedSessionIds\)/);
+  assert.match(
+    source,
+    /\}, \[awaitingInputSessionIds, unreadSessionIds, hiddenFinishedSessionIds\]\);/,
+  );
+});

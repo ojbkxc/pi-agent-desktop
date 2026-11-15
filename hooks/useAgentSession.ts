@@ -24,7 +24,7 @@ import {
   getSessionViewSnapshot,
   setSessionViewSnapshot,
 } from "@/lib/session-view-cache";
-import { clearDraft, getDraft, rekeyDraft, restoreDraftSubmission } from "@/lib/draft-store";
+import { clearDraft, getDraft, rekeyDraft, restoreDraftSubmission, setDraft, type ChatDraft } from "@/lib/draft-store";
 import { getPreferredToolPreset, hasExplicitToolPresetChoice, setPreferredToolPreset } from "@/lib/tool-preset-preference";
 import { CONFIGURED_TOOL_PRESET, DEFAULT_NEW_SESSION_TOOL_PRESET, getPresetFromToolNames, getToolNamesForPreset, type ToolEntry, type ToolPreset } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
@@ -196,7 +196,8 @@ export interface UseAgentSessionOptions {
   newSessionDraftKey: string | null;
   /** Hidden model-only workspace: always no tools and no shell commands. */
   chatWorkspace?: boolean;
-  onAgentEnd?: () => void;
+  /** How a run ended, for the completion sound and notifications. */
+  onAgentEnd?: (end: AgentEndInfo) => void;
   onAttentionNeeded?: (request: BlockingExtensionUiRequest) => void;
   onSessionCreated?: (session: SessionInfo, sourceDraftKey: string) => void;
   /** sourceSessionId（d5-7）：发起 fork 的会话 id——宿主据此判断 fork 落地时用户
@@ -351,6 +352,17 @@ type ModelsResponse = {
 type SlashCommandsResponse = {
   commands?: SlashCommandInfo[];
 };
+
+/** How a run ended, for the completion sound and notifications. */
+export interface AgentEndInfo {
+  /** The run was stopped (Esc, Stop, another client's abort), not finished: nothing to announce. */
+  aborted: boolean;
+  /**
+   * Subagents of this session are still at work and will report back with a run of their own:
+   * the task is not done yet, so nothing to announce either (upstream #1434).
+   */
+  subagentsActive?: boolean;
+}
 
 export function useAgentSession(opts: UseAgentSessionOptions) {
   const {
@@ -1390,10 +1402,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     return wasRunning;
   }, [dispatch]);
 
-  const notifyPromptStage = useCallback((runId: number) => {
+  const notifyPromptStage = useCallback((runId: number, aborted = false, subagentsActive = false) => {
     if (notifiedPromptRunIdRef.current === runId) return false;
     notifiedPromptRunIdRef.current = runId;
-    onAgentEnd?.();
+    onAgentEnd?.({ aborted, ...(subagentsActive ? { subagentsActive } : {}) });
     return true;
   }, [onAgentEnd]);
 
@@ -1478,7 +1490,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (promptWasPending) {
         notifyPromptStage(runId);
       } else if (agentWasActive && wasRunning) {
-        onAgentEnd?.();
+        onAgentEnd?.({ aborted: false });
       }
       if (sid) scheduleEventStreamClose(sid);
     }
@@ -1719,7 +1731,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           void loadSession(sid);
           scheduleEventStreamClose(sid);
         }
-        if (wasRunning) onAgentEnd?.();
+        if (wasRunning) {
+          onAgentEnd?.({ aborted: event.aborted === true, ...(event.subagentsActive === true ? { subagentsActive: true } : {}) });
+        }
         break;
       }
       case "prompt_done":
@@ -1728,7 +1742,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           const promptWasPending = rpcPromptPendingRef.current;
           rpcPromptPendingRef.current = false;
           optimisticUserMessageKeyRef.current = null;
-          const firstNotification = notifyPromptStage(runId);
+          const firstNotification = notifyPromptStage(runId, event.aborted === true, event.subagentsActive === true);
           if (!promptWasPending && !firstNotification) break;
 
           const sid = sessionIdRef.current;
@@ -2139,7 +2153,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     sessionIdRef, setAutomation, addNotice, resync: syncLiveModel,
   });
 
-  const handleFork = useCallback(async (entryId: string) => {
+  /** `draft` is what the new session's composer starts with: the forked message, as pi's /fork leaves it in the editor. */
+  const handleFork = useCallback(async (entryId: string, draft?: ChatDraft) => {
     if (bashRunningRef.current) return;
     const sid = sessionIdRef.current;
     if (!sid) return;
@@ -2151,6 +2166,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       });
       const { cancelled, newSessionId } = result ?? {};
       if (!cancelled && newSessionId) {
+        if (draft) setDraft(newSessionId, draft);
         // d5-7：带上发起 fork 的会话 id，供宿主做「用户是否已切走」守卫。
         onSessionForked?.(newSessionId, sid);
       }
