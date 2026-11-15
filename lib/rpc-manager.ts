@@ -20,6 +20,7 @@ import { cacheSessionPath, getLatestModelChange, getLatestResponseModel, getSess
 import { getProjectTrustStatus, projectTrustReloadOptions } from "./project-trust";
 import { notifySessionEvent } from "./web-push";
 import type { AgentRunOutcome, AgentTaskSnapshot } from "./types";
+import { isBlockingExtensionUiRequest } from "./browser-notifications";
 export type { AgentRunOutcome, AgentTaskSnapshot } from "./types";
 import { isVerboseLogging } from "../bin/pi-web-options.js";
 import { hasActiveSessionLivenessProvider } from "./session-liveness";
@@ -528,6 +529,22 @@ export class AgentSessionWrapper {
       || this.inner.isBashRunning
       || sdkIdle === false
     );
+  }
+
+  /**
+   * A run parked on an extension's dialog (a select/confirm/input/editor the
+   * person must answer): still running, but the spinner misleads — it is not
+   * working. Never true for an idle session: a custom overlay that outlives
+   * its turn is not a parked run.
+   */
+  isAwaitingInput(): boolean {
+    if (!this.isRunning()) return false;
+    for (const event of this.pendingUiRequests.values()) {
+      const body = event as unknown as { method?: unknown; closed?: unknown };
+      if (body.method === "select" || body.method === "confirm" || body.method === "input" || body.method === "editor") return true;
+      if (body.method === "custom" && body.closed !== true) return true;
+    }
+    return false;
   }
 
   /**
@@ -2903,6 +2920,20 @@ export function getRunningRpcSessionIds(): string[] {
   const ids = new Set<string>();
   for (const [sessionId, session] of getRegistry()) {
     if (session.isRunning()) ids.add(session.sessionId || sessionId);
+  }
+  return [...ids];
+}
+
+/**
+ * The running sessions parked on an extension's dialog, a subset of
+ * getRunningRpcSessionIds(): same poll, so the sidebar can tell a run that needs
+ * a person from one that is still working.
+ */
+export function getAwaitingInputRpcSessionIds(): string[] {
+  const ids = new Set<string>();
+  for (const [sessionId, session] of getRegistry()) {
+    // A wrapper created before a hot reload (kept on globalThis) predates this method.
+    if (typeof session.isAwaitingInput === "function" && session.isAwaitingInput()) ids.add(session.sessionId || sessionId);
   }
   return [...ids];
 }
