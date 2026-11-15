@@ -51,7 +51,7 @@ test("logs in with one password and reports the signed session", async () => {
 
   const cookiePair = cookie.split(";", 1)[0];
   response = await GET(request("GET", undefined, { Cookie: cookiePair }));
-  assert.deepEqual(await response.json(), { enabled: true, authenticated: true });
+  assert.deepEqual(await response.json(), { enabled: true, authenticated: true, source: "env" });
 });
 
 test("blocks further attempts after a failure, even with the right password", async () => {

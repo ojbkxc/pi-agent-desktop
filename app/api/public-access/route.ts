@@ -19,7 +19,7 @@ export async function GET(req: Request) {
     {
       view: ensurePublicAccessManager().getView(),
       binary: { available: binary !== null, source: binary?.source ?? null },
-      passwordSet: isWebPasswordEnabled(process.env.PI_WEB_PASSWORD),
+      passwordSet: isWebPasswordEnabled(),
       local: isLocalRequest(req),
     },
     { headers: NO_STORE },
@@ -41,7 +41,7 @@ export async function PUT(req: Request) {
     manager = ensurePublicAccessManager();
     const parsed = parsePublicAccessUpdate(await req.json(), readPublicAccessConfig());
     if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
-    if (parsed.config.enabled && !isWebPasswordEnabled(process.env.PI_WEB_PASSWORD)) {
+    if (parsed.config.enabled && !isWebPasswordEnabled()) {
       return NextResponse.json(
         { error: "Set PI_WEB_PASSWORD before exposing the server on the internet", code: "configuration" },
         { status: 409 },
@@ -76,7 +76,7 @@ export async function POST(req: Request) {
   try {
     switch (body.action) {
       case "start": {
-        if (!isWebPasswordEnabled(process.env.PI_WEB_PASSWORD)) {
+        if (!isWebPasswordEnabled()) {
           return NextResponse.json(
             { error: "Set PI_WEB_PASSWORD before exposing the server on the internet", code: "configuration" },
             { status: 409 },

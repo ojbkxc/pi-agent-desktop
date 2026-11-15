@@ -12,16 +12,12 @@ import {
   isValidWebPassword,
   isValidWebSessionToken,
   isWebPasswordEnabled,
+  webPasswordSource,
   PI_WEB_SESSION_COOKIE,
-  PI_WEB_SESSION_MAX_AGE,
 } from "@/lib/web-auth";
+import { clearSessionCookie, setSessionCookie } from "./session-cookie";
 
 export const dynamic = "force-dynamic";
-
-function isSecureRequest(request: Request): boolean {
-  return new URL(request.url).protocol === "https:"
-    || request.headers.get("x-forwarded-proto")?.split(",", 1)[0]?.trim() === "https";
-}
 
 function tooManyAttempts(retryAfterMs: number): NextResponse {
   return NextResponse.json(
@@ -36,30 +32,18 @@ function tooManyAttempts(retryAfterMs: number): NextResponse {
   );
 }
 
-function clearSessionCookie(response: NextResponse, request: Request): void {
-  response.cookies.set({
-    name: PI_WEB_SESSION_COOKIE,
-    value: "",
-    httpOnly: true,
-    sameSite: "lax",
-    secure: isSecureRequest(request),
-    path: "/",
-    maxAge: 0,
-  });
-}
-
 export async function GET(request: NextRequest) {
   if (!isApiRequestAllowed(request)) {
     return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
   }
 
-  const password = process.env.PI_WEB_PASSWORD;
-  const enabled = isWebPasswordEnabled(password);
+  // 双来源（env 优先，其次设置文件里的记录）：无参调用按优先级解析。
+  const enabled = isWebPasswordEnabled();
   const authenticated = !enabled
-    || isValidBasicAuthorization(request.headers.get("authorization"), password)
-    || isValidWebSessionToken(request.cookies.get(PI_WEB_SESSION_COOKIE)?.value, password);
+    || isValidBasicAuthorization(request.headers.get("authorization"))
+    || isValidWebSessionToken(request.cookies.get(PI_WEB_SESSION_COOKIE)?.value);
   return NextResponse.json(
-    { enabled, authenticated },
+    { enabled, authenticated, source: webPasswordSource() },
     { headers: { "Cache-Control": "no-store" } },
   );
 }
@@ -72,8 +56,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
   }
 
-  const password = process.env.PI_WEB_PASSWORD;
-  if (!isWebPasswordEnabled(password)) {
+  if (!isWebPasswordEnabled()) {
     return NextResponse.json({ error: "Password authentication is disabled" }, { status: 404 });
   }
 
@@ -83,7 +66,7 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json().catch(() => null) as { password?: unknown } | null;
-  if (!body || typeof body.password !== "string" || !isValidWebPassword(body.password, password)) {
+  if (!body || typeof body.password !== "string" || !isValidWebPassword(body.password)) {
     const delayMs = recordAuthFailure();
     console.warn(`[web-auth] Password authentication failed; next attempt blocked for ${delayMs}ms`);
     return NextResponse.json(
@@ -94,15 +77,7 @@ export async function POST(request: NextRequest) {
 
   recordAuthSuccess();
   const response = NextResponse.json({ ok: true });
-  response.cookies.set({
-    name: PI_WEB_SESSION_COOKIE,
-    value: createWebSessionToken(password),
-    httpOnly: true,
-    sameSite: "lax",
-    secure: isSecureRequest(request),
-    path: "/",
-    maxAge: PI_WEB_SESSION_MAX_AGE,
-  });
+  setSessionCookie(response, request, createWebSessionToken());
   return response;
 }
 

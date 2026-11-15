@@ -42,7 +42,8 @@ export function proxy(request: NextRequest) {
 
   // Tailscale Funnel puts this port on the public internet. Without a web password
   // that is a shell for anyone, so refuse it however the Host header reads.
-  if (isTailscaleFunnelRequest(request) && !isWebPasswordEnabled(process.env.PI_WEB_PASSWORD)) {
+  // 无参的双来源判定：env `PI_WEB_PASSWORD` 或设置文件里的密码记录（lib/web-auth.ts）。
+  if (isTailscaleFunnelRequest(request) && !isWebPasswordEnabled()) {
     return new NextResponse("Pi refuses Tailscale Funnel (public) traffic. Use tailscale serve, which keeps it inside your tailnet.", {
       status: 403,
       headers: { "Cache-Control": "no-store" },
@@ -64,7 +65,7 @@ export function proxy(request: NextRequest) {
   // The Cloudflare tunnel's hostname is only trusted with a web password (see
   // lib/request-security.ts). If a settings file was edited by hand to point here
   // without one, say so instead of the generic "untrusted" answer.
-  if (!isWebPasswordEnabled(process.env.PI_WEB_PASSWORD)
+  if (!isWebPasswordEnabled()
     && isPublicAccessRequestHost(request, readPublicAccessConfig())) {
     return new NextResponse("Pi refuses public tunnel traffic without a web password. Set PI_WEB_PASSWORD.", {
       status: 403,
@@ -89,15 +90,14 @@ export function proxy(request: NextRequest) {
     return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
   }
 
-  const password = process.env.PI_WEB_PASSWORD;
-  if (!isWebPasswordEnabled(password)) {
+  if (!isWebPasswordEnabled()) {
     if (request.nextUrl.pathname === "/login") {
       return NextResponse.redirect(new URL("/", request.url));
     }
     return NextResponse.next();
   }
 
-  let authenticated = isValidWebSessionToken(request.cookies.get(PI_WEB_SESSION_COOKIE)?.value, password);
+  let authenticated = isValidWebSessionToken(request.cookies.get(PI_WEB_SESSION_COOKIE)?.value);
   const authorization = isApiRequest ? request.headers.get("authorization") : null;
   if (!authenticated && authorization && /^Basic\s/i.test(authorization)) {
     // Every Basic header is a password guess, so it shares the login form's
@@ -108,7 +108,7 @@ export function proxy(request: NextRequest) {
     // guesser a fresh short block.
     const retryAfterMs = getAuthRetryAfterMs();
     if (retryAfterMs > 0) return tooManyAttempts(retryAfterMs);
-    authenticated = isValidBasicAuthorization(authorization, password);
+    authenticated = isValidBasicAuthorization(authorization);
     if (!authenticated) recordAuthFailure();
   }
   if (request.nextUrl.pathname === "/login") {
