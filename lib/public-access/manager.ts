@@ -13,7 +13,8 @@
  *   - `pending`/`pendingResult` 单飞：重复 start 复用同一次尝试；
  *   - `stopUnconfirmed`：关闭没被确认前禁止新的启动，防止出现两个连接器。
  */
-import { isWebPasswordEnabled } from "../web-auth.ts";
+import { isWebPasswordSourceActive } from "../web-auth.ts";
+import { classifyDomainBinding, type DomainBindingStatus } from "./binding.ts";
 import { verifyPublicGateway } from "./gateway.ts";
 import {
   isPublicAccessConfigured,
@@ -41,6 +42,14 @@ export interface PublicAccessStatus {
   phase: PublicAccessPhase;
   error: PublicAccessErrorKind | null;
   publicUrl: string | null;
+  /**
+   * 命名隧道 + 自定义域名的固定域名绑定判定（轮询推送规则的结论）；
+   * quick 模式与未填自定义域名的命名隧道恒为 null——地址由 Cloudflare 分配，
+   * 没有「绑定」概念。
+   */
+  domainBinding: DomainBindingStatus | null;
+  /** 本次 online 是否由 restore()（服务器启动时的自动恢复）建立。 */
+  restoredByAutoStart: boolean;
   autoStart: boolean;
   consentVersion: number;
   mode: PublicAccessMode;
@@ -56,6 +65,9 @@ export interface PublicAccessView extends PublicAccessStatus {
   enabled: boolean;
 }
 
+/** waitForRoute 的结论：拿到入口 origin / 固定域名绑定超时（null = 已被取代）。 */
+type RouteDiscovery = { status: "origin"; origin: string } | { status: "timeout" };
+
 export type PublicAccessManagerOptions = {
   settingsPath?: string;
   /** 运行期真实端口（默认读 process.env.PORT）。 */
@@ -63,12 +75,45 @@ export type PublicAccessManagerOptions = {
   env?: NodeJS.ProcessEnv;
   startTunnel?: typeof startCloudflareTunnel;
   verify?: (origin: string) => Promise<boolean>;
+  /** 公网校验的等待节奏（默认 VERIFY_WAITS_MS，测试注入短值）。 */
+  verifyWaitsMs?: number[];
+  /** 公网校验的总预算（默认 VERIFY_BUDGET_MS）。 */
+  verifyBudgetMs?: number;
+  /** 固定域名绑定的轮询预算（默认 DOMAIN_BINDING_BUDGET_MS）。 */
+  bindingBudgetMs?: number;
 };
 
 const CONTROLLED_ERRORS = new Set(["runtime", "network", "configuration", "token", "route"]);
 /** 仪表盘托管的隧道通常在注册后立刻推路由，给它一点时间。 */
 const ROUTE_WAIT_MS = 5_000;
-const VERIFY_ATTEMPTS = 3;
+/**
+ * 公网校验的分间隔节奏（参照 cc-haha）：首查立即，之后逐次放长。
+ * 新域名的 DNS 传播常让首查失败——立即三连败会误判成网络故障，
+ * 把隧道拆了重建，反而永远连不上。
+ */
+const VERIFY_WAITS_MS = [0, 2_000, 4_000, 8_000, 15_000];
+/** 最后一次校验的开始时刻不晚于首次之后这个预算。 */
+const VERIFY_BUDGET_MS = 45_000;
+/** 固定域名绑定的轮询预算：预算内没等到「指向本机网关的推送规则」就报超时。 */
+const DOMAIN_BINDING_BUDGET_MS = 60_000;
+
+/**
+ * 等待 milliseconds 毫秒；signal 中止则提前返回 false。计时器总会被清掉。
+ * （移植自 cc-haha 的 publicAccess.ts pause()。）
+ */
+function pause(milliseconds: number, signal: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal.aborted) { resolve(false); return; }
+    const finish = (completed: boolean) => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", aborted);
+      resolve(completed);
+    };
+    const aborted = () => finish(false);
+    const timer = setTimeout(() => finish(true), milliseconds);
+    signal.addEventListener("abort", aborted, { once: true });
+  });
+}
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -87,7 +132,14 @@ export function classifyPublicAccessError(error: unknown): PublicAccessErrorKind
 export class PublicAccessManager {
   private readonly options: PublicAccessManagerOptions;
   private settings: PublicAccessConfig;
-  private status: { state: PublicAccessState; phase: PublicAccessPhase; error: PublicAccessErrorKind | null; publicUrl: string | null };
+  private status: {
+    state: PublicAccessState;
+    phase: PublicAccessPhase;
+    error: PublicAccessErrorKind | null;
+    publicUrl: string | null;
+    domainBinding: DomainBindingStatus | null;
+    restoredByAutoStart: boolean;
+  };
   private generation = 0;
   private wanted = false;
   private disposed = false;
@@ -104,6 +156,8 @@ export class PublicAccessManager {
   private retryCount = 0;
   private stopping = 0;
   private stopUnconfirmed = false;
+  /** restore() 发起的启动：connect 消费（一次性），成功 online 后写进状态。 */
+  private autoStartRestore = false;
 
   constructor(options: PublicAccessManagerOptions = {}) {
     this.options = options;
@@ -127,6 +181,8 @@ export class PublicAccessManager {
       phase: null,
       error: null,
       publicUrl: null,
+      domainBinding: null,
+      restoredByAutoStart: false,
     };
   }
 
@@ -183,7 +239,15 @@ export class PublicAccessManager {
     if (!this.current(generation)) throw new Error("Public access configuration interrupted");
     if (this.stopUnconfirmed) throw new Error("Remote gateway stop was not confirmed");
     this.settings = writePublicAccessConfig({ ...config, consentVersion: 0, origin: "" }, this.settingsPath());
-    this.status = { ...this.status, phase: null, error: null, publicUrl: null, state: this.isConfigured() ? "disabled" : "unconfigured" };
+    this.status = {
+      ...this.status,
+      phase: null,
+      error: null,
+      publicUrl: null,
+      domainBinding: null,
+      restoredByAutoStart: false,
+      state: this.isConfigured() ? "disabled" : "unconfigured",
+    };
     return this.getView();
   }
 
@@ -192,20 +256,23 @@ export class PublicAccessManager {
     return this.getView();
   }
 
-  /** 服务启动时的恢复：只有用户同意过、且本机设了 web 密码，才自动开洞。 */
+  /** 服务启动时的恢复：只有用户同意过、且本机设了 web 密码（env 或设置文件记录），才自动开洞。 */
   async restore(): Promise<PublicAccessView> {
     this.reload();
     if (this.settings.autoStart
       && this.settings.consentVersion === PUBLIC_ACCESS_CONSENT_VERSION
       && this.isConfigured()
-      && isWebPasswordEnabled(this.env().PI_WEB_PASSWORD)) {
-      await this.start();
+      && isWebPasswordSourceActive(this.env().PI_WEB_PASSWORD)) {
+      // 一次性标记：connect 开头同步消费，成功 online 后状态里标注「按自动启动恢复」。
+      // finally 兜底清掉 start 在 connect 之前就被拒绝（stopUnconfirmed 等）时的残留。
+      this.autoStartRestore = true;
+      try { await this.start(); } finally { this.autoStartRestore = false; }
     }
     return this.getView();
   }
 
   private assertPassword(): void {
-    if (!isWebPasswordEnabled(this.env().PI_WEB_PASSWORD)) {
+    if (!isWebPasswordSourceActive(this.env().PI_WEB_PASSWORD)) {
       throw new CloudflareTunnelError("configuration", "Set PI_WEB_PASSWORD before exposing the server on the internet");
     }
   }
@@ -244,8 +311,19 @@ export class PublicAccessManager {
   }
 
   /**
+   * waitForRoute 的结论：拿到入口 origin / 固定域名绑定超时 / null（已被取代）。
+   *
    * 仪表盘隧道的向导要等到看见本连接器才给出「路由」这一步，
    * 所以连接器要保持注册，直到推下来的路由把某个域名指向本机网关。
+   *
+   * 两条路径：
+   *   - 未填自定义域名（quick 永不走这里）：沿用原逻辑，取第一条指向本机
+   *     网关的路由，推送不到就等连接器退出。
+   *   - 填了自定义域名（named + customUrl）：在预算内轮询推送的 ingress 规则。
+   *     匹配自定义域名且指向本机网关 → 绑定成功；只推来别的域名 → 立即在
+   *     状态里给出「未绑定」结论（设置页据此显示指引）并继续等用户在
+   *     Cloudflare 控制台补路由（推送到达即自动绑定，无需重启隧道）；
+   *     预算耗尽仍未绑定 → timeout 结论，由 connect 落成 failed(route)。
    */
   private async waitForRoute(
     tunnel: CloudflareTunnel,
@@ -253,17 +331,44 @@ export class PublicAccessManager {
     generation: number,
     signal: AbortSignal,
     onWait: () => void,
-  ): Promise<string | null> {
+  ): Promise<RouteDiscovery | null> {
     let routes = await tunnel.publishedRoutes(null, { timeoutMs: ROUTE_WAIT_MS, signal });
+    const customUrl = this.settings.mode === "named" ? this.settings.customUrl : "";
+    if (!customUrl) {
+      while (this.current(generation)) {
+        const origin = routes && publishedGatewayOrigin(routes, port);
+        if (origin) { this.status.error = null; return { status: "origin", origin }; }
+        this.status.phase = "routing";
+        this.status.error = routes?.some((route) => route.hostname) ? "route" : null;
+        onWait();
+        const next = await tunnel.publishedRoutes(routes, { signal });
+        if (next === routes && this.current(generation)) {
+          throw new CloudflareTunnelError("network", "Cloudflare disconnected while waiting for a route");
+        }
+        routes = next;
+      }
+      return null;
+    }
+    const deadline = Date.now() + (this.options.bindingBudgetMs ?? DOMAIN_BINDING_BUDGET_MS);
     while (this.current(generation)) {
-      const origin = routes && publishedGatewayOrigin(routes, port, this.settings.customUrl || undefined);
-      if (origin) { this.status.error = null; return origin; }
+      const binding = classifyDomainBinding(routes, customUrl, port);
+      this.status.domainBinding = { state: binding.state, reason: binding.reason };
+      if (binding.state === "bound") {
+        this.status.error = null;
+        return { status: "origin", origin: binding.origin! };
+      }
       this.status.phase = "routing";
       this.status.error = routes?.some((route) => route.hostname) ? "route" : null;
       onWait();
-      const next = await tunnel.publishedRoutes(routes, { signal });
-      if (next === routes && this.current(generation)) {
-        throw new CloudflareTunnelError("network", "Cloudflare disconnected while waiting for a route");
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return { status: "timeout" };
+      const next = await tunnel.publishedRoutes(routes, { timeoutMs: remaining, signal });
+      if (!this.current(generation)) return null;
+      if (next === routes) {
+        // 等待只有「新推送 / 中止 / 超时 / 连接器退出」四种出口；中止与退出已被
+        // current() 截住。超时刚好压线时在这里收口，其余（理论上不可达）下轮重判。
+        if (Date.now() >= deadline) return { status: "timeout" };
+        continue;
       }
       routes = next;
     }
@@ -271,6 +376,10 @@ export class PublicAccessManager {
   }
 
   private async connect(generation: number, onRouteWait: () => void): Promise<PublicAccessStatus> {
+    // 一次性消费 restore() 的标记：成功 online 后状态里标注「按自动启动恢复」。
+    // connect 被 start() 同步调用，消费一定发生在 restore() 的 finally 清理之前。
+    const restoredByAutoStart = this.autoStartRestore;
+    this.autoStartRestore = false;
     const controller = new AbortController();
     this.controller = controller;
     this.status = {
@@ -278,8 +387,12 @@ export class PublicAccessManager {
       error: null,
       phase: "preparing",
       publicUrl: null,
+      domainBinding: null,
+      restoredByAutoStart: false,
     };
     const port = this.localPort();
+    // 固定域名绑定超时的标记：终态里保留 timeout 结论（其余失败一律清空绑定状态）。
+    let bindingTimeout = false;
     try {
       const tunnel = await (this.options.startTunnel ?? startCloudflareTunnel)({
         mode: this.settings.mode,
@@ -291,29 +404,44 @@ export class PublicAccessManager {
       if (!this.current(generation)) {
         this.stoppingTunnels.add(tunnel);
         try { await tunnel.stop(); this.stoppingTunnels.delete(tunnel); }
-        catch { this.stopUnconfirmed = true; this.status = { state: "failed", error: "stop", publicUrl: null, phase: null }; }
+        catch {
+          this.stopUnconfirmed = true;
+          this.status = { state: "failed", error: "stop", publicUrl: null, phase: null, domainBinding: null, restoredByAutoStart: false };
+        }
         return this.getStatus();
       }
       this.tunnel = tunnel;
       this.unsubscribe = tunnel.onExit(() => { if (this.current(generation) && this.wanted) void this.recoverAfterExit(); });
-      const publicUrl = tunnel.url ?? await this.waitForRoute(tunnel, port, generation, controller.signal, onRouteWait);
-      if (!publicUrl || !this.current(generation)) return this.getStatus();
+      // quick 模式的入口来自日志 URL（tunnel.url）；命名隧道走推送规则。
+      const discovery = tunnel.url
+        ? { status: "origin" as const, origin: tunnel.url }
+        : await this.waitForRoute(tunnel, port, generation, controller.signal, onRouteWait);
+      if (!discovery || !this.current(generation)) return this.getStatus();
+      if (discovery.status === "timeout") {
+        bindingTimeout = true;
+        this.status.domainBinding = { state: "timeout", reason: null };
+        throw new CloudflareTunnelError("route", "The custom domain was not bound before the route wait expired");
+      }
+      const publicUrl = discovery.origin;
       writePublicAccessOrigin(publicUrl, this.settingsPath());
       if (!this.current(generation)) return this.getStatus();
       this.status.phase = "checking";
-      const verify = this.options.verify ?? verifyPublicGateway;
-      let verified = false;
-      for (let attempt = 0; attempt < VERIFY_ATTEMPTS && this.current(generation); attempt++) {
-        if (await verify(publicUrl)) { verified = true; break; }
-      }
+      const verified = await this.verifyWithRetries(publicUrl, generation, controller.signal);
       if (!verified) throw new CloudflareTunnelError("network", "The public hostname does not reach this gateway");
-      this.status = { state: "online", error: null, phase: null, publicUrl };
+      this.status = {
+        state: "online",
+        error: null,
+        phase: null,
+        publicUrl,
+        domainBinding: this.status.domainBinding,
+        restoredByAutoStart,
+      };
       this.retryCount = 0;
     } catch (error) {
       if (error instanceof CloudflareTunnelError && error.retryStop) {
         this.pendingStops.add(error.retryStop);
         this.stopUnconfirmed = true;
-        this.status = { state: "failed", error: "stop", phase: null, publicUrl: null };
+        this.status = { state: "failed", error: "stop", phase: null, publicUrl: null, domainBinding: null, restoredByAutoStart: false };
       }
       if (!this.current(generation)) return this.getStatus();
       this.unsubscribe?.();
@@ -330,14 +458,42 @@ export class PublicAccessManager {
       if (!this.current(generation)) return this.getStatus();
       if (!closed) {
         this.stopUnconfirmed = true;
-        this.status = { state: "failed", error: "stop", phase: null, publicUrl: null };
+        this.status = { state: "failed", error: "stop", phase: null, publicUrl: null, domainBinding: null, restoredByAutoStart: false };
       } else {
         const category = classifyPublicAccessError(error);
-        this.status = { state: "failed", error: category, phase: null, publicUrl: null };
+        this.status = {
+          state: "failed",
+          error: category,
+          phase: null,
+          publicUrl: null,
+          domainBinding: bindingTimeout ? { state: "timeout", reason: null } : null,
+          restoredByAutoStart: false,
+        };
         if (category === "network") this.scheduleRetry();
       }
     }
     return this.getStatus();
+  }
+
+  /**
+   * 公网校验按分间隔节奏重试（参照 cc-haha 的 VERIFY_WAITS_MS）：新域名/新地址的
+   * DNS 传播常让首查失败，立即三连败会误判成网络故障并把隧道拆了重建。
+   * 等待可被 signal 中止（stop），中止按「未通过」返回，由 generation 守卫兜底。
+   */
+  private async verifyWithRetries(origin: string, generation: number, signal: AbortSignal): Promise<boolean> {
+    const verify = this.options.verify ?? verifyPublicGateway;
+    const waits = this.options.verifyWaitsMs ?? VERIFY_WAITS_MS;
+    const deadline = Date.now() + (this.options.verifyBudgetMs ?? VERIFY_BUDGET_MS);
+    for (const [index, wait] of waits.entries()) {
+      if (index > 0) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        if (!await pause(Math.min(wait, remaining), signal)) return false;
+      }
+      if (!this.current(generation)) return false;
+      if (await verify(origin)) return true;
+    }
+    return false;
   }
 
   private scheduleRetry(): void {
@@ -390,6 +546,8 @@ export class PublicAccessManager {
           phase: null,
           error: closed ? null : "stop",
           state: closed ? (this.isConfigured() ? "disabled" : "unconfigured") : "failed",
+          domainBinding: null,
+          restoredByAutoStart: false,
         };
       }
     } finally {

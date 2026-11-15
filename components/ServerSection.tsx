@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { copyText } from "@/lib/clipboard";
+import { openExternal } from "@/lib/desktop-native";
 import { AppSelect } from "./AppSelect";
 import { ConfigButton, ConfigSwitch } from "./SettingsUi";
 
@@ -11,6 +12,10 @@ interface PublicAccessView {
   phase: "preparing" | "connecting" | "routing" | "checking" | null;
   error: "network" | "configuration" | "token" | "route" | "runtime" | "stop" | null;
   publicUrl: string | null;
+  /** 命名隧道 + 自定义域名的固定域名绑定判定；quick / 未填域名恒为 null。 */
+  domainBinding: { state: "polling" | "bound" | "unbound" | "timeout"; reason: "other-hostnames" | "service-mismatch" | null } | null;
+  /** 本次 online 是否由服务器启动时的自动恢复建立。 */
+  restoredByAutoStart: boolean;
   mode: "quick" | "named";
   localPort: number;
   customUrl: string;
@@ -31,6 +36,12 @@ interface ServerSettingsResponse {
   port: number | null;
   configured: number | null;
   local: boolean;
+}
+
+interface WebAuthStatus {
+  enabled: boolean;
+  authenticated?: boolean;
+  source: "env" | "stored" | null;
 }
 
 const LIVE_STATES = new Set(["connecting", "reconnecting", "online"]);
@@ -63,7 +74,29 @@ export function ServerSection() {
   // d5-1：start/stop 的 POST 只更新视图、从不续排轮询链——从非 live 态启动隧道时
   // 状态会永远停在 connecting。POST 成功后踢一次轮询 effect 重新探测。
   const [publicAccessPollKick, setPublicAccessPollKick] = useState(0);
+  // Web 密码（Settings › General › Server）：状态来自 GET /api/web-auth 的
+  // { enabled, source }；表单自己的 busy/提示独立，避免与端口/隧道互相锁死。
+  const [webAuth, setWebAuth] = useState<WebAuthStatus | null>(null);
+  const [pwCurrent, setPwCurrent] = useState("");
+  const [pwNext, setPwNext] = useState("");
+  const [pwRepeat, setPwRepeat] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwNote, setPwNote] = useState<string | null>(null);
+  const [pwError, setPwError] = useState<string | null>(null);
   const initialized = useRef(false);
+
+  const loadWebAuth = useCallback(async () => {
+    try {
+      const response = await fetch("/api/web-auth", { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const next = await response.json() as WebAuthStatus;
+      setWebAuth({ enabled: next.enabled === true, source: next.source ?? null });
+    } catch {
+      setWebAuth(null);
+    }
+  }, []);
+
+  useEffect(() => { void loadWebAuth(); }, [loadWebAuth]);
 
   useEffect(() => {
     let cancelled = false;
@@ -183,6 +216,75 @@ export function ServerSection() {
   }, [t]);
 
   const view = publicAccess?.view;
+  // PUT/DELETE /api/web-auth/password 的错误码 → 本地化文案；原始 error 只进 title。
+  const passwordErrorText = useCallback((status: number, body: Record<string, unknown>): string => {
+    const code = typeof body.code === "string" ? body.code : "";
+    if (code === "managed-by-env") return t("webPassword.error.managedByEnv");
+    if (code === "invalid-current") return t("webPassword.error.invalidCurrent");
+    if (code === "invalid-new") return t("webPassword.error.invalidNew");
+    if (code === "local-only" || status === 403) return t("publicAccess.localOnly");
+    if (status === 429) {
+      const retryAfterMs = typeof body.retryAfterMs === "number" ? body.retryAfterMs : 1000;
+      const seconds = Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? Math.ceil(retryAfterMs / 1000) : 1;
+      return t("auth.tooManyAttempts", { seconds });
+    }
+    return t("webPassword.error.failed");
+  }, [t]);
+
+  const savePassword = useCallback(async () => {
+    if (pwNext !== pwRepeat) {
+      setPwError(t("webPassword.mismatch"));
+      return;
+    }
+    setPwBusy(true);
+    setPwError(null);
+    setPwNote(null);
+    try {
+      const response = await fetch("/api/web-auth/password", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(webAuth?.source === "stored" ? { currentPassword: pwCurrent } : {}),
+          newPassword: pwNext,
+        }),
+      });
+      const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+      if (!response.ok) {
+        setPwError(passwordErrorText(response.status, body));
+        return;
+      }
+      setPwCurrent("");
+      setPwNext("");
+      setPwRepeat("");
+      setPwNote(t("webPassword.saved"));
+      await loadWebAuth();
+    } catch {
+      setPwError(t("webPassword.error.failed"));
+    } finally {
+      setPwBusy(false);
+    }
+  }, [loadWebAuth, passwordErrorText, pwCurrent, pwNext, pwRepeat, t, webAuth?.source]);
+
+  const clearPassword = useCallback(async () => {
+    setPwBusy(true);
+    setPwError(null);
+    setPwNote(null);
+    try {
+      const response = await fetch("/api/web-auth/password", { method: "DELETE" });
+      const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+      if (!response.ok) {
+        setPwError(passwordErrorText(response.status, body));
+        return;
+      }
+      setPwNote(t("webPassword.cleared"));
+      await loadWebAuth();
+    } catch {
+      setPwError(t("webPassword.error.failed"));
+    } finally {
+      setPwBusy(false);
+    }
+  }, [loadWebAuth, passwordErrorText, t]);
+
   const json = (body: unknown): RequestInit => ({
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -211,6 +313,32 @@ export function ServerSection() {
     if (view.phase) return t(`publicAccess.phase.${view.phase}`);
     if (view.error) return `${t(`publicAccess.state.${view.state}`)} · ${t(`publicAccess.error.${view.error}`)}`;
     return t(`publicAccess.state.${view.state}`);
+  })();
+
+  // 固定域名绑定向导的状态+指引（named + customUrl 才有意义；quick 的地址由
+  // Cloudflare 分配，没有绑定概念，状态行走上面的 statusText）。
+  const bindingText = (() => {
+    const binding = view?.domainBinding;
+    if (!binding || !view?.customUrl) return null;
+    let hostname = view.customUrl;
+    try { hostname = new URL(view.customUrl).hostname; } catch { /* 校验前用户可能仍在输入 */ }
+    switch (binding.state) {
+      case "polling": return t("publicAccess.binding.polling");
+      case "bound": return t("publicAccess.binding.bound");
+      case "unbound":
+        return binding.reason === "service-mismatch"
+          ? t("publicAccess.binding.unboundService", { hostname })
+          : t("publicAccess.binding.unboundOther", { hostname, port: view.localPort });
+      case "timeout": return t("publicAccess.binding.timeout");
+    }
+  })();
+
+  // Web 密码状态行；表单只在「记录来源」时要求当前密码，env 来源时整块只读。
+  const webPasswordStatus = (() => {
+    if (!webAuth) return t("server.loading");
+    if (webAuth.source === "env") return t("webPassword.statusEnv");
+    if (webAuth.source === "stored") return t("webPassword.statusStored");
+    return t("webPassword.statusNone");
   })();
 
   return (
@@ -247,22 +375,97 @@ export function ServerSection() {
 
         <div className="settings-option">
           <span className="settings-option-text">
+            <span className="settings-option-title">{t("webPassword.title")}</span>
+            <span className="settings-option-hint" role="status">{pwNote ?? webPasswordStatus}</span>
+          </span>
+          {webAuth?.source === "stored" && (
+            <ConfigButton
+              className="settings-option-action"
+              variant="ghost"
+              disabled={pwBusy}
+              onClick={() => void clearPassword()}
+            >
+              {t("webPassword.clearPassword")}
+            </ConfigButton>
+          )}
+        </div>
+
+        {webAuth && webAuth.source !== "env" && (
+          <>
+            <label className="remote-access-step">
+              {webAuth.source === "stored" && (
+                <>
+                  <span className="settings-option-hint">{t("webPassword.current")}</span>
+                  <input
+                    className="mcp-add-input"
+                    type="password"
+                    value={pwCurrent}
+                    autoComplete="current-password"
+                    disabled={pwBusy}
+                    spellCheck={false}
+                    onChange={(event) => setPwCurrent(event.target.value)}
+                  />
+                </>
+              )}
+              <span className="settings-option-hint">{t("webPassword.new")}</span>
+              <input
+                className="mcp-add-input"
+                type="password"
+                value={pwNext}
+                autoComplete="new-password"
+                disabled={pwBusy}
+                spellCheck={false}
+                onChange={(event) => setPwNext(event.target.value)}
+              />
+              <span className="settings-option-hint">{t("webPassword.confirm")}</span>
+              <input
+                className="mcp-add-input"
+                type="password"
+                value={pwRepeat}
+                autoComplete="new-password"
+                disabled={pwBusy}
+                spellCheck={false}
+                onChange={(event) => setPwRepeat(event.target.value)}
+              />
+            </label>
+            <ConfigButton
+              variant="ghost"
+              disabled={pwBusy || pwNext.length === 0}
+              onClick={() => void savePassword()}
+            >
+              {webAuth.source === "stored" ? t("webPassword.changePassword") : t("webPassword.setPassword")}
+            </ConfigButton>
+          </>
+        )}
+        {pwError && <span className="settings-option-hint" role="alert">{pwError}</span>}
+
+        <div className="settings-option">
+          <span className="settings-option-text">
             <span className="settings-option-title">{t("publicAccess.title")}</span>
             <span className="settings-option-hint" role="status">{statusText}</span>
           </span>
           {view?.publicUrl && (
-            <ConfigButton
-              className="settings-option-action"
-              variant="ghost"
-              onClick={() => {
-                void copyText(view.publicUrl!).then(() => {
-                  setCopied(true);
-                  window.setTimeout(() => setCopied(false), 1500);
-                });
-              }}
-            >
-              {copied ? t("publicAccess.copied") : t("publicAccess.copy")}
-            </ConfigButton>
+            <div className="settings-action-group">
+              <ConfigButton
+                className="settings-option-action"
+                variant="ghost"
+                onClick={() => {
+                  void copyText(view.publicUrl!).then(() => {
+                    setCopied(true);
+                    window.setTimeout(() => setCopied(false), 1500);
+                  });
+                }}
+              >
+                {copied ? t("publicAccess.copied") : t("publicAccess.copy")}
+              </ConfigButton>
+              <ConfigButton
+                className="settings-option-action"
+                variant="ghost"
+                onClick={() => void openExternal(view.publicUrl!)}
+              >
+                {t("publicAccess.open")}
+              </ConfigButton>
+            </div>
           )}
         </div>
 
@@ -339,6 +542,14 @@ export function ServerSection() {
                   />
                   <span className="settings-option-hint">{t("publicAccess.customUrlHint")}</span>
                 </label>
+                {bindingText && (
+                  <div className="settings-option">
+                    <span className="settings-option-text">
+                      <span className="settings-option-title">{t("publicAccess.binding.title")}</span>
+                      <span className="settings-option-hint" role="status">{bindingText}</span>
+                    </span>
+                  </div>
+                )}
                 <ConfigButton
                   variant="ghost"
                   disabled={busy || !publicAccess?.local}
@@ -373,7 +584,9 @@ export function ServerSection() {
             <div className="settings-option">
               <span className="settings-option-text">
                 <span className="settings-option-title">{t("publicAccess.autoStart")}</span>
-                <span className="settings-option-hint">{t("publicAccess.autoStartHint")}</span>
+                <span className="settings-option-hint">
+                  {view.restoredByAutoStart ? t("publicAccess.autoStartRestored") : t("publicAccess.autoStartHint")}
+                </span>
               </span>
               <ConfigSwitch
                 checked={view.autoStart}

@@ -49,7 +49,7 @@ const data = {
   '/api/server-settings':{port:30141,configured:30141,local:true},
   '/api/public-access':{passwordSet:true,local:true,binary:{available:true,source:'fixture'},
     view:{state:'disabled',phase:null,error:null,publicUrl:null,mode:'quick',localPort:30141,
-      customUrl:'',tokenSet:false,tunnelId:null,autoStart:false,enabled:false}},
+      customUrl:'',domainBinding:null,restoredByAutoStart:false,tokenSet:false,tunnelId:null,autoStart:false,enabled:false}},
 };
 const server = createServer((req,res)=>{
   const path = new URL(req.url,'http://localhost').pathname;

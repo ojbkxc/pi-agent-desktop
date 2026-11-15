@@ -21,7 +21,7 @@ const server = createServer((req, res) => {
       : req.url.startsWith("/api/updates") ? { components: [], updates: [] }
         : req.url.startsWith("/api/public-access") ? { passwordSet: true, local: true, binary: { available: true, source: "fixture" },
           view: { state: "disabled", phase: null, error: null, publicUrl: null, mode: "quick", localPort: 30141,
-            customUrl: "", tokenSet: false, tunnelId: null, autoStart: false, enabled: false } }
+            customUrl: "", domainBinding: null, restoredByAutoStart: false, tokenSet: false, tunnelId: null, autoStart: false, enabled: false } }
           : req.url.startsWith("/api/server-settings") ? { port: 30141, configured: 30141, local: true } : {};
     res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(data)); return;
   }
