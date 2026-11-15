@@ -35,7 +35,9 @@ test("local HTML previews are served as documents with a script-blocking CSP", (
   // CSS/images resolve. A merge once dropped SERVE_EXT_TO_MIME from
   // getServeMime and every .html came back as application/octet-stream.
   const serveMime = source.slice(source.indexOf("function getServeMime"), source.indexOf("function streamFile"));
-  assert.match(serveMime, /\|\| SERVE_EXT_TO_MIME\[getFileExt\(filePath\)\]/);
+  // Object.hasOwn keeps an extension like "constructor" from resolving to an
+  // inherited property (upstream #1637); the lookup itself must stay here.
+  assert.match(serveMime, /SERVE_EXT_TO_MIME,\s*ext\)\s*\?\s*SERVE_EXT_TO_MIME\[ext\]/);
   assert.match(source, /html: "text\/html; charset=utf-8"/);
   assert.match(source, /css: "text\/css; charset=utf-8"/);
   const csp = source.slice(source.indexOf("const HTML_PREVIEW_CSP"), source.indexOf('].join("; ");'));

@@ -38,7 +38,7 @@ import { createExactSystemPromptExtension } from "./exact-system-prompt";
 import { createCompactionSettingsManager } from "./compaction-policy";
 import { createCompactionModelExtension } from "./compaction-extension";
 import { appendSubagentInputFiles, loadSubagentInputFiles } from "./subagent-input";
-import { projectTrustReloadOptions } from "./project-trust";
+import { getProjectTrustStatus } from "./project-trust";
 import { resolveShellTools } from "./powershell-settings";
 import { isBuiltInSubagentsEnabled, readSubagentSettings } from "./subagent-settings";
 import { additionalForkSkillPaths } from "./fork-skill-paths";
@@ -296,7 +296,12 @@ export function createSubagentController(
       // 的 chatOnly 分支一致地不装配；其余成员（含 loadExtensions=false 的普通子代理）都装配。
       // 与恢复路径 lib/rpc-manager.ts 的 compactionEnabled 必须同规则。
       const compactionEnabled = request.lean !== true && !chatOnly;
-      const baseSettingsManager = SettingsManager.create(childCwd, agentDir);
+      // The child runs on the parent session's trust, as pi's `--approve` / `--no-approve`
+      // decide a run: read once here, never written. Created trusted by default, a child
+      // that loads no resources read the project settings of a folder never trusted; and
+      // an isolated run's throwaway worktree has no decision of its own to find.
+      const projectTrusted = getProjectTrustStatus(parent.cwd, agentDir).trusted;
+      const baseSettingsManager = SettingsManager.create(childCwd, agentDir, { projectTrusted });
       // 成员会话与普通会话同规则（见 lib/rpc-manager.ts）：Windows 上 Git 不在
       // %ProgramFiles% 时补 shellPath，否则成员的 bash 工具同样报 "No bash shell found"。
       const settingsManager = compactionEnabled
@@ -337,9 +342,6 @@ export function createSubagentController(
               }
             : {}),
         },
-        ...((profile.loadExtensions || profile.loadSkills)
-          ? { resourceLoaderReloadOptions: projectTrustReloadOptions(childCwd, agentDir) }
-          : {}),
       });
 
       // 内置扩展的工具名不随 profile.loadExtensions 开关（那是给文件系统扩展用的），

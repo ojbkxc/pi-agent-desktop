@@ -27,6 +27,7 @@ import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security"
 import {
   inspectUploadTargets,
   parseUploadConflictStrategy,
+  replaceUploadFile,
   validateUploadFileNames,
 } from "@/lib/file-upload";
 import {
@@ -37,7 +38,6 @@ import {
 import { isDesktopApiRequestAllowed } from "@/lib/desktop-api-auth";
 import { filePathFromApiSegments, isWindowsAbsolutePath, samePath } from "@/lib/paths";
 import { hasParentDirectorySegment } from "@/lib/path-security";
-import { replaceFileAtomicBytesSync } from "@/lib/atomic-file";
 
 const IGNORED_NAMES = new Set([
   "node_modules", ".git", ".next", "dist", "build", "__pycache__",
@@ -309,9 +309,14 @@ export async function POST(
           continue;
         }
         try {
-          // Atomic replace: no unlink-then-copy window that loses the file
-          // already at the destination when the new write fails.
-          replaceFileAtomicBytesSync(destination, fs.readFileSync(source.sourcePath));
+          // The swap keeps the old file at the destination when the write or
+          // rename fails, and refuses a symlink that appeared since the
+          // conflict check instead of replacing through it.
+          if (conflictSet.has(source.fileName)) {
+            replaceUploadFile(destination, fs.readFileSync(source.sourcePath));
+          } else {
+            fs.writeFileSync(destination, fs.readFileSync(source.sourcePath), { flag: "wx" });
+          }
           uploaded.push(source.fileName);
         } catch (error) {
           errors.push({ name: source.fileName, error: error instanceof Error ? error.message : String(error) });
@@ -390,10 +395,14 @@ export async function POST(
       }
 
       try {
-        // Atomic replace: a failed write leaves the old file at the destination
-        // intact instead of deleting it first, and no "wx" race on a name that
-        // reappeared between the conflict check and the write.
-        replaceFileAtomicBytesSync(destination, bytes);
+        // The swap keeps the old file at the destination when the write or
+        // rename fails, and refuses a symlink that appeared since the
+        // conflict check instead of replacing through it.
+        if (conflictSet.has(file.name)) {
+          replaceUploadFile(destination, bytes);
+        } else {
+          fs.writeFileSync(destination, bytes, { flag: "wx" });
+        }
         uploaded.push(file.name);
       } catch (error) {
         errors.push({ name: file.name, error: error instanceof Error ? error.message : String(error) });
@@ -469,12 +478,14 @@ function getContentDisposition(filePath: string, asDownload = false): string {
 function getServeMime(filePath: string): string {
   // SERVE_EXT_TO_MIME is what lets an HTML preview render and load its own
   // stylesheets; a merge once dropped it and every HTML file came back as
-  // application/octet-stream.
+  // application/octet-stream. Object.hasOwn keeps an extension like
+  // "constructor" from resolving to an inherited property instead of a MIME.
+  const ext = getFileExt(filePath);
   return getImageMime(filePath)
     || getAudioMime(filePath)
     || getDocumentMime(filePath)
     || getVideoMime(filePath)
-    || SERVE_EXT_TO_MIME[getFileExt(filePath)]
+    || (Object.hasOwn(SERVE_EXT_TO_MIME, ext) ? SERVE_EXT_TO_MIME[ext] : null)
     || "application/octet-stream";
 }
 
@@ -508,7 +519,7 @@ function streamFile(filePath: string, stat: fs.Stats, contentType: string, range
   }
 
   const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader);
-  if (!match) {
+  if (!match || (!match[1] && !match[2])) {
     return new Response(null, {
       status: 416,
       headers: {

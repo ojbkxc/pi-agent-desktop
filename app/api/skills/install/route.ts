@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { runNpx } from "@/lib/npx";
-import { childProcessEnvironment } from "@/lib/project-command-env";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import { getProjectTrustStatus } from "@/lib/project-trust";
@@ -47,12 +46,11 @@ export async function POST(req: Request) {
 
     // Private package URLs may contain credentials; never log raw argv.
     if (isVerboseLogging()) console.log("[skills/install] running npx skills add");
-    // The sanitizer keeps PI_WEB_PASSWORD and the desktop token out of npx and
-    // of the install scripts the package runs (d2-1); FORCE_COLOR is ours.
+    // runNpx() applies npxEnvironment(): PI_WEB_PASSWORD and the desktop token
+    // stay out of npx and of the install scripts the package runs (d2-1).
     const { stdout, stderr } = await runNpx(args, {
       timeout: 60000,
       cwd: !isGlobal && cwd ? cwd : undefined,
-      env: childProcessEnvironment({ FORCE_COLOR: "0" }),
     });
 
     const output = (stdout + stderr).replace(ANSI_RE, "");

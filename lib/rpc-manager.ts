@@ -7,6 +7,7 @@ import { join, resolve } from "path";
 import { validateAgentImages } from "./image-attachments";
 import { userImageDisplayText, userMessageImageCount } from "./user-image-display";
 import { invalidateModelsCache } from "./models-cache";
+import { invalidateModelRuntimeWithExtensions } from "./model-runtime";
 import { resolveVisibleModels, selectInitialModelScope } from "./model-scope";
 import {
   createProjectCommandBashExtension,
@@ -1586,6 +1587,8 @@ export class AgentSessionWrapper {
           this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
         }
         invalidateModelsCache();
+        // /reload is how an edited extension is picked up; the provider lists' runtime follows.
+        invalidateModelRuntimeWithExtensions();
         return { success: true };
       }
 
@@ -2415,6 +2418,8 @@ export class AgentSessionWrapper {
             this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
           },
         });
+        // As the `reload` command: the provider lists' runtime follows.
+        invalidateModelRuntimeWithExtensions();
       },
     };
   }
