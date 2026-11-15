@@ -18,6 +18,7 @@ import { FormationBand } from "@/components/AgentTeams/FormationBand";
 import { TeamMemberModelPanel } from "@/components/AgentTeams/TeamMemberModelPanel";
 import { DispatchPanel } from "@/components/AgentTeams/DispatchPanel";
 import { TeamLifecycleActions } from "@/components/AgentTeams/TeamLifecycleActions";
+import { AgentTeamsRuntimeControls } from "@/components/AgentTeams/AgentTeamsRuntimeControls";
 import { FallbackSettings } from "@/components/AgentTeams/FallbackSettings";
 import { AgentTeamsMemberInspector } from "@/components/AgentTeams/AgentTeamsMemberInspector";
 import { AgentTeamTaskDetail } from "@/components/AgentTeams/AgentTeamTaskDetail";
@@ -423,6 +424,17 @@ export function AgentTeamsView({
             </div>
           )}
         </header>
+
+        {/* 团队运行时控件（cc-haha AgentTeamsRuntimeControls 移植）：暂停/恢复。
+            回放（非实时）时 readOnly 不渲染——运行时操作只作用于实时 incarnation。 */}
+        {snapshot && (
+          <div style={{ padding: "0 16px" }}>
+            <AgentTeamsRuntimeControls
+              team={snapshot.team}
+              readOnly={!timeline.isLive}
+            />
+          </div>
+        )}
 
         {snapshot && (
           <div className="agent-teams-timeline" role="group" aria-label={t("teams.timeline")}>

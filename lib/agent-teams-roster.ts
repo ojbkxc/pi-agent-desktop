@@ -25,6 +25,8 @@ export interface RosterMember {
   agentId: string;
   name: string;
   sessionId?: string;
+  /** 该成员当前生效的运行时（config.json 顶层 providerId / model / effortLevel）。 */
+  runtime?: { providerId?: string; modelId?: string; effortLevel?: string };
 }
 
 /** plan.json 成员（只取合并需要的字段）。 */
@@ -32,6 +34,8 @@ export interface PlanRosterMember {
   /** plan 成员 id（plan 的 id 命名空间）；无 id 时回退成员名。 */
   agentId: string;
   name: string;
+  /** plan.runtime（providerId / modelId / effortLevel）。 */
+  runtime?: { providerId?: string; modelId?: string; effortLevel?: string };
 }
 
 /**
@@ -47,7 +51,11 @@ export function mergeRosterMembers(
   for (const planMember of planMembers) {
     if (!planMember.name || seen.has(planMember.name)) continue;
     seen.add(planMember.name);
-    merged.push({ agentId: planMember.agentId, name: planMember.name });
+    merged.push({
+      agentId: planMember.agentId,
+      name: planMember.name,
+      ...(planMember.runtime ? { runtime: planMember.runtime } : {}),
+    });
   }
   return merged;
 }
@@ -72,7 +80,19 @@ export async function readPlanRosterMembers(teamDir: string): Promise<PlanRoster
     const name = typeof record.name === "string" ? record.name : "";
     if (!name) continue;
     const id = typeof record.id === "string" && record.id ? record.id : name;
-    members.push({ agentId: id, name });
+    const runtimeRaw = record.runtime;
+    const runtime = runtimeRaw && typeof runtimeRaw === "object" ? runtimeRaw as Record<string, unknown> : null;
+    const runtimeMember: PlanRosterMember = { agentId: id, name };
+    if (runtime) {
+      if (typeof runtime.providerId === "string" && runtime.providerId) runtimeMember.runtime = { providerId: runtime.providerId };
+      if (typeof runtime.modelId === "string" && runtime.modelId) {
+        runtimeMember.runtime = { ...(runtimeMember.runtime ?? {}), modelId: runtime.modelId };
+      }
+      if (typeof runtime.effortLevel === "string" && runtime.effortLevel) {
+        runtimeMember.runtime = { ...(runtimeMember.runtime ?? {}), effortLevel: runtime.effortLevel };
+      }
+    }
+    members.push(runtimeMember);
   }
   return members;
 }
@@ -90,7 +110,14 @@ export async function readMergedRoster(teamDir: string): Promise<RosterMember[] 
     const name = typeof record.name === "string" ? record.name : "";
     if (!agentId || !name) continue;
     const sessionId = typeof record.sessionId === "string" && record.sessionId ? record.sessionId : undefined;
-    members.push(sessionId ? { agentId, name, sessionId } : { agentId, name });
+    const runtimeRaw = record;
+    const runtime: RosterMember["runtime"] = {};
+    if (typeof runtimeRaw.providerId === "string" && runtimeRaw.providerId) runtime.providerId = runtimeRaw.providerId;
+    if (typeof runtimeRaw.model === "string" && runtimeRaw.model) runtime.modelId = runtimeRaw.model;
+    if (typeof runtimeRaw.effortLevel === "string" && runtimeRaw.effortLevel) runtime.effortLevel = runtimeRaw.effortLevel;
+    const member: RosterMember = sessionId ? { agentId, name, sessionId } : { agentId, name };
+    if (Object.keys(runtime).length > 0) member.runtime = runtime;
+    members.push(member);
   }
   const planMembers = await readPlanRosterMembers(teamDir);
   return mergeRosterMembers(members, planMembers);
