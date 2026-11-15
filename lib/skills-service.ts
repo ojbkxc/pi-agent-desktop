@@ -13,6 +13,10 @@ export async function loadSkillsWithInstallInfo(cwd: string): Promise<SkillsResp
     cwd,
     agentDir,
     additionalSkillPaths: additionalForkSkillPaths(true),
+    // Extensions add skills only through `resources_discover` at session_start,
+    // which a listing never runs, so loading them here would only import every
+    // extension for nothing (#1226).
+    noExtensions: true,
   });
   await loader.reload(projectTrustReloadOptions(cwd, agentDir));
   const { skills, diagnostics } = loader.getSkills();

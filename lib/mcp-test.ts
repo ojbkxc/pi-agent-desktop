@@ -13,7 +13,7 @@ import {
 import { guardedCredentialStore, mcpOAuthUrl, mcpSignInKey, mcpSignOutCount, mcpSignOutGuard, type McpSignInWriteGuard } from "./mcp-sign-out";
 import { recordMcpStatus } from "./mcp-status";
 import { createPiWebMcpTransportFactory, resolvedConfigValues } from "./mcp-transport";
-import { createModelRuntimeWithExtensions } from "./model-runtime";
+import { getModelRuntimeWithExtensions } from "./model-runtime";
 import type {
   McpClient,
   McpOAuthCredentialStore,
@@ -394,7 +394,7 @@ function providerTokenReader(): (provider: string) => Promise<string | undefined
   let registry: Promise<ModelRegistry> | undefined;
   return async (provider) => {
     try {
-      registry ??= createModelRuntimeWithExtensions().then((runtime) => new ModelRegistry(runtime));
+      registry ??= getModelRuntimeWithExtensions().then((runtime) => new ModelRegistry(runtime));
       return await (await registry).getApiKeyForProvider(provider);
     } catch {
       return undefined;
