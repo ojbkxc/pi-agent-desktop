@@ -22,6 +22,8 @@ const eslintConfig = [
   {
     rules: {
       "react-hooks/immutability": "off",
+      // React Compiler diagnostic; the compiler is not enabled (eslint-config-next 16.4.4 / react-hooks 7).
+      "react-hooks/preserve-manual-memoization": "off",
       "react-hooks/refs": "off",
       "react-hooks/set-state-in-effect": "off",
     },
