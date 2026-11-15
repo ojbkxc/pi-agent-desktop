@@ -43,6 +43,7 @@ import { LeanModeSettingRow } from "./LeanModeSettingRow";
 import { RemoteAccessSection } from "./RemoteAccessSection";
 import { ServerSection } from "./ServerSection";
 import { NetworkProxySection } from "./NetworkProxySection";
+import { KeepaliveSection } from "./KeepaliveSection";
 import { RelaySection } from "./RelaySection";
 import { ChatsSettingsSection } from "./ChatsSettingsSection";
 import { CompactionSettingsSection } from "./CompactionSettingsSection";
@@ -369,6 +370,8 @@ function GeneralSettings({
           <ServerSection />
 
           <NetworkProxySection />
+
+          <KeepaliveSection />
 
           <TerminalSettingsSection />
 

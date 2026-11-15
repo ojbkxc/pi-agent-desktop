@@ -2,6 +2,8 @@ import { configureHttpDispatcher } from "@/lib/http-dispatcher";
 import { applyNetworkProxy } from "@/lib/network-proxy";
 import { closeAllAgentEventStreams } from "@/lib/agent-event-stream";
 import { startScheduler } from "@/lib/scheduled-tasks";
+import { startAutofixSweepLoop } from "@/lib/autofix/runner";
+import { startKeepalive } from "@/lib/keepalive";
 import { startUnattendedSweepLoop } from "@/lib/agent-teams-unattended-runtime";
 import { restartRelayFromConfig } from "@/lib/relay/runtime";
 import { restartPublicAccessFromConfig } from "@/lib/public-access/runtime";
@@ -23,6 +25,16 @@ export function registerNodeInstrumentation(): void {
   // Scheduled tasks must fire without anyone having opened a page, and the
   // packaged app keeps this server alive while its window is hidden in the tray.
   if (process.env.PI_WEB_DISABLE_SCHEDULER !== "1") startScheduler();
+
+  // 自动修 Bug 的任务接续：进程重启后把孤儿任务重新驱动（每 60s 扫一次，同一开关族）。
+  if (process.env.PI_WEB_DISABLE_SCHEDULER !== "1") startAutofixSweepLoop();
+
+  // 挂机保活：每 15s 写心跳（外部 scripts/pi-supervisor.mjs 据此判假死）、重启后
+  // 接续进度、把「待接续/被打断」记进 ~/.pi/agent/keepalive/。进程级崩溃后的拉起
+  // 归外部守护脚本（本进程无法重启自己）。与调度同一开关族：测试/e2e 静默整段。
+  if (process.env.PI_WEB_DISABLE_KEEPALIVE !== "1" && process.env.PI_WEB_DISABLE_SCHEDULER !== "1") {
+    startKeepalive();
+  }
 
   // 无人值守兜底：团队计划久等不批、成员执行失败时，提醒 lead 自己降级/重派/接管
   // （桌面不替 AI 做决定）。默认开，与调度同一开关族；小循环独立于用户的 Scheduled 列表。
