@@ -20,7 +20,6 @@ import { cacheSessionPath, getLatestModelChange, getLatestResponseModel, getSess
 import { getProjectTrustStatus, projectTrustReloadOptions } from "./project-trust";
 import { notifySessionEvent } from "./web-push";
 import type { AgentRunOutcome, AgentTaskSnapshot } from "./types";
-import { isBlockingExtensionUiRequest } from "./browser-notifications";
 export type { AgentRunOutcome, AgentTaskSnapshot } from "./types";
 import { isVerboseLogging } from "../bin/pi-web-options.js";
 import { hasActiveSessionLivenessProvider } from "./session-liveness";
