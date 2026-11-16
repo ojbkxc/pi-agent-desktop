@@ -69,6 +69,32 @@ export function registerNodeInstrumentation(): void {
     });
   }
 
+  // 后台命令（bash_background）：上个进程遗留的 `running` 记录随进程一起死了，
+  // 这里结算成 interrupted —— 否则 UI 会把它们永远显示成「还在跑」。纯本地文件操作，
+  // 与调度开关族无关（即使调度静默也要结算，否则状态是错的）。
+  // 惰性 import：service → runtime → pi-coding-agent（getShellConfig），
+  // 顶层引入会把整个 SDK 拖进 register()，而它必须返回得快（下方就有一条预热 import 的注释）。
+  void import("@/lib/background-jobs/service")
+    .then(({ initBackgroundJobs }) => {
+      const settled = initBackgroundJobs();
+      if (settled.length > 0) console.log(`[pi-web] 结算了 ${settled.length} 条遗留的后台命令记录`);
+    })
+    .catch((error) => {
+      console.error("[pi-web] 后台命令记录结算失败:", error instanceof Error ? error.message : error);
+    });
+
+  // 常驻会话（pin）：liveness provider 只活在进程内，重启即全部消失。
+  // 这里是「重启后把 pin 补回来」的第二道保险（第一道是扩展的 session_start）。
+  // store 也是静态资源，但同样走惰性 import 以保持 register() 轻。
+  void import("@/lib/pinned-sessions/store")
+    .then(({ ensurePinnedRegistrations }) => {
+      const { pinned } = ensurePinnedRegistrations();
+      if (pinned.length > 0) console.log(`[pi-web] 已恢复 ${pinned.length} 个常驻会话`);
+    })
+    .catch((error) => {
+      console.error("[pi-web] 常驻会话注册失败:", error instanceof Error ? error.message : error);
+    });
+
   // In production Next 16 answers SIGINT/SIGTERM with server.close() and waits
   // for every connection to end, without a timeout. SSE streams only end when
   // the client disconnects, so close them here or the process never exits.

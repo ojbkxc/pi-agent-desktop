@@ -26,6 +26,8 @@ import { createGoalExtension } from "./goal/goal-extension";
 import { createMemoryExtension } from "./memory/extension";
 import { createMemoryStore } from "./memory/store";
 import { createToolApprovalExtension } from "./tool-approval/extension";
+import { createBackgroundJobsExtension } from "./background-jobs/extension";
+import { createPinnedSessionsExtension } from "./pinned-sessions/extension";
 import { PI_EXTENSION_BUILTIN_NAMES } from "./pi-extension-names";
 import { isBuiltInSubagentsEnabled } from "./subagent-settings";
 import type { SubagentController } from "./subagent-runtime";
@@ -58,6 +60,8 @@ const [
   GOAL_BUILTIN_NAME,
   MEMORY_BUILTIN_NAME,
   TOOL_APPROVAL_BUILTIN_NAME,
+  BACKGROUND_JOBS_BUILTIN_NAME,
+  PINNED_SESSIONS_BUILTIN_NAME,
 ] = PI_EXTENSION_BUILTIN_NAMES;
 
 function builtin(name: string, factory: (pi: ExtensionAPI) => void | Promise<void>): InlineExtension {
@@ -270,6 +274,27 @@ function toolApprovalBuiltin(): InlineExtension {
   return builtin(TOOL_APPROVAL_BUILTIN_NAME, createToolApprovalExtension());
 }
 
+/**
+ * 后台命令扩展：`bash_background` / `get_background_job` / `stop_background_job`。
+ * 工具立刻返回，命令跑完把输出作为新消息注入会话。**只给普通会话**——与 memory /
+ * tool-approval 同口径：成员会话与无人值守会话没有可交互的 UI 与稳定的投递目标。
+ */
+function backgroundJobsBuiltin(): InlineExtension {
+  const jobExtension = createBackgroundJobsExtension();
+  // 只换资源名，保证 `-builtin:pi-background-jobs` 能匹配到它（与 memory 同法）。
+  return { ...jobExtension, name: BACKGROUND_JOBS_BUILTIN_NAME, builtin: true, replaceable: true };
+}
+
+/**
+ * 常驻会话（pin）扩展：给 `router` 角色的会话注入分派提示，并在会话启动时把
+ * liveness 注册表对齐到磁盘上的 pin 名单（重启后 pin 才不会静默失效）。
+ * **只给普通会话**：成员会话不该被 pin，也没有设置页去管。
+ */
+function pinnedSessionsBuiltin(): InlineExtension {
+  const pinnedExtension = createPinnedSessionsExtension();
+  return { ...pinnedExtension, name: PINNED_SESSIONS_BUILTIN_NAME, builtin: true, replaceable: true };
+}
+
 export interface PiExtensionBuiltinsOptions {
   /** 既有 subagent controller；缺省（子 agent 被关闭）时团队桥降级为不可派发。 */
   subagentController?: SubagentController;
@@ -285,7 +310,7 @@ export interface PiExtensionBuiltinsOptions {
   skipToolApproval?: boolean;
 }
 
-/** 返回六个 `builtin:` 扩展，顺序与 PI_EXTENSION_BUILTIN_NAMES 一致。 */
+/** 返回八个 `builtin:` 扩展，顺序与 PI_EXTENSION_BUILTIN_NAMES 一致。 */
 export function createPiExtensionBuiltins(options: PiExtensionBuiltinsOptions = {}): InlineExtension[] {
   const include = options.include ? new Set(options.include) : undefined;
   const wants = (name: string) => !include || include.has(name);
@@ -298,6 +323,8 @@ export function createPiExtensionBuiltins(options: PiExtensionBuiltinsOptions = 
     ...(wants(GOAL_BUILTIN_NAME) ? [goalBuiltin()] : []),
     ...(wants(MEMORY_BUILTIN_NAME) ? [memoryBuiltin()] : []),
     ...(wants(TOOL_APPROVAL_BUILTIN_NAME) && !options.skipToolApproval ? [toolApprovalBuiltin()] : []),
+    ...(wants(BACKGROUND_JOBS_BUILTIN_NAME) ? [backgroundJobsBuiltin()] : []),
+    ...(wants(PINNED_SESSIONS_BUILTIN_NAME) ? [pinnedSessionsBuiltin()] : []),
   ];
 }
 
