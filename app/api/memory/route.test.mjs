@@ -47,6 +47,18 @@ const writeRequest = (url, method, body) => new Request(url, {
 
 const params = (id) => ({ params: Promise.resolve({ id }) });
 
+/**
+ * 等到「当前时刻」严格晚于 `iso`。时间戳是毫秒精度的 ISO 串，`Date.now()` 与它对不上时
+ * 最多等几毫秒；用有限次轮询而不是死循环，坏输入不会把测试挂死。
+ */
+async function waitPast(iso) {
+  const target = Date.parse(iso);
+  if (!Number.isFinite(target)) return;
+  for (let i = 0; i < 100 && Date.now() <= target; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
 test("GET 空列表 → { entries: [] }，落盘文件此时不存在", () => withAgentDir(async (dir) => {
   const response = await listRoute.GET();
   assert.equal(response.status, 200);
@@ -143,6 +155,11 @@ test("DELETE → { success: true }；再次删除 → 404", () => withAgentDir(a
 test("GET 按 updatedAt 倒序（设置页最新的在最上面）", () => withAgentDir(async () => {
   const first = await (await listRoute.POST(jsonRequest({ text: "first" }))).json();
   const second = await (await listRoute.POST(jsonRequest({ text: "second" }))).json();
+  // 时间戳是毫秒精度。快的机器上两次创建与这次 PATCH 可能落在同一毫秒，
+  // 主排序键相等后退化到 createdAt 兜底（second 创建更晚，会排到前面），
+  // 这条断言就变成随机红（CI 实测）。明确等到时钟走过 second.updatedAt，
+  // 用例才真正在测「编辑后置顶」而不是在赌调度速度。
+  await waitPast(second.entry.updatedAt);
   await itemRoute.PATCH(
     writeRequest("http://localhost/api/memory/x", "PATCH", { text: "first (edited)" }),
     params(first.entry.id),
