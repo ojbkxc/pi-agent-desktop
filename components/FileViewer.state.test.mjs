@@ -68,7 +68,9 @@ test("TextFileViewer falls back to source while the preview is unavailable", () 
   const block = functionBlock("TextFileViewer", null);
   // A truncated (not fully loaded) file has no preview, so a preview default
   // must not paint a partial document or leave both switch buttons inactive.
-  assert.match(block, /const hasPreview = !data\?\.truncated && \(isHtml \|\| isMarkdown\);/);
+  // CSV/TSV files added a preview of their own (upstream f87afbbe), so the
+  // guard is "delimited table, or a complete html/markdown document".
+  assert.match(block, /const hasPreview = isDelimitedTable \|\| \(!data\?\.truncated && \(isHtml \|\| isMarkdown\)\);/);
   assert.match(block, /displayMode === "preview" && !hasPreview\s*\? "source"/);
 });
 

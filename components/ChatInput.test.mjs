@@ -487,7 +487,7 @@ test("an upward menu never opens underneath the app topbar (#63)", () => {
 
 test("file mention menu applies the measured upward height cap", () => {
   const source = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
-  const start = source.indexOf("{atMenuOpen && atQuery !== null && (() => {");
+  const start = source.indexOf("{atMenuOpen && atQuery !== null && !extensionUiOpen && (() => {");
   assert.notEqual(start, -1);
   const block = source.slice(start, start + 4000);
   assert.match(block, /ref=\{atMenuRef\}/);

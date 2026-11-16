@@ -52,7 +52,9 @@ test("the right-panel file tree refreshes when a run ends", async () => {
   const shell = await read("./AppShell.tsx");
   const explorer = shell.slice(shell.indexOf("<FileExplorer\n"));
   assert.match(explorer.slice(0, 400), /refreshKey=\{explorerRefreshKey\}/);
-  assert.match(shell, /const handleAgentEnd = useCallback\(\(\) => \{[\s\S]{0,120}setExplorerRefreshKey\(/);
+  // The end-of-run callback now takes how the run ended (e917f66a: aborted /
+  // subagentsActive drive the sound and notifications) and still bumps the tree.
+  assert.match(shell, /const handleAgentEnd = useCallback\(\(end: AgentEndInfo\) => \{[\s\S]{0,160}setExplorerRefreshKey\(/);
 });
 
 test("the sidebar scrollbar hides again and a failed list load is reported", async () => {

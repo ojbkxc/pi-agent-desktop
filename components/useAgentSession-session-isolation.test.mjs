@@ -75,7 +75,9 @@ test("the stable ChatWindow reloads whenever its session identity changes", asyn
   // Merged form: showLoading is `!cached` so a restored snapshot skips the
   // spinner; the forced read is still the freshness check (includeState=true).
   assert.match(effect, /loadSession\(session\.id, !cached && !promoted, true, \{ force: true \}\)/);
-  assert.match(effect, /\}, \[sessionIdentity\]\)/);
+  // dispatch is a stable identity from the streaming store (8049cdb6): adding it
+  // does not restart live sessions, and the session identity stays the trigger.
+  assert.match(effect, /\}, \[sessionIdentity, dispatch\]\)/);
 });
 
 test("promoting a new session to its real id keeps the transcript on screen", async () => {

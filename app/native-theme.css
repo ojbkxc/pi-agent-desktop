@@ -1888,6 +1888,10 @@ pre, code {
 
 /* 停在扩展对话框上的 run（#1145）：琥珀呼吸点。与 unread ring 同一形状与节奏，
  * 只有颜色（warning amber）和含义（"需要你来应答"，不是"还在干活"）不同。 */
+.session-awaiting-indicator {
+  color: var(--warning);
+}
+
 .session-awaiting-dot {
   transform-box: fill-box;
   transform-origin: center;

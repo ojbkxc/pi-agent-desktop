@@ -2526,6 +2526,7 @@ function AwaitingInputIndicator() {
   const { t } = useI18n();
   return (
     <span
+      className="session-awaiting-indicator"
       title={t("sidebar.agentAwaitingInput")}
       aria-label={t("sidebar.agentAwaitingInput")}
       style={{
@@ -2535,7 +2536,6 @@ function AwaitingInputIndicator() {
         alignItems: "center",
         justifyContent: "center",
         flexShrink: 0,
-        color: "#d97706",
       }}
     >
       <svg className="session-awaiting-dot" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true" style={{ display: "block" }}>

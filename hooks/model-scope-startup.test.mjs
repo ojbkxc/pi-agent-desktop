@@ -21,19 +21,27 @@ test("new-session startup adopts server state only while explicit overrides are 
     source.indexOf("const ensureNewSession"),
     source.indexOf("const loadSlashCommands"),
   );
+  // 7e2a1c1c pulled the adoption into applyNewSessionStartState() so the
+  // session_start dialog path can re-read get_state through the same guard.
+  const applySource = source.slice(
+    source.indexOf("const applyNewSessionStartState = useCallback("),
+    source.indexOf("const ensureNewSession"),
+  );
 
   assert.match(
-    ensureSource,
-    /result\.model && newSessionModelOverrideRef\.current === selectedModel/,
+    applySource,
+    /state\.model && newSessionModelOverrideRef\.current === selectedModel/,
   );
-  assert.match(ensureSource, /setPendingModel\(result\.model\)/);
-  assert.match(ensureSource, /setNewSessionDefaultModel\(result\.model\)/);
+  assert.match(applySource, /setPendingModel\(state\.model\)/);
+  assert.match(applySource, /setNewSessionDefaultModel\(state\.model\)/);
   assert.match(
-    ensureSource,
+    applySource,
     /thinkingLevelOverrideRef\.current === selectedThinkingLevel/,
   );
-  assert.match(ensureSource, /setLiveThinkingLevel\(asConcreteThinkingLevel\(result\.thinkingLevel\)\)/);
-  assert.match(ensureSource, /setNewSessionDefaultThinkingLevel\(asConcreteThinkingLevel\(result\.thinkingLevel\)\)/);
+  assert.match(applySource, /setLiveThinkingLevel\(asConcreteThinkingLevel\(state\.thinkingLevel\)\)/);
+  assert.match(applySource, /setNewSessionDefaultThinkingLevel\(asConcreteThinkingLevel\(state\.thinkingLevel\)\)/);
+  // ensureNewSession still routes its answer through that one guard.
+  assert.match(ensureSource, /applyNewSessionStartState\(result, selectedModel, selectedThinkingLevel\)/);
 });
 
 test("model-list refresh does not overwrite a live session or explicit thinking override", () => {

@@ -9,6 +9,7 @@ const phaseLabelSource = await jitiSource(new URL("../lib/chat-phase-label.ts", 
 const chatInputSource = await jitiSource(new URL("../components/ChatInput.tsx", import.meta.url));
 const messageViewSource = await jitiSource(new URL("../components/MessageView.tsx", import.meta.url));
 const appShellSource = await jitiSource(new URL("../components/AppShell.tsx", import.meta.url));
+const selectorSource = await jitiSource(new URL("./useStreamingSelector.ts", import.meta.url));
 
 test("keeps the session event stream open through the idle grace window", () => {
   const finishSource = source.slice(
@@ -49,8 +50,8 @@ test("keeps the session event stream open through the idle grace window", () => 
   assert.doesNotMatch(agentEndSource, /closeEvents\(\)/);
   assert.match(agentStartSource, /cancelEventStreamGrace\(\)/);
   assert.match(agentSettledSource, /scheduleEventStreamClose\(sid\)/);
-  assert.match(agentSettledSource, /onAgentEnd\?\.\(\)/);
-  assert.match(promptDoneSource, /notifyPromptStage\(runId\)/);
+  assert.match(agentSettledSource, /onAgentEnd\?\.\(\{ aborted: event\.aborted === true/);
+  assert.match(promptDoneSource, /notifyPromptStage\(runId, event\.aborted === true, event\.subagentsActive === true\)/);
   assert.match(promptDoneSource, /scheduleEventStreamClose\(sid\)/);
   assert.match(sendSource, /const definitivelyRejected = !promptRequestStarted/);
   assert.match(sendSource, /if \(!definitivelyRejected && sentSessionId\) \{[\s\S]*?waitForPromptSettlement/);
@@ -209,7 +210,7 @@ test("forking stays available during a run while in-session branch switches wait
 
   // Fork copies into a new file, so only a shell command blocks it; the
   // in-session edit still waits because pi refuses navigate_tree mid-run.
-  assert.match(chatWindowSource, /onFork=\{bashRunning \|\| isNew \? undefined : handleFork\}/);
+  assert.match(chatWindowSource, /onFork=\{bashRunning \|\| isNew \? undefined : forkFromMessage\}/);
   assert.match(chatWindowSource, /onEditContent=\{handleEditContent\}/);
   assert.match(chatWindowSource, /editDisabled=\{sessionBusy\}/);
   assert.match(messageViewSource, /disabled=\{editBlocked\}/);
@@ -233,7 +234,7 @@ test("first user messages expose both branch actions and edit before their own e
     source.indexOf("  const handleLeafChange = useCallback"),
   );
 
-  assert.match(chatWindowSource, /onFork=\{bashRunning \|\| isNew \? undefined : handleFork\}/);
+  assert.match(chatWindowSource, /onFork=\{bashRunning \|\| isNew \? undefined : forkFromMessage\}/);
   assert.doesNotMatch(chatWindowSource, /idx === 0 && msg\.role === "user"/);
   assert.doesNotMatch(chatWindowSource, /prevAssistantEntryId/);
   assert.match(navigateSource, /type: "navigate_tree",\s*targetId: entryId/);
@@ -391,12 +392,15 @@ test("delegates event stream readiness and hides an empty agent phase", () => {
   assert.match(source, /shouldMaintain: \(sid\)[\s\S]*?sessionIdRef\.current === sid/);
   assert.match(ensureSource, /eventConnectionRef\.current!\.ensureConnected\(sid\)/);
   assert.match(ensureSource, /eventConnectionRef\.current!\.maintain\(sid\)/);
-  assert.match(chatWindowSource, /const hasStreamingContent = Boolean\(streamState\.streamingMessage\?\.content\.length\)/);
-  assert.match(chatWindowSource, /streamState\.isStreaming && hasStreamingContent && streamState\.streamingMessage/);
-  assert.match(chatWindowSource, /agentRunning && !hasStreamingContent && \(agentPhase \|\| isCompacting\)/);
+  assert.match(chatWindowSource, /const hasStreamingContent = useStreamingSelector\(streamingStore, selectHasStreamingContent\)/);
+  // The selector's own meaning must stay "a streaming reply has content": the
+  // bubble gate below only works while that is what it computes.
+  assert.match(selectorSource, /export const selectHasStreamingContent = \(state: StreamingState\) => Boolean\(state\.streamingMessage\?\.content\.length\)/);
+  assert.match(chatWindowSource, /\{isStreaming && hasStreamingContent && \(/);
+  assert.match(chatWindowSource, /\{\(agentRunning \|\| isCompacting\) && !hasStreamingContent && \(agentPhase \|\| isCompacting\) && \(/);
   // Compaction is what the user needs to know while a turn is being compacted, so it is
   // forwarded to the label instead of letting the stream phase read as a hang.
-  assert.match(chatWindowSource, /phaseLabel\(agentPhase, t, isCompacting\)/);
+  assert.match(chatWindowSource, /phaseLabel\(agentPhase, t, isCompacting, \(queuedMessages\?\.steering\.length \?\? 0\) \+ \(queuedMessages\?\.followUp\.length \?\? 0\)\)/);
   assert.match(phaseLabelSource, /return null;/);
 });
 
@@ -467,7 +471,7 @@ test("opens the selected session's event stream even when Strict Mode re-runs ef
   // reload here. Strict Mode still works because the warm-session effect,
   // declared earlier, re-asserts the ref before this effect re-runs.
   assert.match(mountSource, /closeEvents\(\);\s*\};/);
-  assert.match(mountSource, /\/\/ eslint-disable-next-line react-hooks\/exhaustive-deps\s*\}, \[sessionIdentity\]\);/);
+  assert.match(mountSource, /\/\/ eslint-disable-next-line react-hooks\/exhaustive-deps\s*\}, \[sessionIdentity, dispatch\]\);/);
 });
 
 test("keeps one reducer-owned assistant partial and consumes Pi JSON deltas", () => {
@@ -484,7 +488,12 @@ test("keeps one reducer-owned assistant partial and consumes Pi JSON deltas", ()
     source.indexOf('case "tool_execution_start"'),
   );
 
-  assert.match(source, /streamReducer,[\s\S]*type ClientAssistantMessageEvent/);
+  // One reducer still owns the partial: it now lives in the streaming store
+  // (outside React state) instead of a useReducer, and the same streamReducer
+  // is what the store applies.
+  assert.match(source, /createStreamingStore/);
+  assert.match(source, /const \[streamingStore\] = useState\(createStreamingStore\)/);
+  assert.match(source, /type ClientAssistantMessageEvent/);
   assert.doesNotMatch(source, /streamingMessageRef/);
   assert.match(connectedSource, /dispatch\(\{ type: "end" \}\)/);
   assert.match(connectedSource, /event\.isStreaming === true/);
@@ -544,7 +553,11 @@ test("reconnects active shell output to its streaming tool call", () => {
   assert.match(chatWindowSource, /const map = new Map<string, ToolResultMessage>\(\)/);
   assert.match(chatWindowSource, /for \(const \[id, result\] of activeToolResults\)/);
   assert.match(chatWindowSource, /if \(id\.trim\(\)\) map\.set\(id, result\)/);
-  assert.match(chatWindowSource, /<MessageView message=\{streamState\.streamingMessage as AgentMessage\} toolResults=\{toolResultsMap\}/);
+  // The streamed reply is rendered from the store by StreamingReply alone (the
+  // whole chat must not re-render per chunk), and it is still one MessageView
+  // fed the same tool-result map.
+  assert.match(chatWindowSource, /<StreamingReply store=\{streamingStore\} onCommit=\{updatePromptAnchor\} toolResults=\{toolResultsMap\}/);
+  assert.match(chatWindowSource, /return <MessageView message=\{message\} toolResults=\{toolResults\} isStreaming modelNames=\{modelNames\}/);
 });
 
 test("reports a running script's newest call as its progress", () => {
@@ -775,8 +788,11 @@ test("keeps prompt anchor measurement outside the React update cycle", () => {
     "useLayoutEffect(() => {\n    const spacer = promptAnchorSpacerRef.current;",
   );
   assert.notEqual(anchorEffectStart, -1);
+  // The sync half is now a stable callback effect: each streamed chunk calls it
+  // from StreamingReply's own layout effect, so the measurement stays out of the
+  // React update cycle exactly as before (no setState, no streamState read).
   const syncEffectStart = chatWindowSource.indexOf(
-    "useLayoutEffect(() => {\n    promptAnchorUpdateRef.current?.();",
+    "  // Each streamed chunk StreamingReply commits",
     anchorEffectStart,
   );
   assert.notEqual(syncEffectStart, -1);
@@ -793,6 +809,8 @@ test("keeps prompt anchor measurement outside the React update cycle", () => {
   assert.doesNotMatch(anchorSyncEffectSource, /\bset[A-Z][A-Za-z0-9]*\s*\(/);
   assert.doesNotMatch(chatWindowSource, /setPromptAnchorSpacer|useState[^\n]*promptAnchorSpacer/);
   assert.doesNotMatch(anchorLifecycleEffectSource, /streamState\.streamingMessage/);
+  assert.doesNotMatch(anchorSyncEffectSource, /streamState\.streamingMessage/);
+  assert.match(anchorSyncEffectSource, /const updatePromptAnchor = useCallback\(\(\) => \{[\s\S]{0,80}promptAnchorUpdateRef\.current\?\.\(\);[\s\S]{0,20}\}, \[\]\);/);
   assert.match(anchorLifecycleEffectSource, /spacer\.style\.height = nextPromptAnchorSpacerHeight > 0/);
   assert.match(anchorLifecycleEffectSource, /promptAnchorUpdateRef\.current = updatePromptAnchorSpacer/);
   assert.match(anchorLifecycleEffectSource, /new ResizeObserver\(schedulePromptAnchorMeasure\)/);
@@ -800,7 +818,7 @@ test("keeps prompt anchor measurement outside the React update cycle", () => {
   assert.match(anchorLifecycleEffectSource, /if \(disposed \|\| promptAnchorMeasureFrameRef\.current !== null\) return/);
   assert.match(anchorLifecycleEffectSource, /promptAnchorMeasureFrameRef\.current = requestAnimationFrame\(\(\) => \{\s*promptAnchorMeasureFrameRef\.current = null;\s*updatePromptAnchorSpacer\(\)/);
   assert.match(anchorLifecycleEffectSource, /disposed = true;[\s\S]*?promptAnchorUpdateRef\.current === updatePromptAnchorSpacer[\s\S]*?cancelAnimationFrame\(promptAnchorMeasureFrameRef\.current\)/);
-  assert.match(anchorSyncEffectSource, /promptAnchorUpdateRef\.current\?\.\(\);\s*\}, \[streamState\.streamingMessage\]\)/);
+  assert.match(anchorSyncEffectSource, /useLayoutEffect\(updatePromptAnchor, \[isStreaming, hasStreamingContent, updatePromptAnchor\]\);/);
   assert.match(chatWindowSource, /<div ref=\{messageContentRef\}[^>]*style=\{\{/);
 });
 
