@@ -38,7 +38,11 @@ export const APPROVAL_ALL_RULE_ID = "all";
 /** `all` 档在确认框里展示的规则名。 */
 export const APPROVAL_ALL_RULE_LABEL = "所有 Shell 命令";
 
-const SHELL_TOOLS: ReadonlySet<string> = new Set(["bash", "powershell"]);
+/**
+ * `bash_background` 也在其中：它同样执行任意 shell 命令，只是不阻塞循环。
+ * 漏掉它等于给了一条绕过审批的后门（`all` 档也会放过）。
+ */
+const SHELL_TOOLS: ReadonlySet<string> = new Set(["bash", "powershell", "bash_background"]);
 
 /** 命令超过这个长度只截断展示，不影响匹配（匹配始终看完整命令）。 */
 export const COMMAND_EXCERPT_MAX = 1200;
