@@ -238,10 +238,15 @@ test("uses the compact controls glyph for General", () => {
   assert.match(panelSource, /section === "general"[\s\S]*?<path d="M20 7h-9M14 17H5" \/>[\s\S]*?<circle cx="7" cy="7" r="3" \/>[\s\S]*?<circle cx="17" cy="17" r="3" \/>/);
 });
 
-test("keeps password authentication to one login field and one settings action", () => {
-  assert.equal((loginSource.match(/type="password"/g) ?? []).length, 1);
+test("keeps password authentication to password fields only and one settings action", () => {
+  // Sign-in mode: one password field. Setup mode (/login doubles as the first-time
+  // password page) adds a confirmation field — never a username/text input.
+  const passwordFields = (loginSource.match(/type="password"/g) ?? []).length;
+  assert.ok(passwordFields === 1 || passwordFields === 2, `unexpected password field count: ${passwordFields}`);
   assert.doesNotMatch(loginSource, /type="(?:text|email)"/);
-  assert.match(loginSource, /autoComplete="current-password"/);
+  // 密码框的 autocomplete 随模式切换（登录 current-password / 首次设置 new-password）。
+  assert.match(loginSource, /"current-password"/);
+  assert.match(loginSource, /"new-password"/);
   assert.match(loginSource, /safeLoginDestination\(destination, window\.location\.origin\)/);
   assert.match(panelSource, /fetch\("\/api\/web-auth", \{ method: "DELETE" \}\)/);
   assert.match(panelSource, /t\("auth\.logOut"\)/);
