@@ -11,6 +11,7 @@ import { withoutMessageSignatures } from "./message-signatures";
 import { getThinkingPreview } from "./message-display";
 import { projectIdentityKey } from "./project-identity";
 import { sessionPathKey } from "./session-path";
+import { skillExpansionToCommand } from "./slash-display";
 import { MAX_TOOL_RESULT_IMAGE_BYTES, TOOL_RESULT_IMAGE_MIMES } from "./tool-result-images";
 import { projectToolResultDetails, slimToolResultMessage } from "./tool-result-details";
 import { openSlimSessionManager } from "./session-slim-load";
@@ -253,6 +254,22 @@ function resolveScannedSessionRelation(
   }
 }
 
+/**
+ * The list's first message is for the row title and the subagent filter, never
+ * the whole prompt: a pasted document or an expanded skill made one row 300 KB
+ * and the list several MB, fetched again by every open tab after each run. A
+ * skill expansion goes as the /skill: command its row shows; any other text is
+ * cut to CATALOG_FIRST_MESSAGE_MAX code units, never splitting a surrogate pair.
+ */
+const CATALOG_FIRST_MESSAGE_MAX = 500;
+
+export function catalogFirstMessage(text: string): string {
+  const display = skillExpansionToCommand(text) ?? text;
+  if (display.length <= CATALOG_FIRST_MESSAGE_MAX) return display;
+  const last = display.charCodeAt(CATALOG_FIRST_MESSAGE_MAX - 1);
+  return display.slice(0, last >= 0xd800 && last <= 0xdbff ? CATALOG_FIRST_MESSAGE_MAX - 1 : CATALOG_FIRST_MESSAGE_MAX);
+}
+
 function mapScannedSession(
   scanned: ScannedSessionInfo,
   pathToId: Map<string, string>,
@@ -273,7 +290,7 @@ function mapScannedSession(
     // real "(no messages)" session until the details arrive.
     firstMessage: detailsPending && !scanned.firstMessage
       ? ""
-      : scanned.firstMessage || "(no messages)",
+      : catalogFirstMessage(scanned.firstMessage || "(no messages)"),
     parentSessionId: originSessionId,
     ...(subagent
       ? { relation: { kind: "subagent" as const, parentSessionId: subagent.parentSessionId, profile: subagent.profile, description: subagent.description, status: subagent.status } }
