@@ -43,7 +43,7 @@ export async function PUT(req: Request) {
     if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
     if (parsed.config.enabled && !isWebPasswordEnabled()) {
       return NextResponse.json(
-        { error: "Set PI_WEB_PASSWORD before exposing the server on the internet", code: "configuration" },
+        { error: "Set a web password in Settings before exposing the server on the internet", code: "configuration" },
         { status: 409 },
       );
     }
@@ -78,7 +78,7 @@ export async function POST(req: Request) {
       case "start": {
         if (!isWebPasswordEnabled()) {
           return NextResponse.json(
-            { error: "Set PI_WEB_PASSWORD before exposing the server on the internet", code: "configuration" },
+            { error: "Set a web password in Settings before exposing the server on the internet", code: "configuration" },
             { status: 409 },
           );
         }

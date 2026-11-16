@@ -273,7 +273,7 @@ export class PublicAccessManager {
 
   private assertPassword(): void {
     if (!isWebPasswordSourceActive(this.env().PI_WEB_PASSWORD)) {
-      throw new CloudflareTunnelError("configuration", "Set PI_WEB_PASSWORD before exposing the server on the internet");
+      throw new CloudflareTunnelError("configuration", "Set a web password in Settings before exposing the server on the internet");
     }
   }
 

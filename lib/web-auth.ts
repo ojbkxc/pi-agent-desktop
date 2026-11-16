@@ -1,7 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { readWebPasswordRecord, verifyWebPasswordHash } from "./web-password-store.ts";
 
-export const PI_WEB_AUTH_USERNAME = "pi";
 export const PI_WEB_SESSION_COOKIE = "pi_web_session";
 export const PI_WEB_SESSION_MAX_AGE = 60 * 60 * 24 * 30;
 
@@ -83,6 +82,13 @@ function parseBasicCredentials(authorization: string): { username: string; passw
   };
 }
 
+/**
+ * `Authorization: Basic` 兼容（curl / 脚本 / 第三方客户端）。
+ *
+ * **用户名不参与校验**：口令是唯一凭据，用户名可任意（含空串）。用户只需要在
+ * `/login` 里输入密码；浏览器不再收到 Basic 挑战（`WWW-Authenticate` 已从
+ * `proxy.ts` 移除），所以不会弹出带「用户名」的原生对话框。
+ */
 export function isValidBasicAuthorization(authorization: string | null, password?: string): boolean {
   const explicit = arguments.length >= 2;
   if (explicit ? !isWebPasswordEnabled(password) : !isWebPasswordEnabled()) return false;
@@ -91,11 +97,9 @@ export function isValidBasicAuthorization(authorization: string | null, password
   const credentials = parseBasicCredentials(authorization);
   if (!credentials) return false;
 
-  const usernameMatches = secretsEqual(credentials.username, PI_WEB_AUTH_USERNAME);
-  const passwordMatches = explicit
+  return explicit
     ? isValidWebPassword(credentials.password, password)
     : isValidWebPassword(credentials.password);
-  return usernameMatches && passwordMatches;
 }
 
 function sessionSignature(payload: string, secret: string): string {

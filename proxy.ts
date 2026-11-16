@@ -63,14 +63,19 @@ export function proxy(request: NextRequest) {
   if (relayMark) return NextResponse.next();
 
   // The Cloudflare tunnel's hostname is only trusted with a web password (see
-  // lib/request-security.ts). If a settings file was edited by hand to point here
-  // without one, say so instead of the generic "untrusted" answer.
+  // lib/request-security.ts). A password set either way counts — the
+  // PI_WEB_PASSWORD environment variable **or** the record Settings writes — so
+  // this only fires when nobody has set one at all. Point at the local Settings
+  // page (the only place that can turn it on) instead of naming the env variable.
   if (!isWebPasswordEnabled()
     && isPublicAccessRequestHost(request, readPublicAccessConfig())) {
-    return new NextResponse("Pi refuses public tunnel traffic without a web password. Set PI_WEB_PASSWORD.", {
-      status: 403,
-      headers: { "Cache-Control": "no-store" },
-    });
+    return new NextResponse(
+      "Pi refuses public tunnel traffic until a web password is set. Set one in Settings > General > Server on this computer, then reload this page.",
+      {
+        status: 403,
+        headers: { "Cache-Control": "no-store" },
+      },
+    );
   }
 
   if (!isTrustedRequest) {
@@ -91,9 +96,11 @@ export function proxy(request: NextRequest) {
   }
 
   if (!isWebPasswordEnabled()) {
-    if (request.nextUrl.pathname === "/login") {
-      return NextResponse.redirect(new URL("/", request.url));
-    }
+    // No password at all: the app runs unauthenticated as before (this is the
+    // local default). `/login` stays reachable instead of redirecting away — it
+    // doubles as the first-time "set a web password" page, which is the only way
+    // in without touching the environment. Setting it is local-only (the route
+    // checks isLocalRequest), so a remote visitor can never claim the machine.
     return NextResponse.next();
   }
 
@@ -131,12 +138,13 @@ export function proxy(request: NextRequest) {
       }
       return NextResponse.redirect(loginUrl);
     }
+    // No `WWW-Authenticate: Basic` challenge: it makes browsers pop a native
+    // username + password dialog, and this app authenticates by password only
+    // (the /login form). API clients that want Basic still send the header
+    // themselves — it is accepted above; nothing is advertised.
     return new NextResponse("Authentication required", {
       status: 401,
-      headers: {
-        "Cache-Control": "no-store",
-        "WWW-Authenticate": 'Basic realm="Pi Web", charset="UTF-8"',
-      },
+      headers: { "Cache-Control": "no-store" },
     });
   }
 
