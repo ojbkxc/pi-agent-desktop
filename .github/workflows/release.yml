@@ -116,93 +116,113 @@ jobs:
           releaseBody: |
             ## Pi Agent Desktop 0.8.2 (fork)
 
-            The **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2. Same version number, re-published with the additions below.
+            The **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2. Same version number, re-published with the changes below: the security, stability and performance work from upstream pi-web v0.10 through v0.17, a pi SDK 1.5.2 / Next.js 16.4.4 / undici 8.12.3 upgrade, and the fork's own additions.
 
-            ### Rereleased
+            ### Security (upstream v0.10 → v0.17, ported)
 
-            Re-published with the plan-approval flow corrected. Creating a team used to leave the plan card unreachable: a `spawn=false` team has no member session yet, and the card only appears when a session resolves back to its team, so nothing was shown and the plan could not be approved — the lead session is now recorded when the plan is submitted. The plan editor also no longer loses an edit to the 2-second refresh (which reset the draft and cleared what you were typing), a failed approval now says why instead of doing nothing, a plan's placeholder leader model can no longer be copied onto members, and the thinking level is editable again.
+            - **The preview-mode bypass is closed.** Every build shipped the same `previewModeId`, and a request carrying the matching `x-prerender-revalidate` header made Next skip `proxy.ts` — the web-password gate and the Host/Origin checks (reported by Tencent Xuanwu Lab). The npm CLI now rotates the three preview secrets at startup; the desktop launcher strips both revalidate headers from every request before Next sees it and rewrites the secrets to fresh random values on each start, so the shipped ones are worthless even if the strip is ever bypassed.
+            - **PowerShell is sanitized like bash.** The PowerShell stand-in strips `PORT`, `NODE_ENV`, `NEXT_*`, `PI_WEB_PASSWORD` and `PI_DESKTOP_API_TOKEN` from the environment, activates only when named, and no longer hides user extensions. The bash stand-in is opt-in for the same reason.
+            - **npx no longer inherits the host's secrets.** Skill install, search and update strip host environment variables before third-party npm code runs.
+            - **The trust chain follows the right session.** Subagent sessions decide project trust from the parent session (read once, never written); restored sessions decide from their own directory; subagent profiles in an untrusted folder stay hidden; an untrusted repository's `enabledModels` can no longer shadow the global list.
+            - **File boundaries are tighter.** git/diff endpoints `lstat` every path level (no junction escape); uploads stage on the same disk, reject symlinks twice and replace atomically; an unbounded suffix range answers 416; MIME lookup only matches own properties. Desktop popups clean up by nonce, proxy credentials are stripped from inherited environment variables, and skill-market links render only `http(s)` URLs.
 
-            ### New in this republish
+            ### Stability
 
-            - **Team plans are editable, and reviewed first.** Creating a team no longer dispatches teammates straight away: the lead submits a plan and the chat shows a plan card. Open it to change each member's model and agent preset, set one model for a batch, follow the lead's model, restore the suggested ones, and reassign task owners — then save, and approve when it looks right. Saving keeps the plan awaiting review; approving tells the lead to approve and launch, and nothing runs before that.
-            - **The Agent Teams workbench opens again.** A team's lead session was recorded as an unknown placeholder, so the lead's own conversation showed no team strip and the workbench could not be reached. It is now resolved from the teammate sessions, and a team that never used the shared task list no longer reads as "forming" forever after it has finished.
-            - **No more spinner that never stops.** The running-state stream's keepalive frames carried no data, so a half-open connection could pin the sidebar spinner on screen indefinitely. Heartbeats now repeat the current snapshot, and the sidebar notices 75 seconds of silence and reconnects.
-            - **Context usage is a percentage, not a frozen ring.** The ring next to the composer now shows the used share as a number, so it no longer reads as a stuck loading circle.
-            - **Bash works on Windows without Git on the PATH.** Git Bash installed under `Program Files` or a `mingw64` layout is now found by walking up from `git.exe`, and the shell path is supplied to the session when the SDK has none.
+            - **A session whose `session_start` asks a dialog now starts** instead of deadlocking before its first turn.
+            - **Login survives a disconnect.** The device-code SSE stream guards its closed controller, the pi SDK is preloaded at startup, and the ChatGPT OAuth device id is set correctly.
+            - **Code mode stays on.** A startup stall no longer switches Code mode off for the whole process.
+            - **The last in-flight-turn invalidation paths are guarded**, so a fast switch cannot apply a stale reply to a new transcript.
+            - **The tunnel probe goes direct**, bypassing the session proxy exactly like `cloudflared` itself — a bad manual proxy no longer reads as "tunnel broken" and tears down a working tunnel.
+
+            ### Performance
+
+            - **Streaming re-renders only the reply.** Streaming state moved out of React: a chunk re-renders `StreamingReply` alone instead of the whole window, and a stream that is one code fence skips the markdown parser entirely.
+            - **Session lists rescan only the tail** of a growing session file instead of reading it from the top.
+            - **Provider signatures never reach the browser**, shrinking the payload of long sessions.
+            - **One shared model runtime.** Provider and extension catalogs load once (with a TTL) instead of being rebuilt for every provider or skills request.
+
+            ### Dependencies
+
+            - pi SDK **1.5.2** (eight `@earendil-works/*` packages pinned), Next.js **16.4.4**, undici **8.12.3** (nine security advisories). `npm audit --omit=dev` reports zero vulnerabilities.
+
+            ### New
+
+            - **Autofix.** Give it one sentence; a dedicated session edits the code, and after every round the engine itself runs the project's verify command (test → typecheck → check → lint, with tasks that have no criterion refused). Exit 0 is the only success. Failure output feeds the next round, the round cap defaults to 20, and progress is written atomically so a restart resumes the task.
+            - **Keep-alive.** A 15-second heartbeat, recovery of interrupted sessions driven by pid liveness (a live pid is never treated as an orphan), and a cross-platform supervisor (`scripts/pi-supervisor.mjs`: Windows scheduled task, launchd, systemd user timer) with a 5-per-hour restart budget and a network probe that waits instead of restarting. Settings › General › Keep-alive.
+            - **Cloudflare named tunnels bind a fixed domain.** After registration the app polls the ingress rules cloudflared publishes; when your custom hostname points at the local gateway it binds itself, with no restart, and the fixed public URL is shown with copy/open. Public verification retries on a 0/2/4/8/15-second schedule within a 45-second budget.
+            - **A web password can live in settings.** Besides `PI_WEB_PASSWORD` (which still wins), the password can be stored as a scrypt hash in a 0600 file — never plaintext. Changing it rotates the session token, so old sessions stop working. Settings › General › Server.
+            - **cc-haha plan controls.** A plan card with a parent plan gets a Stop button, and RuntimeControls adds pause / resume plus per-member model and reasoning-level edits (a running member refuses edits with 409).
+
+            ### UI
+
+            - **Quote instead of "ask about this".** Selecting text now inserts a block quote at the cursor, with no scaffold text.
+            - **"New session from this message"** carries the message text and images into the new composer.
+            - **Favicon unread badge**: amber while a session waits for input, blue for unread completions, with a count collected while the window is hidden.
+            - **Standalone renderers**: SVG fences preview like Mermaid (an `<img>` only — source never enters the DOM), inline audio/video playback, copy-LaTeX on display math, a diff preview of an edit before it is applied, structured tool-argument rows instead of raw JSON, per-turn durations, and a virtualized CSV/TSV table view.
 
             ### Fixes
 
-            - The composer's Agent Team switch used to jump to Settings when clicked — an old preference key was read with a new meaning. Migrated to a new key; the switch now arms one message, resets on send, and asks about cost once.
-            - Two list APIs (market, skill search) answered with a single row when the page size was omitted: `Number(null)` is `0`, and `0` is finite, so a missing limit became a 1-row page.
-            - A curated skill could read "at risk" in the list but "no risk found" on its detail page.
-            - Reading a compacted session could answer HTTP 500 when a historical message carried no usage block.
-            - Tool-result details the UI reads were stripped before reaching the browser; `entry_appended` reaches it again.
-            - A tool selection written as `+name` was read as a read-only selection, so MCP servers that are fine to write stayed blocked.
+            - **Skill market, six defects.** The installed tab no longer crashes on minimal metadata; infinite scroll no longer sticks after a filter change mid-page; 429 responses are no longer recorded as healthy; installs lock by owner and uninstall takes the same lock; file previews validate both the `path` shape and the skill's file list; compaction model choices filter to stored credentials.
+            - **Teams stop what they list.** Stop / reclaim / ended / quota now include plan-only members; a corrupt `plan.json` answers 400 with a reason instead of "no plan yet"; resend validates the assignment state instead of delivering a duplicate; a failed `team_create` is no longer recorded against the lead session.
+            - **MCP sign-in on pi 1.5.2.** The SDK store's refresh lock is forwarded, and project trust follows the pi 1.5 semantics.
 
-            ### In this build
-
-            - **Skill market.** A full page over two registries (ClawHub + SkillHub): search, source / security / install-state filters, a 13-category rail with counts, a bundled 398-skill curated snapshot (browsing works offline), skeleton cards, infinite scroll, detail with file preview, install safety checks and a "what this skill does" panel. Installs verify every file against the registry checksum and only ever write directories they can remove again.
-            - **Agent Teams.** Your messages can ask for a team; teammates are real agents with the same built-in extensions a normal session gets (codemode / tool-search / MCP / LSP) plus a team mailbox, and a read-only teammate stays read-only through MCP. Workload is visible and assignable, teams can be stopped and reclaimed explicitly, and a plan needs your approval before members launch.
-            - **Two test-case-generation skills are built in.** `generate-test-cases-skill` (requirement document → test-case XMind, with persistent memory) and `testcase-playbook` (10 design methods + flowchart node-coverage matrix + quality gates + Excel / XMind output). Usable in any project session, no install. Settings › Skills lists them as read-only **built-in**.
-            - **Network proxy for session traffic** (Settings › General). Node's `fetch` ignores the system proxy, so before this a system proxy had no effect on model requests. Choose direct (default) / system / manual; it applies at once and covers the skill market and downloads too. The app's own update checks run in the desktop shell and are unaffected.
-            - **Remote access.** Configurable listener port, a Cloudflare tunnel (quick or named, `cloudflared` pinned and SHA-256 verified), plus Tailscale and the end-to-end encrypted relay.
-            - **Lean mode** (Settings › General): a project session loads no extensions, skills, prompt templates or context files, keeping only the built-in coding tools.
-
-            ### Fixes
-
-            - The composer's Agent Team switch used to jump to Settings when clicked — an old preference key was read with a new meaning. Migrated to a new key; the switch now arms one message, resets on send, and asks about cost once.
-            - Two list APIs (market, skill search) answered with a single row when the page size was omitted: `Number(null)` is `0`, and `0` is finite, so a missing limit became a 1-row page.
-            - A curated skill could read "at risk" in the list but "no risk found" on its detail page.
-            - Reading a compacted session could answer HTTP 500 when a historical message carried no usage block.
-            - Tool-result details the UI reads were stripped before reaching the browser; `entry_appended` reaches it again.
-
-            Bundled components: pi 1.5.0, pi-web 0.10.0.
+            Bundled components: pi 1.5.2, pi-web 0.10.0 (the fork's pinned base; this build carries the upstream v0.10 → v0.17 changes).
 
             ---
 
             ## Pi Agent Desktop 0.8.2（fork）
 
-            这是 pi-agent-desktop 的 **ojbkxc fork**，基于上游 0.8.2 构建。版本号不变，随下列新增内容重新发布。
+            这是 pi-agent-desktop 的 **ojbkxc fork**，基于上游 0.8.2 构建。版本号不变，随下列内容重新发布：上游 pi-web v0.10 至 v0.17 的安全 / 稳定性 / 性能吸收、pi SDK 1.5.2 / Next.js 16.4.4 / undici 8.12.3 升级，以及本 fork 的新增功能。
 
-            ### 本次重新发布
+            ### 安全（上游 v0.10 → v0.17 移植）
 
-            重新发布，修正计划审批链路。此前建团队后计划卡根本不会出现：`spawn=false` 的团队那一刻还没有成员会话，而计划卡只在「会话反查回团队」时出现，于是什么都不显示、计划也无法批准——现在提交计划时就记录 lead 会话。计划编辑器里正在输入的内容也不会再被 2 秒刷新重置；批准失败会说明原因而不是毫无反应；计划里占位的队长模型不会再被复制到成员；思考强度恢复可编辑。
+            - **preview 模式绕过已封堵。** 每个发行版都带同一个 `previewModeId`，请求头 `x-prerender-revalidate` 与之相等时 Next 会跳过 `proxy.ts` —— 即绕过 web 密码门与 Host/Origin 校验（腾讯玄武实验室报告）。npm CLI 启动时轮换三个 preview 密钥；桌面启动器在 Next 之前剥掉两个 revalidate 请求头，并在每次启动时把密钥重写为新的随机值，因此即使剥头被绕过，发行版里的旧值也已失效。
+            - **PowerShell 与 bash 同口径消毒。** PowerShell stand-in 会剥离 `PORT`、`NODE_ENV`、`NEXT_*`、`PI_WEB_PASSWORD`、`PI_DESKTOP_API_TOKEN`，只在被点名时激活，也不再顶掉用户扩展；bash stand-in 同样改为显式激活。
+            - **npx 不再继承主机密钥。** 技能安装 / 搜索 / 更新在运行第三方 npm 代码前剥离主机环境变量。
+            - **信任链归于正确的会话。** 子代理会话按父会话决定项目信任（只读一次，不写 trust.json），恢复的会话按自身目录决定，未信任目录里的子代理 profile 不再出现，未信任仓库的 `enabledModels` 也不再遮蔽全局列表。
+            - **文件边界更紧。** git/diff 端点逐级 `lstat`（防 junction 逃逸）；上传走同盘暂存、两次拒符号链接、原子替换；无界后缀 Range 返回 416；MIME 查表只认自有属性。桌面 popup 按 nonce 清理，代理凭据不再随环境变量泄漏给子进程，技能市场外链只渲染 `http(s)`。
 
-            ### 本次重发新增
+            ### 稳定性
 
-            - **团队计划可编辑，而且先审后跑。** 建团队不再直接派发成员：lead 先提交计划，聊天里出现计划卡。点开可以逐个成员改模型与 agent 预设、给勾选的成员批量设模型、跟随队长模型、恢复建议模型，以及改任务负责人——改完保存，确认无误再批准。保存后计划仍停在「等待确认」；批准才让 lead 执行 approve → launch，在此之前什么都不会跑。
-            - **团队工作台重新能打开。** 团队的 lead 会话曾被记成一个占位 id，导致 lead 自己的对话里没有团队条、也进不去工作台。现在从成员会话反推真实 lead；从头到尾没用过共享任务列表的团队，做完也不会再永远显示「组建中」。
-            - **侧栏转圈不再卡死。** 运行状态流的保活帧原来不带数据，半开连接会把侧栏的运行圈永远钉在屏幕上。现在心跳重复当前快照，客户端 75 秒无数据就判定断开并重连。
-            - **上下文用量是百分比，不是静止的环。** 输入框旁那个环现在直接显示已用比例，不再被当成卡住的加载圈。
-            - **Windows 上没把 Git 加进 PATH 也能用 bash。** Git Bash 装在 `Program Files` 或 `mingw64` 布局下，现在会从 `git.exe` 逐级向上找到；SDK 自己没有 shellPath 时才补上。
+            - **`session_start` 弹对话框的会话现在能正常启动**，不再在首轮之前死锁。
+            - **登录流断线不崩。** 设备码 SSE 流对已关闭的 controller 加了守卫，pi SDK 在启动时预导入，ChatGPT OAuth 的 device id 修正。
+            - **Code mode 不因一次启动卡顿被整个进程关掉。**
+            - **补齐剩余的在途回合失效路径守卫**，快速切换会话不会把旧回复写进新对话。
+            - **隧道探针固定直连**，与 `cloudflared` 自身的出网路径一致 —— 手动代理坏掉时不会再被误判成「隧道坏了」而拆掉一条本来通的隧道。
+
+            ### 性能
+
+            - **流式只重渲染回复本身。** 流式状态移出 React：每个 chunk 只重渲染 `StreamingReply`，不再带动整个窗口；整段流就是一个代码围栏时完全跳过 markdown 解析器。
+            - **会话列表只重扫文件尾部**，不再从文件头读起。
+            - **provider 签名不再下发浏览器**，长会话载荷更小。
+            - **共享 model runtime。** provider 与扩展目录只加载一次（带 TTL），不再按 provider / skills 请求重建。
+
+            ### 依赖
+
+            - pi SDK **1.5.2**（8 个 `@earendil-works/*` 包精确锁）、Next.js **16.4.4**、undici **8.12.3**（修复 9 个安全通告）。`npm audit --omit=dev` 零漏洞。
+
+            ### 新增
+
+            - **自动修 Bug。** 给一句话任务说明：独立会话改代码，每轮回合结束后由引擎自己跑项目的验证命令（test → typecheck → check → lint，没有判据的任务拒绝启动）。exit 0 才算成功；失败输出喂回下一轮，轮次上限默认 20，进度原子落盘，重启后自动接续。
+            - **挂机保活。** 15 秒心跳、按 pid 活性接续中断的会话（pid 还活着就永不判为孤儿），跨平台守护脚本（`scripts/pi-supervisor.mjs`：Windows 计划任务 / launchd / systemd user timer），重启预算 5 次/小时，断网时只等待不重启。设置 › 通用 › 挂机保活。
+            - **Cloudflare 命名隧道绑定固定域名。** 注册后轮询 cloudflared 推送的 ingress 规则；自定义域名指向本机网关即自动绑定，无需重启隧道；固定公网地址可复制 / 打开。公网校验按 0 / 2 / 4 / 8 / 15 秒节奏重试，预算 45 秒。
+            - **web 密码可存于设置。** 除 `PI_WEB_PASSWORD`（仍然优先）外，密码也能以 scrypt 哈希存进 0600 文件，绝不明文。改密即轮换会话令牌，旧会话全部失效。设置 › 通用 › 服务器。
+            - **cc-haha 计划控制。** 带 parentPlan 的计划卡显示停止按钮；RuntimeControls 增加暂停 / 恢复与成员模型、推理级别编辑（运行中的成员改配置返回 409）。
+
+            ### 界面
+
+            - **「引用」替代「关于这段内容」。** 选中文字后在光标处插入块引用，不再带脚手架文字。
+            - **「另开新会话」** 把该消息的文字与图片带进新会话输入框。
+            - **favicon 未读徽标**：等待输入为琥珀色，未读完成为蓝色，窗口隐藏期间累计计数。
+            - **独立渲染组件**：SVG 围栏像 Mermaid 一样预览（只挂 img，源码不进 DOM）、音视频内联播放、公式一键复制 LaTeX、编辑落盘前的 diff 预览、结构化工具参数行（不再是一坨 JSON）、每轮耗时、CSV/TSV 虚拟化表格视图。
 
             ### 修复
 
-            - 聊天页的 Agent Team 开关曾点一下就跳设置 —— 旧偏好键被以新语义读取。已迁移到新键；开关现在只勾选本条消息，发送后复位，首次开启提示一次成本。
-            - 两个列表接口在缺省分页大小时只回一行：`Number(null)` 是 `0`，而 `0` 是有限数，于是缺省被当成每页 1 条。
-            - 精选技能可能在列表标「存在风险」、详情却显示「未发现风险」。
-            - 读取被压缩过的会话时，历史消息缺 usage 字段会让状态接口 500。
-            - 界面要读的工具结果字段曾被抹掉；`entry_appended` 重新送达浏览器。
-            - 以 `+name` 形态保存的工具选择被误判成只读选择，能写的 MCP 服务器也被拦住。
+            - **技能市场六项缺陷。** 已安装页签不再因元数据缺失崩溃；翻页途中改筛选不再永久卡死；429 不再记成健康；安装锁按 owner 区分，卸载取同一把锁；文件预览同时校验 `path` 形状与技能文件清单；compaction 模型候选只保留已存凭据的模型。
+            - **团队停止要停全。** 停止 / 回收 / 结束判定 / 配额都补上计划独有成员；`plan.json` 损坏明确返回 400 而不是「尚无计划」；重发前校验 assignment 状态，不再重复投递；`team_create` 失败结果不再记到 lead 会话名下。
+            - **MCP 登录适配 pi 1.5.2。** 转发 SDK store 的 refresh lock，项目信任语义与 pi 1.5 对齐。
 
-            ### 本版包含
-
-            - **技能市场。** 整页浏览两个注册源（ClawHub + SkillHub）：搜索、来源 / 安全状态 / 安装状态三个筛选、13 类分类栏与计数、398 条精选离线快照、骨架卡片与滚动加载、详情含文件预览与「安装前请了解」能力面板。安装逐文件校验注册源校验和，且只写自己可再次删除的目录。
-            - **Agent Teams。** 每条消息可选择用团队处理；成员是"真" agent，加载与普通会话同一批内置扩展（codemode / tool-search / MCP / LSP）外加团队邮箱，只读成员在 MCP 侧同样只读。忙闲可见并可一键调度，团队可显式停止与回收，计划需你批准后才派成员。
-            - **内置两个测试用例生成技能。** `generate-test-cases-skill`（需求文档 → 测试用例 XMind，带持久化记忆）与 `testcase-playbook`（10 种设计方法 + 流程图节点覆盖矩阵 + 质量门禁 + Excel / XMind 输出）。任意项目会话开箱可用，无需安装；设置 › 技能 里显示为只读的**内置**。
-            - **会话流量的网络代理**（设置 › 通用）。node 的 `fetch` 不读系统代理，所以在此之前系统代理对模型请求没有任何作用。可选 直连（默认）/ 跟随系统 / 手动；改完立即生效，技能市场与各类下载同样走它。应用自身的更新检查在桌面壳里，不受影响。
-            - **远程访问。** 监听端口可配置、Cloudflare 隧道（快速或命名，`cloudflared` 固定版本 + SHA-256 校验），以及 Tailscale 与端到端加密中继。
-            - **极简档**（设置 › 通用）：项目会话不加载扩展、技能、提示模板与上下文文件，只留内置编码工具。
-
-            ### 修复
-
-            - 聊天页的 Agent Team 开关曾点一下就跳设置 —— 旧偏好键被以新语义读取。已迁移到新键；开关现在只勾选本条消息，发送后复位，首次开启提示一次成本。
-            - 两个列表接口在缺省分页大小时只回一行：`Number(null)` 是 `0`，而 `0` 是有限数，于是缺省被当成每页 1 条。
-            - 精选技能可能在列表标「存在风险」、详情却显示「未发现风险」。
-            - 读取被压缩过的会话时，历史消息缺 usage 字段会让状态接口 500。
-            - 界面要读的工具结果字段曾被抹掉；`entry_appended` 重新送达浏览器。
-
-            内置组件版本：pi 1.5.0、pi-web 0.10.0。
+            内置组件版本：pi 1.5.2、pi-web 0.10.0（fork 钉住的基线版本；本构建已携带上游 v0.10 → v0.17 的变更）。
           releaseDraft: true
           prerelease: false
           uploadUpdaterJson: true
