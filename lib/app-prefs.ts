@@ -26,6 +26,8 @@ export const APP_PREF_KEYS = {
   expandedProjects: "pi-web:expanded-projects",
   /** "1" while the sidebar Chats section is folded. */
   collapsedChats: "pi-web:collapsed-chats",
+  /** "1" while the sidebar's "Needs you" inbox (awaiting sessions) is folded. */
+  collapsedNeedsYou: "pi-web:collapsed-needs-you",
   /**
    * Agent Team 的**全局可用性**开关（Settings › General › Chat），默认 `true`。
    *

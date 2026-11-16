@@ -2241,6 +2241,39 @@ html.dark .sidebar-view-switcher-thumb {
   margin-top: 2px;
 }
 
+/* "Needs you" inbox (components/SessionSidebar.tsx): runs parked on a question
+   or approval, pinned above Chats. `.sidebar-project-tree` is a column flex
+   container, so this block must stay `flex: none` — with the default
+   `flex-shrink: 1` a tall inbox would be squeezed to a couple of pixels when
+   the tree overflows the viewport (a bug this repo has hit twice). */
+.sidebar-needs-you {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+  border-bottom: var(--hairline) solid var(--border);
+}
+
+.sidebar-needs-you-header {
+  margin-top: 2px;
+}
+
+/* The inbox title reads as "attention", not as another neutral section: the
+   amber matches the awaiting dot and the favicon badge. */
+.sidebar-needs-you-header .sidebar-project-tree-title {
+  color: var(--warning);
+}
+
+.sidebar-needs-you-header .sidebar-project-tree-count {
+  color: var(--warning);
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-needs-you-list {
+  flex: none;
+}
+
 /* The section title doubles as the fold toggle, like a project row. */
 .sidebar-chats-title {
   display: flex;
@@ -10335,6 +10368,31 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   font-weight: var(--fw-regular);
 }
 
+/* The "Waiting for you" group is the same inbox as the sidebar's Needs you
+   fold: an amber dot beside the title, and a count that reads as a badge. */
+.tasks-section--attention .tasks-section-title {
+  color: var(--warning);
+}
+
+.tasks-section--attention .tasks-section-count {
+  min-width: 18px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  color: var(--warning);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.tasks-section-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning);
+  flex-shrink: 0;
+}
+
 .tasks-card .scheduled-card-main { min-width: 0; }
 
 .tasks-status {
@@ -13258,4 +13316,92 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
     border-top: var(--hairline) solid var(--border);
     padding-top: 16px;
   }
+}
+
+/* ==========================================================================
+   Long-term memory (components/memory/MemorySettings.tsx). Rows reuse the
+   upstream `.settings-chat-option` surface; only the row internals are fork CSS.
+   ========================================================================== */
+
+.memory-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.memory-row.is-editing {
+  display: block;
+}
+
+.memory-row-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.memory-row-text {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-small);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.memory-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.memory-tag {
+  padding: 1px 6px;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: var(--fs-caption);
+}
+
+.memory-row-updated {
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+}
+
+.memory-row-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.memory-row-actions .config-button {
+  white-space: nowrap;
+}
+
+.memory-edit-text {
+  min-height: 64px;
+  resize: vertical;
+  line-height: 1.5;
+  font: inherit;
+}
+
+.memory-edit-actions,
+.memory-add-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.memory-add-row .settings-chats-hint {
+  margin-right: auto;
+}
+
+.memory-status {
+  display: block;
+  margin-top: 8px;
 }

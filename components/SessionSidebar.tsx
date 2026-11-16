@@ -307,6 +307,22 @@ function writeChatsCollapsed(collapsed: boolean): void {
   chatsCollapsedListeners.forEach((cb) => cb());
 }
 
+// Same hydration-safe fold for the "Needs you" inbox: it defaults open (the
+// whole point is to surface a blocked run), and folding it hides only the rows,
+// never the count.
+const needsYouCollapsedListeners = new Set<() => void>();
+function subscribeNeedsYouCollapsed(cb: () => void): () => void {
+  needsYouCollapsedListeners.add(cb);
+  return () => { needsYouCollapsedListeners.delete(cb); };
+}
+const readNeedsYouCollapsed = () => getPref(APP_PREF_KEYS.collapsedNeedsYou) === "1";
+const serverNeedsYouCollapsed = () => false;
+function writeNeedsYouCollapsed(collapsed: boolean): void {
+  if (collapsed) setPref(APP_PREF_KEYS.collapsedNeedsYou, "1");
+  else removePref(APP_PREF_KEYS.collapsedNeedsYou);
+  needsYouCollapsedListeners.forEach((cb) => cb());
+}
+
 function readIdSetPref(key: Parameters<typeof getPrefJson>[0]): Set<string> {
   const stored = getPrefJson<unknown>(key);
   return Array.isArray(stored)
@@ -321,6 +337,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // Same fold model as a project: folding drops the extra pages, so the next
   // unfold starts again from the first five chats.
   const chatsCollapsed = useSyncExternalStore(subscribeChatsCollapsed, readChatsCollapsed, serverChatsCollapsed);
+  // "Needs you" inbox fold. Defaults open; only the rows fold, the count stays.
+  const needsYouCollapsed = useSyncExternalStore(subscribeNeedsYouCollapsed, readNeedsYouCollapsed, serverNeedsYouCollapsed);
   const [chatSessionPages, setChatSessionPages] = useState(() => {
     const stored = getPrefJson<unknown>(APP_PREF_KEYS.chatSessionPages);
     return typeof stored === "number" && Number.isInteger(stored) && stored > 0 ? stored : 0;
@@ -1512,6 +1530,43 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     if (folded) setChatSessionPages(0);
   };
 
+  // "Needs you": every visible session parked on a dialog, pinned above the
+  // project tree in its own fold. The rows are the ordinary session rows (same
+  // component, same click path), so nothing here duplicates row behaviour.
+  // Subagent and scheduled rows are excluded the same way the tree excludes them.
+  const needsYouSessions = useMemo(() => {
+    if (awaitingInputSessionIds.size === 0) return [];
+    const byId = new Map<string, SessionInfo>();
+    for (const session of allSessions) {
+      if (session.transient || session.relation?.kind === "subagent" || session.relation?.kind === "scheduled") continue;
+      if (awaitingInputSessionIds.has(session.id)) byId.set(session.id, session);
+    }
+    // A waiting runtime session the last scan has not listed yet still deserves
+    // a row; fall back to the shallow identity the API would give it.
+    for (const sessionId of awaitingInputSessionIds) {
+      if (byId.has(sessionId)) continue;
+      const now = new Date().toISOString();
+      byId.set(sessionId, {
+        id: sessionId,
+        path: "",
+        cwd: "",
+        created: now,
+        modified: now,
+        messageCount: 0,
+        firstMessage: "",
+        transient: true,
+      });
+    }
+    // Longest wait first is unknown on the client; newest activity first is the
+    // honest order the rows can show (the API sorts by wait for the phone).
+    return [...byId.values()].sort((a, b) => b.modified.localeCompare(a.modified));
+  }, [allSessions, awaitingInputSessionIds]);
+  const needsYouCount = needsYouSessions.length;
+  // A search is its own mode: results should not be cluttered by a pinned block.
+  const needsYouHidden = trimmedSessionQuery !== "";
+  const needsYouFolded = needsYouCollapsed && !needsYouHidden;
+  const setNeedsYouFolded = (folded: boolean) => writeNeedsYouCollapsed(folded);
+
   const renderChatFamily = (family: (typeof chatFamilies)[number]) => {
     const [node] = buildSessionTree([family.root, ...family.subagents]);
     if (!node) return null;
@@ -2081,6 +2136,48 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         aria-label={`${t("sidebar.chats")} / ${t("sidebar.projects")}`}
         onScroll={handleListScroll}
       >
+        {/* "Needs you": runs parked on a question or approval, pinned above
+            Chats and Projects. Hidden entirely when nothing is waiting, so the
+            sidebar is unchanged on a quiet day. The count survives folding. */}
+        {needsYouCount > 0 && !needsYouHidden && (
+          <div className="sidebar-needs-you">
+            <div className="sidebar-project-tree-header sidebar-needs-you-header">
+              <button
+                type="button"
+                className="sidebar-chats-title"
+                data-sidebar-tree-row
+                aria-expanded={!needsYouFolded}
+                title={t(needsYouFolded ? "needsYou.expand" : "needsYou.collapse")}
+                onClick={() => setNeedsYouFolded(!needsYouCollapsed)}
+              >
+                <span className="sidebar-project-tree-title">{t("needsYou.title")}</span>
+                <span className="sidebar-project-tree-count" title={t("needsYou.count", { count: needsYouCount })}>
+                  ({needsYouCount})
+                </span>
+              </button>
+            </div>
+            {!needsYouFolded && (
+              <div className="sidebar-project-tree-children sidebar-needs-you-list">
+                {needsYouSessions.map((session) => (
+                  <SessionItem
+                    key={session.id}
+                    session={session}
+                    isSelected={session.id === selectedSessionId}
+                    isRunning
+                    isAwaiting
+                    onClick={() => handleSelectSessionFromList(session)}
+                    onRenamed={loadSessions}
+                    onDeleted={(id) => {
+                      onSessionDeleted?.(id);
+                      loadSessions();
+                    }}
+                    archiveActions={session.transient ? undefined : sessionArchiveActions(session.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <div className={`sidebar-project-tree-header sidebar-chats-header${chatsMenuOpen ? " is-menu-open" : ""}`}>
           <button
             type="button"

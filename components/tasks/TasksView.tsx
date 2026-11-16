@@ -107,8 +107,12 @@ export function TasksView({ sessions, runningSessionIds, onOpenSession }: Props)
   };
 
   const section = (key: "waiting" | "running" | "recent", rows: TaskRow[]) => rows.length > 0 && (
-    <section className="tasks-section" aria-labelledby={`tasks-${key}`}>
+    <section
+      className={`tasks-section${key === "waiting" ? " tasks-section--attention" : ""}`}
+      aria-labelledby={`tasks-${key}`}
+    >
       <h3 id={`tasks-${key}`} className="tasks-section-title">
+        {key === "waiting" && <span className="tasks-section-dot" aria-hidden="true" />}
         {t(`tasks.section.${key}`)}
         <span className="tasks-section-count">{rows.length}</span>
       </h3>
