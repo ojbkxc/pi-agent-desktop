@@ -114,9 +114,9 @@ jobs:
           tagName: v__VERSION__
           releaseName: pi-agent-desktop v__VERSION__
           releaseBody: |
-            ## Pi Agent Desktop 0.8.2 (fork)
+            ## Pi Agent Desktop 0.8.3 (fork)
 
-            The **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2. Same version number, re-published with the changes below: the security, stability and performance work from upstream pi-web v0.10 through v0.17, a pi SDK 1.5.2 / Next.js 16.4.4 / undici 8.12.3 upgrade, and the fork's own additions.
+            The **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2. This release carries the security, stability and performance work from upstream pi-web v0.10 through v0.17, a pi SDK 1.5.2 / Next.js 16.4.4 / undici 8.12.3 upgrade, and the fork's own additions.
 
             ### Security (upstream v0.10 → v0.17, ported)
 
@@ -170,9 +170,9 @@ jobs:
 
             ---
 
-            ## Pi Agent Desktop 0.8.2（fork）
+            ## Pi Agent Desktop 0.8.3（fork）
 
-            这是 pi-agent-desktop 的 **ojbkxc fork**，基于上游 0.8.2 构建。版本号不变，随下列内容重新发布：上游 pi-web v0.10 至 v0.17 的安全 / 稳定性 / 性能吸收、pi SDK 1.5.2 / Next.js 16.4.4 / undici 8.12.3 升级，以及本 fork 的新增功能。
+            这是 pi-agent-desktop 的 **ojbkxc fork**，基于上游 0.8.2 构建。本版包含：上游 pi-web v0.10 至 v0.17 的安全 / 稳定性 / 性能吸收、pi SDK 1.5.2 / Next.js 16.4.4 / undici 8.12.3 升级，以及本 fork 的新增功能。
 
             ### 安全（上游 v0.10 → v0.17 移植）
 
