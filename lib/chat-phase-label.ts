@@ -10,8 +10,8 @@ export type Translate = (key: string, params?: Record<string, string | number>) 
  * while before the next token arrives, and reporting the underlying "waiting for model"
  * phase in the meantime reads as a hang. Compaction is what the user needs to know.
  */
-export function phaseLabel(phase: AgentPhase, t: Translate, isCompacting?: boolean): string | null {
-  if (isCompacting) return t("chat.compacting");
+export function phaseLabel(phase: AgentPhase, t: Translate, isCompacting?: boolean, queuedCount = 0): string | null {
+  if (isCompacting) return queuedCount > 0 ? t("chat.compactingQueued", { count: queuedCount }) : t("chat.compacting");
   if (phase?.kind === "running_tools") {
     const latest = phase.tools[phase.tools.length - 1];
     if (latest?.progress) {

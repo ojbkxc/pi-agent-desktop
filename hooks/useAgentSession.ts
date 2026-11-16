@@ -187,7 +187,7 @@ export interface SlashCommandInfo {
 
 export type BuiltinSlashCommandResult =
   | { handled: false }
-  | { handled: true; message?: string; error?: string; action?: "openSessionStats" | "openSettings" };
+  | { handled: true; message?: string; error?: string; action?: "openSessionStats" | "openSettings" | "compact" };
 
 export interface UseAgentSessionOptions {
   session: SessionInfo | null;
@@ -335,6 +335,8 @@ export interface AttachedImage {
 }
 
 type SelectedModel = { provider: string; modelId: string };
+/** `clear_queue` and `abort`: queued texts, plus the images of prompts parked behind a compaction. */
+type RecalledPrompts = { steering?: string[]; followUp?: string[]; images?: Array<{ data: string; mimeType: string }> };
 type ModelEntry = { id: string; name: string; provider: string };
 type ModelsResponse = {
   models: Record<string, string>;
@@ -728,7 +730,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const restoreSubmission = useCallback((
     text: string,
-    images: AttachedImage[] | undefined,
+    images: Array<{ data: string; mimeType: string }> | undefined,
     targetDraftKey: string | undefined,
   ) => {
     const draftImages = images?.map(({ data, mimeType }) => ({ data, mimeType }));
@@ -2068,6 +2070,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     pendingScrollToUserRef.current = true;
     setPromptAnchorActive(true);
 
+    // A queued prompt (parked behind compaction, or queued into a run) is not a
+    // sent message yet: the queue rows show it, and the transcript shows it when
+    // the flush delivers it. Drop the optimistic bubble for it.
+    const dropOptimisticUserMessage = () => {
+      setMessages((prev) => {
+        const index = prev.lastIndexOf(userMsg);
+        return index === -1 ? prev : [...prev.slice(0, index), ...prev.slice(index + 1)];
+      });
+      optimisticUserMessageKeyRef.current = null;
+    };
     const piImages = images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
     let sentSessionId: string | null = null;
     let promptRequestStarted = false;
@@ -2088,21 +2100,23 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
         await ensureEventsConnected(sid);
         promptRequestStarted = true;
-        await sendAgentCommand(sid, {
+        const queuedAck = await sendAgentCommand<{ queued?: boolean }>(sid, {
           type: "prompt",
           message,
           ...(piImages?.length ? { images: piImages } : {}),
         });
+        if (queuedAck?.queued) dropOptimisticUserMessage();
         promoteNewSession(1, message);
       } else if (session) {
         sentSessionId = session.id;
         await ensureEventsConnected(session.id);
         promptRequestStarted = true;
-        await sendAgentCommand(session.id, {
+        const queuedAck = await sendAgentCommand<{ queued?: boolean }>(session.id, {
           type: "prompt",
           message,
           ...(piImages?.length ? { images: piImages } : {}),
         });
+        if (queuedAck?.queued) dropOptimisticUserMessage();
       } else {
         throw new Error("No active session for the prompt");
       }
@@ -2181,6 +2195,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [addNotice, chatWorkspace, composerDraftKey, ensureEventsConnected, ensureNewSession, loadSession, promoteNewSession, restoreSubmission, session, t]);
   executeBashRef.current = executeBash;
 
+  /** Recall's and Stop's queued texts, and the images of prompts parked behind a compaction, back in the composer. */
+  const restoreRecalledPrompts = useCallback((recalled: RecalledPrompts | null | undefined) => {
+    const text = [...(recalled?.steering ?? []), ...(recalled?.followUp ?? [])].join("\n\n");
+    if (recalled?.images?.length) restoreSubmission(text, recalled.images, composerDraftKey);
+    else if (text) opts.chatInputRef?.current?.prependText(text);
+  }, [composerDraftKey, opts.chatInputRef, restoreSubmission]);
+
   const handleAbort = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (!sid) return;
@@ -2193,11 +2214,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       return;
     }
     try {
-      await sendAgentCommand(sid, { type: "abort" });
+      // Stop takes the queued messages back for the composer, as Esc does in pi's TUI,
+      // with the prompts parked behind a compaction (and their images), as Recall does.
+      const recalled = await sendAgentCommand<RecalledPrompts | null>(sid, { type: "abort" });
+      // The server's queue_update only reaches us while SSE is connected; clear locally too.
+      if (recalled) setQueuedMessages({ steering: [], followUp: [] });
+      restoreRecalledPrompts(recalled);
     } catch (e) {
       console.error("Failed to abort:", e);
     }
-  }, []);
+  }, [restoreRecalledPrompts]);
 
   const { handleAbortRetry, handleSetAutomation } = useSessionAutomationActions<AgentStateResponse>({
     sessionIdRef, setAutomation, addNotice, resync: syncLiveModel,
@@ -2332,26 +2358,39 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [addNotice, currentModelOverride, isNew, loadSession, setNewSessionModel]);
 
-  const handleCompact = useCallback(async () => {
+  /**
+   * Manual compaction (the Compact button and `/compact`). Never awaited by a
+   * caller that holds the composer: the compact POST is blocking and lasts the
+   * whole compaction, and `runBuiltinCommand` keeps the composer's fieldset
+   * disabled until the command resolves. The compaction reports itself — the
+   * Compacting status, Stop compaction, the result banner and its error.
+   */
+  /** Resolves false when the compaction failed. */
+  const handleCompact = useCallback(async (customInstructions?: string): Promise<boolean> => {
     const sid = sessionIdRef.current;
-    if (!sid || isCompacting) return;
+    if (!sid || isCompacting) return true;
     setIsCompacting(true);
     setCompactError(null);
     setCompactNotice(null);
     setCompactResult(null);
     try {
-      const result = await sendAgentCommand<CompactCommandResult>(sid, { type: "compact" });
+      const result = await sendAgentCommand<CompactCommandResult>(sid, {
+        type: "compact",
+        ...(customInstructions ? { customInstructions } : {}),
+      });
       setCompactResult(readCompactResult(result, "manual"));
       // includeState: manual compact ends no model run, so no agent_end ever
       // refreshes contextUsage — the ring would keep the pre-compact percentage
       // until the next turn (PR #38).
-      await loadSession(sid, true, true);
+      if (await loadSession(sid, true, true)) promoteNewSession();
+      return true;
     } catch (e) {
       reportCompactFailure(e instanceof Error ? e.message : String(e));
+      return false;
     } finally {
       setIsCompacting(false);
     }
-  }, [isCompacting, loadSession, reportCompactFailure, setCompactNotice]);
+  }, [isCompacting, loadSession, promoteNewSession, reportCompactFailure, setCompactNotice]);
 
   const loadModels = useCallback(async (signal?: AbortSignal) => {
     const modelCwd = newSessionCwd ?? session?.cwd ?? "";
@@ -2475,18 +2514,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       switch (commandName) {
         case "compact": {
           if (!sid || isCompacting) return complete({ handled: true, error: "No active session to compact" });
-          setIsCompacting(true);
-          setCompactError(null);
-          setCompactNotice(null);
-          setCompactResult(null);
-          const result = await sendAgentCommand<CompactCommandResult>(sid, {
-            type: "compact",
-            ...(args ? { customInstructions: args } : {}),
+          // Detached on purpose. This must resolve now: runBuiltinCommand holds
+          // the composer's fieldset disabled until the command resolves, and the
+          // compact POST blocks for the whole compaction, which read as an input
+          // box that stopped taking text until the session was switched away and
+          // back. The compaction reports itself (Compacting status, Stop
+          // compaction, result banner, error), so no completion notice here.
+          // A failed compaction gives its instructions back, as the awaited command
+          // left them in the composer.
+          void handleCompact(args || undefined).then((compacted) => {
+            if (!compacted && args) opts.chatInputRef?.current?.prependText(`/compact ${args}`);
           });
-          setCompactResult(readCompactResult(result, "manual"));
-          // includeState refreshes contextUsage — see handleCompact (PR #38).
-          if (await loadSession(sid, true, true)) promoteNewSession();
-          return complete({ handled: true, message: "Compacted context" });
+          return complete({ handled: true, action: "compact" });
         }
 
         case "auto-compact": {
@@ -2598,10 +2637,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         return { handled: true };
       }
       return complete({ handled: true, error: message });
-    } finally {
-      if (commandName === "compact") setIsCompacting(false);
     }
-  }, [activeLeafId, addNotice, reportCompactFailure, ensureNewSession, isCompacting, loadModels, loadSession, loadSlashCommands, loadTools, promoteNewSession, onOpenSettings, onSessionForked, onSessionStatsPanelOpen, slashCommandsForMcp, setAutomation, setCompactNotice]);
+  }, [activeLeafId, addNotice, handleCompact, reportCompactFailure, ensureNewSession, isCompacting, loadModels, loadSession, loadSlashCommands, loadTools, promoteNewSession, onOpenSettings, onSessionForked, onSessionStatsPanelOpen, opts.chatInputRef, slashCommandsForMcp, setAutomation]);
 
   // Let AgentSession.prompt decide atomically whether to queue against the
   // current run or start a new turn if it settled while the request was in
@@ -2711,23 +2748,20 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, []);
 
-  const handleRecallQueue = useCallback(async () => {
+    const handleRecallQueue = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (!sid) return;
     try {
-      const result = await sendAgentCommand<{ steering?: string[]; followUp?: string[] }>(sid, { type: "clear_queue" });
+      const result = await sendAgentCommand<RecalledPrompts>(sid, { type: "clear_queue" });
       // clearQueue also emits an empty queue_update, but that only reaches us
       // while SSE is connected — clear locally so idle recalls update the UI.
-      setQueuedMessages(previous => ({ ...previous, steering: [], followUp: [] }));
-      const texts = [...(result?.steering ?? []), ...(result?.followUp ?? [])];
-      if (texts.length > 0) {
-        opts.chatInputRef?.current?.prependText(texts.join("\n\n"));
-      }
+      setQueuedMessages({ steering: [], followUp: [] });
+      restoreRecalledPrompts(result);
     } catch (e) {
       console.error("Failed to recall queued messages:", e);
       addNotice({ type: "error", message: "Failed to recall queued messages" });
     }
-  }, [opts.chatInputRef, addNotice]);
+  }, [addNotice, restoreRecalledPrompts]);
 
   const handleThinkingLevelChange = useCallback(async (level: ThinkingLevelOption) => {
     if (level === "auto") {

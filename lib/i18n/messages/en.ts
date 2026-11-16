@@ -476,6 +476,8 @@ export const enLocale: LocalePlugin = {
     "chat.stopCompaction": "Stop compaction",
     "chat.compactContext": "Compact context",
     "chat.compacting": "Compacting…",
+    "chat.compactingQueued": "Compacting… · {count} queued",
+    "chat.compactingPlaceholder": "Compacting… messages queue until it finishes",
     "chat.compact": "Compact",
     "chat.stopAgent": "Stop agent",
     "chat.stop": "Stop",

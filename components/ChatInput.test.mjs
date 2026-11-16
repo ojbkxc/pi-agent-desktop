@@ -1375,3 +1375,16 @@ test("runBuiltinCommand 有超时上限：超时按未处理返回且不 clearIn
   const raceToClear = body.slice(body.indexOf("if (!result || !result.handled) return false;"), body.indexOf("if (!result || !result.handled) return false;") + 260);
   assert.ok(!/clearInput\(\)/.test(raceToClear.slice(0, raceToClear.indexOf("if (!result.error"))), "超时路径不得清空输入");
 });
+
+
+
+test("the composer stays editable while compacting and says messages queue", () => {
+  const html = renderWithI18n(
+    React.createElement(ChatInput, {
+      onSend() {}, isCompacting: true,
+    }),
+  );
+
+  assert.doesNotMatch(html, /<textarea[^>]*(?:^|[^-a-zA-Z])disabled/);
+  assert.match(html, /placeholder="Compacting… messages queue until it finishes"/);
+});
