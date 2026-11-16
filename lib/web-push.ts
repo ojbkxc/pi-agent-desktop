@@ -40,10 +40,11 @@ interface WebPushEnvironment {
   isRelayDevicePaired?: (deviceId: string) => boolean;
 }
 
-/** What happened in a session: a run finished, failed, or is waiting on a dialog. */
+/** What happened in a session: a run finished, failed, was stopped, or is waiting on a dialog. */
 export type SessionPushEvent =
   | { kind: "complete"; tag?: string }
   | { kind: "failed"; detail?: string; tag?: string }
+  | { kind: "stopped"; detail?: string; tag?: string }
   | { kind: "attention"; detail?: string; tag?: string };
 
 export interface WebPushNotifier {
@@ -153,6 +154,8 @@ type PushLocale = "en" | "zh-CN" | "zh-TW";
 const EVENT_TEXT: Record<PushLocale, {
   failedTitle: string;
   failedBody: string;
+  stoppedTitle: string;
+  stoppedBody: string;
   attentionTitle: string;
   attentionBody: string;
   testTitle: string;
@@ -161,6 +164,8 @@ const EVENT_TEXT: Record<PushLocale, {
   en: {
     failedTitle: "Run failed",
     failedBody: "The run stopped with an error.",
+    stoppedTitle: "Run stopped",
+    stoppedBody: "The run was stopped.",
     attentionTitle: "Waiting for you",
     attentionBody: "A session is waiting for your answer.",
     testTitle: "Pi notifications are on",
@@ -169,6 +174,8 @@ const EVENT_TEXT: Record<PushLocale, {
   "zh-CN": {
     failedTitle: "运行失败",
     failedBody: "本次运行因错误而停止。",
+    stoppedTitle: "运行已停止",
+    stoppedBody: "本次运行已被停止。",
     attentionTitle: "等待你处理",
     attentionBody: "有会话在等你回复。",
     testTitle: "Pi 通知已开启",
@@ -177,6 +184,8 @@ const EVENT_TEXT: Record<PushLocale, {
   "zh-TW": {
     failedTitle: "執行失敗",
     failedBody: "本次執行因錯誤而停止。",
+    stoppedTitle: "執行已停止",
+    stoppedBody: "本次執行已被停止。",
     attentionTitle: "等待你處理",
     attentionBody: "有工作階段在等你回覆。",
     testTitle: "Pi 通知已開啟",
@@ -214,10 +223,14 @@ export function sessionPushPayload(
   }
   const text = EVENT_TEXT[pushLocale(locale)];
   const detail = shortDetail(event.detail);
-  const label = event.kind === "failed" ? text.failedTitle : text.attentionTitle;
+  const label = event.kind === "failed" ? text.failedTitle
+    : event.kind === "stopped" ? text.stoppedTitle
+      : text.attentionTitle;
   return {
     title: sessionName ? `${label} · ${sessionName}` : label,
-    body: detail || (event.kind === "failed" ? text.failedBody : text.attentionBody),
+    body: detail || (event.kind === "failed" ? text.failedBody
+      : event.kind === "stopped" ? text.stoppedBody
+        : text.attentionBody),
     url,
     tag,
   };

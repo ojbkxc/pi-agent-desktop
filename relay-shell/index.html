@@ -31,6 +31,33 @@
   #screen-app { position: fixed; inset: 0; padding: 0; display: block; }
   #screen-app[hidden], .screen[hidden] { display: none; }
   #app-frame { border: 0; width: 100%; height: 100%; display: block; background: var(--bg); }
+  /* ---- home dashboard (needs you / recently finished) ---- */
+  #screen-home { position: fixed; inset: 0; display: block; overflow-y: auto; padding: max(16px, env(safe-area-inset-top)) 16px calc(96px + env(safe-area-inset-bottom)); background: var(--bg); }
+  #screen-home[hidden] { display: none; }
+  .home-wrap { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+  .home-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .home-head h1 { font-size: 24px; }
+  .home-head p { font-size: 12px; }
+  .home-status { font-size: 12px; color: var(--muted); }
+  .home-section h2 { font: 600 13px/1.4 inherit; margin: 0 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .home-section h2 .count { color: var(--accent); margin-left: 6px; }
+  .home-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+  .home-row { display: block; width: 100%; text-align: left; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 11px 13px; }
+  .home-row:active { opacity: .8; }
+  .home-row[data-tone="attention"] { border-left: 3px solid var(--warn); }
+  .home-row[data-tone="done"] { border-left: 3px solid var(--ok); }
+  .home-row-title { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .home-row-meta { display: block; margin-top: 3px; font-size: 12px; color: var(--muted); }
+  .home-row-preview { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 5px; font-size: 13px; color: var(--muted); }
+  .home-empty { padding: 14px 13px; border: 1px dashed var(--border); border-radius: 12px; color: var(--muted); font-size: 13px; }
+  .home-link { font: inherit; color: var(--accent); background: none; border: 0; padding: 0; text-align: left; }
+  .home-error { font-size: 12px; color: var(--bad); }
+  #home-open { position: fixed; z-index: 9; left: 50%; transform: translateX(-50%); bottom: max(12px, env(safe-area-inset-bottom)); min-width: 220px; max-width: calc(100% - 32px); padding: 13px 18px; border: 0; border-radius: 999px; font: 600 15px/1 inherit; color: #fff; background: var(--accent); box-shadow: 0 6px 20px rgba(0,0,0,.22); }
+  #screen-home[hidden] ~ #home-open { display: none; }
+  /* The app screen gets a way back and a needs-you chip; the chip appears only while the dashboard says someone is waiting. */
+  #feed-note { position: fixed; z-index: 9; right: max(10px, env(safe-area-inset-right)); top: max(10px, env(safe-area-inset-top)); max-width: 60%; padding: 6px 11px; border: 1px solid var(--warn); border-radius: 999px; font: 600 12px/1.3 inherit; color: var(--text); background: var(--panel); box-shadow: 0 4px 14px rgba(0,0,0,.16); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #app-home { position: fixed; z-index: 9; left: max(10px, env(safe-area-inset-left)); bottom: max(10px, env(safe-area-inset-bottom)); padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); font-size: 12px; }
+  #screen-app[hidden] ~ #app-home, #screen-app[hidden] ~ #feed-note { display: none; }
   #status { position: fixed; z-index: 10; right: max(10px, env(safe-area-inset-right)); bottom: max(10px, env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); font-size: 12px; opacity: .92; }
   #status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
   #status[data-state="open"]::before { background: var(--ok); }
@@ -72,6 +99,27 @@
   <section id="screen-app" hidden>
     <iframe id="app-frame" title="Pi"></iframe>
   </section>
+  <section id="screen-home" class="screen" hidden>
+    <div class="home-wrap">
+      <div class="home-head">
+        <h1>Pi</h1>
+        <p class="home-status" id="home-status" role="status"></p>
+      </div>
+      <p>What needs you and what finished lately, from your computer. <button id="home-refresh" class="home-link" type="button">Refresh</button></p>
+      <section class="home-section">
+        <h2>Needs you <span class="count" id="home-awaiting-count"></span></h2>
+        <ul class="home-list" id="home-awaiting"></ul>
+      </section>
+      <section class="home-section">
+        <h2>Recently finished</h2>
+        <ul class="home-list" id="home-completed"></ul>
+      </section>
+      <p class="home-error" id="home-error" role="alert" hidden></p>
+    </div>
+  </section>
+  <button id="home-open" type="button" hidden>Open the full app</button>
+  <button id="app-home" type="button" hidden>Dashboard</button>
+  <button id="feed-note" type="button" hidden></button>
   <button id="status" type="button" hidden data-state="connecting" aria-label="Connection"><span id="status-text">Connecting…</span></button>
   <div id="menu" hidden>
     <button id="reconnect-button" type="button">Reconnect</button>

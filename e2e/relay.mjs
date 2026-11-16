@@ -132,6 +132,9 @@ try {
     assert.equal(approved.status, 200);
     step("paired from the QR link after approval on the desktop");
 
+    // Pairing lands on the dashboard; the full app is one tap away (relay-shell).
+    await page.locator("#screen-home").waitFor({ timeout: 30_000 });
+    await page.locator("#home-open").click();
     const frame = page.frameLocator("#app-frame");
     await frame.getByText("New Session").first().waitFor({ timeout: 60_000 });
     const app = page.frames().find((f) => f !== page.mainFrame());
@@ -164,6 +167,9 @@ try {
 
     await page.screenshot({ path: join(out, `${engine}-app.png`) });
     await page.reload();
+    // Reload lands on the dashboard again; the app one tap away, as on pairing.
+    await page.locator("#screen-home").waitFor({ timeout: 30_000 });
+    await page.locator("#home-open").click();
     await page.frameLocator("#app-frame").getByText("New Session").first().waitFor({ timeout: 60_000 });
     step("reload reconnects with the stored device key, no new pairing");
 
@@ -181,6 +187,10 @@ try {
     await page.getByText("Tick the box to replace").waitFor();
     assert.equal((await api("/api/relay")).body.pending.length, 0, "nothing was sent without the tick");
     await page.goto(`${entry}/__shell/`);
+    // The dashboard says who needs you (the route the desktop added), and the
+    // full app stays one tap away.
+    await page.locator("#screen-home").waitFor({ timeout: 30_000 });
+    await page.locator("#home-open").click();
     await page.frameLocator("#app-frame").getByText("New Session").first().waitFor({ timeout: 60_000 });
     step("a pairing link on a paired phone needs an explicit replace");
 
