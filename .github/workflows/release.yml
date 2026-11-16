@@ -152,6 +152,13 @@ jobs:
             - **Cloudflare named tunnels bind a fixed domain.** After registration the app polls the ingress rules cloudflared publishes; when your custom hostname points at the local gateway it binds itself, with no restart, and the fixed public URL is shown with copy/open. Public verification retries on a 0/2/4/8/15-second schedule within a 45-second budget.
             - **A web password can live in settings.** Besides `PI_WEB_PASSWORD` (which still wins), the password can be stored as a scrypt hash in a 0600 file — never plaintext. Changing it rotates the session token, so old sessions stop working. Settings › General › Server.
             - **cc-haha plan controls.** A plan card with a parent plan gets a Stop button, and RuntimeControls adds pause / resume plus per-member model and reasoning-level edits (a running member refuses edits with 409).
+            - **Background commands.** `bash_background` returns immediately with a job id, so a long build, test suite or dev server no longer blocks the conversation. Output streams to `~/.pi/agent/pi-web/jobs/<id>.log` (capped at 8 MB) and only a 4 KB tail comes back when it finishes, as a new message. Jobs survive a restart as records (an interrupted one is settled, never silently "still running"), stop kills the whole process tree, and `bash_background` is subject to the same command approval as `bash`.
+            - **Always-on sessions (pin) and a router role.** A pinned session is exempt from the ten-minute idle unload, so it is always ready. A session pinned as `router` also gets instructions to delegate work to background workers and summarize their reports instead of doing the work itself. Sidebar section + Settings › General › Always on.
+            - **Provider outage recovery.** When the model API is unreachable for minutes or hours, the session parks and resumes by itself once the provider answers — backoff 30s → 1m → 2m → 5m → 10m → 20m → 30m with jitter, double gate at 40 attempts / 6 hours (24 for quota errors), quota errors retried from 5 minutes. Settings › General › Provider outage recovery.
+            - **Long-term memory.** Preferences and facts survive across sessions in `~/.pi/agent/pi-web/memory.json` (200 entries, 4 KB each), injected into the prompt as the 30 most recent. A `memory` tool lets the model write them; the settings page lets you edit them.
+            - **Command approval.** Before a shell command runs, it is matched against a dangerous-command rule set and can require your confirmation (`off` by default, fail-open when no one can answer). Settings › General › Command approval.
+            - **"Needs you" inbox.** Sessions parked on a question or approval are pinned at the top of the sidebar, and the phone home screen shows who is waiting on you and who finished. Completing runs can also push a notification, with a stop-push option.
+            - **Web login is password-only.** The username field is gone (including the browser's Basic-auth prompt), and `/login` doubles as the first-time password setup page when no password is configured yet.
 
             ### UI
 
@@ -208,6 +215,13 @@ jobs:
             - **Cloudflare 命名隧道绑定固定域名。** 注册后轮询 cloudflared 推送的 ingress 规则；自定义域名指向本机网关即自动绑定，无需重启隧道；固定公网地址可复制 / 打开。公网校验按 0 / 2 / 4 / 8 / 15 秒节奏重试，预算 45 秒。
             - **web 密码可存于设置。** 除 `PI_WEB_PASSWORD`（仍然优先）外，密码也能以 scrypt 哈希存进 0600 文件，绝不明文。改密即轮换会话令牌，旧会话全部失效。设置 › 通用 › 服务器。
             - **cc-haha 计划控制。** 带 parentPlan 的计划卡显示停止按钮；RuntimeControls 增加暂停 / 恢复与成员模型、推理级别编辑（运行中的成员改配置返回 409）。
+            - **后台命令。** `bash_background` 立即返回 job id：长构建、测试套件、开发服务器不再卡住对话。输出流式落 `~/.pi/agent/pi-web/jobs/<id>.log`（8 MB 封顶），结束时只把尾部 4 KB 作为一条新消息带回。job 记录重启后仍在（被中断的会被结算，不会一直显示「还在跑」），停止会杀掉整个进程树，`bash_background` 与 `bash` 同样受命令审批管辖。
+            - **常驻会话（pin）与分派者角色。** 被 pin 的会话不受十分钟闲置卸载影响，始终就绪；pin 为 `router` 的会话还会收到一段提示 —— 把活儿派给后台 Worker 并汇总回报，而不是自己动手。侧栏分区 + 设置 › 通用 › 常驻。
+            - **模型 API 中断自愈。** 上游不可用几分钟到几小时时，会话挂起等待，恢复后自动接着干 —— 退避 30 秒 → 1 分 → 2 分 → 5 分 → 10 分 → 20 分 → 30 分并带抖动，双闸 40 次 / 6 小时（额度类 24 小时，从 5 分钟起探测）。设置 › 通用 › 中断自愈。
+            - **长期记忆。** 偏好与事实跨会话保留在 `~/.pi/agent/pi-web/memory.json`（200 条、每条 4 KB），以最近 30 条注入提示词；`memory` 工具供模型写入，设置页可编辑。
+            - **命令审批。** shell 命令执行前按危险命令规则匹配，可要求你确认（默认关闭；无人可确认时放行）。设置 › 通用 › 命令审批。
+            - **「需要你」收件箱。** 停在提问或审批上的会话置顶在侧栏；手机端首页显示谁在等你、谁已完成。完成时还可推送通知，并提供停止推送。
+            - **网页登录只要密码。** 用户名已移除（连同浏览器的 Basic 认证弹框），`/login` 在尚未设密码时兼作首次设置页。
 
             ### 界面
 
