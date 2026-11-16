@@ -1,11 +1,10 @@
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import webpush from "web-push";
 import { writePrivateFileAtomicSync } from "./atomic-file";
 import { enLocale } from "./i18n/messages/en";
 import { zhCNLocale } from "./i18n/messages/zh-CN";
-import { getAgentDir } from "./session-reader";
+import { getAgentDir, openSessionManager, resolveSessionPath } from "./session-reader";
 import { isTailscaleLoginAllowed } from "./remote-access";
 import { isRelayDevicePaired } from "./relay/runtime";
 
@@ -33,7 +32,8 @@ interface WebPushEnvironment {
   loadState: () => PushStateFile | null;
   saveState: (state: PushStateFile) => void;
   generateVapidKeys: () => PushStateFile["vapidKeys"];
-  listSessionNames: () => Promise<Map<string, string>>;
+  /** Title lookup for a caller that did not pass one. Reads that one session file, never the whole folder. */
+  sessionName?: (sessionId: string) => Promise<string | undefined>;
   /** Whether a remote subscriber's login is still let in; a revoked phone stops getting titles and prompts. */
   isLoginAllowed?: (login: string) => boolean;
   /** Whether a relay device is still paired; a revoked phone stops getting pushes. */
@@ -51,8 +51,8 @@ export interface WebPushNotifier {
   addSubscription: (subscription: PushSubscriptionRecord) => void;
   removeSubscription: (endpoint: string) => boolean;
   hasSubscription: (endpoint: string) => boolean;
-  notifySessionComplete: (sessionId: string) => Promise<void>;
-  /** `sessionName`: the caller's copy of the title (null = untitled); omitted, it is looked up. */
+  notifySessionComplete: (sessionId: string, sessionName?: string) => Promise<void>;
+  /** `sessionName`: the caller's copy of the title (null = untitled); omitted, one session file is read. */
   notifySessionEvent: (sessionId: string, event: SessionPushEvent, sessionName?: string | null) => Promise<void>;
   /** Send a test notification to one subscription; false when it is not registered. */
   sendTest: (endpoint: string) => Promise<boolean>;
@@ -113,16 +113,18 @@ function getDefaultEnvironment(): WebPushEnvironment {
     generateVapidKeys: () => webpush.generateVAPIDKeys(),
     isLoginAllowed: (login) => isTailscaleLoginAllowed(login),
     isRelayDevicePaired: (deviceId) => isRelayDevicePaired(deviceId),
-    async listSessionNames() {
-      const names = new Map<string, string>();
+    async sessionName(sessionId) {
+      // Title for a push whose caller did not pass one: read that session file
+      // only. The old lookup parsed every session file (372 ms of CPU and
+      // ~250 MB on a 146 MB folder) for one row's title.
       try {
-        for (const session of await SessionManager.listAll()) {
-          if (session.name) names.set(session.id, session.name);
-        }
+        const filePath = await resolveSessionPath(sessionId);
+        if (!filePath) return undefined;
+        return openSessionManager(filePath).getSessionName();
       } catch {
-        // Session list is best-effort; fall back to the generic title.
+        // Best-effort; fall back to the generic title.
+        return undefined;
       }
-      return names;
     },
   };
 }
@@ -265,7 +267,7 @@ export function createWebPushNotifier(environment: WebPushEnvironment): WebPushN
     if (recipients.length === 0) return;
     const sessionName = knownName !== undefined
       ? knownName ?? undefined
-      : (await environment.listSessionNames()).get(sessionId);
+      : await environment.sessionName?.(sessionId);
     await sendAll(recipients, (locale) => sessionPushPayload(sessionId, sessionName, event, locale));
   };
 
@@ -291,8 +293,8 @@ export function createWebPushNotifier(environment: WebPushEnvironment): WebPushN
     hasSubscription(endpoint) {
       return state.subscriptions.some((s) => s.endpoint === endpoint);
     },
-    notifySessionComplete(sessionId) {
-      return notifySessionEvent(sessionId, { kind: "complete" });
+    notifySessionComplete(sessionId, sessionName) {
+      return notifySessionEvent(sessionId, { kind: "complete" }, sessionName);
     },
     notifySessionEvent,
     async sendTest(endpoint) {
@@ -324,9 +326,9 @@ export function addSubscription(subscription: PushSubscriptionRecord): Promise<v
   return getNotifier().then((notifier) => notifier.addSubscription(subscription));
 }
 
-export async function notifySessionComplete(sessionId: string): Promise<void> {
+export async function notifySessionComplete(sessionId: string, sessionName?: string): Promise<void> {
   const notifier = await getNotifier();
-  await notifier.notifySessionComplete(sessionId);
+  await notifier.notifySessionComplete(sessionId, sessionName);
 }
 
 export async function notifySessionEvent(
