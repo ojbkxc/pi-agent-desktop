@@ -18,6 +18,8 @@ export const liveRunnerDeps: RunnerDeps = {
       ...(options.initialModel ? { initialModel: options.initialModel } : {}),
       ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel as never } : {}),
       allowInitialModelFallback: options.allowInitialModelFallback,
+      // 无人值守：没人能点确认，命令审批一律跳过（见 RpcSessionStartOptions.skipToolApproval）。
+      skipToolApproval: true,
     });
     allowFileRoot(cwd);
     invalidateSessionListCache();

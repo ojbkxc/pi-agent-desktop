@@ -1,18 +1,20 @@
 /**
- * pi-agent-desktop 内置接线：把跨端扩展（lsp-mcp / pi-team / pi-purge / goal）的工厂包成
- * `builtin:` 扩展，交给普通会话的 extensionFactories。
+ * pi-agent-desktop 内置接线：把跨端扩展（lsp-mcp / pi-team / pi-purge / goal / memory /
+ * tool-approval）的工厂包成 `builtin:` 扩展，交给普通会话的 extensionFactories。
  *
  * 形态与 lib/builtin-extensions.ts 的 `builtin(name, factory)` 一致：`builtin: true`
  * 让 SDK 把它当 `builtin:<name>` 资源——默认加载，`-builtin:<name>` 或 `--no-extensions`
  * 可关闭。`replaceable: true` 允许用户用同名工具/命令的第三方扩展顶替。
  *
  * 接线到两处（都在 lib/rpc-manager.ts 与 lib/subagent-runtime.ts）：
- *   - **普通会话**：四个扩展全给（normal-session 分支）。
+ *   - **普通会话**：六个扩展全给（normal-session 分支）。
  *   - **团队成员（子会话）**：只给 pi-lsp 与 pi-team，且 pi-team **不带 controller** ——
  *     成员因此只有邮箱，派发在宿主层结构性抛错（见 lib/builtin-extensions.ts 的
- *     `createSubagentBuiltinExtensions`）。chat-only 与 workspace chat 仍然一个都不给：
- *     团队工具会派发子会话，属于 agent 委派能力，不应出现在聊天策略下；LSP 也只在真正的
- *     项目会话里才有意义；pi-purge 的 `/purge` 命令在聊天策略下没有意义。
+ *     `createSubagentBuiltinExtensions`）。成员也**不给** pi-memory（注入会污染成员提示词，
+ *     且成员没有设置页去管理条目）与 pi-tool-approval（成员没有可点确认的 UI）。
+ *     chat-only 与 workspace chat 仍然一个都不给：团队工具会派发子会话，属于 agent
+ *     委派能力，不应出现在聊天策略下；LSP 也只在真正的项目会话里才有意义；pi-purge 的
+ *     `/purge` 命令在聊天策略下没有意义。
  */
 import type { ExtensionAPI, ExtensionContext, InlineExtension } from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync } from "node:fs";
@@ -21,6 +23,9 @@ import { createPiTeamExtension } from "pi-team";
 import lspExtension from "lsp-mcp";
 import { createSubagentTeamHost, createUnavailableTeamHost } from "./pi-team-host";
 import { createGoalExtension } from "./goal/goal-extension";
+import { createMemoryExtension } from "./memory/extension";
+import { createMemoryStore } from "./memory/store";
+import { createToolApprovalExtension } from "./tool-approval/extension";
 import { PI_EXTENSION_BUILTIN_NAMES } from "./pi-extension-names";
 import { isBuiltInSubagentsEnabled } from "./subagent-settings";
 import type { SubagentController } from "./subagent-runtime";
@@ -46,7 +51,14 @@ async function loadPiPurgeExtension(): Promise<(pi: ExtensionAPI) => void> {
   return mod.default;
 }
 
-const [LSP_BUILTIN_NAME, TEAM_BUILTIN_NAME, PURGE_BUILTIN_NAME, GOAL_BUILTIN_NAME] = PI_EXTENSION_BUILTIN_NAMES;
+const [
+  LSP_BUILTIN_NAME,
+  TEAM_BUILTIN_NAME,
+  PURGE_BUILTIN_NAME,
+  GOAL_BUILTIN_NAME,
+  MEMORY_BUILTIN_NAME,
+  TOOL_APPROVAL_BUILTIN_NAME,
+] = PI_EXTENSION_BUILTIN_NAMES;
 
 function builtin(name: string, factory: (pi: ExtensionAPI) => void | Promise<void>): InlineExtension {
   return { name, factory, replaceable: true, builtin: true };
@@ -236,6 +248,28 @@ function goalBuiltin(): InlineExtension {
   return builtin(GOAL_BUILTIN_NAME, createGoalExtension());
 }
 
+/**
+ * 长期记忆扩展：注册 `memory` 工具，并在 `context_with_system` 里把记忆清单注入首条
+ * system 消息。store 用默认构造（`<agent dir>/pi-web/memory.json`），与 `/api/memory`
+ * 读写同一文件。**只给普通会话**：成员会话没有设置页管理条目，注入还会污染成员提示词。
+ */
+function memoryBuiltin(): InlineExtension {
+  const memory = createMemoryExtension({ store: createMemoryStore() });
+  if (typeof memory === "function") return builtin(MEMORY_BUILTIN_NAME, memory);
+  // 记忆扩展自带 `hidden: true`（不占启动扩展列表）；只换成 builtin 资源名，
+  // 否则 `-builtin:pi-memory` 匹配不到它。
+  return { ...memory, name: MEMORY_BUILTIN_NAME, builtin: true, replaceable: true };
+}
+
+/**
+ * 命令审批扩展：`tool_call` 钩子上按设置档位拦截危险 shell 命令。每次调用重读设置，
+ * 改档立即生效。**只给普通会话**：成员/后台会话没有可点确认的 UI（扩展自身 fail-open，
+ * 但无人值守路径另行显式跳过，见 rpc-manager 的 `skipToolApproval`）。
+ */
+function toolApprovalBuiltin(): InlineExtension {
+  return builtin(TOOL_APPROVAL_BUILTIN_NAME, createToolApprovalExtension());
+}
+
 export interface PiExtensionBuiltinsOptions {
   /** 既有 subagent controller；缺省（子 agent 被关闭）时团队桥降级为不可派发。 */
   subagentController?: SubagentController;
@@ -243,9 +277,15 @@ export interface PiExtensionBuiltinsOptions {
   teamIdentity?: { agentName?: string; teamName?: string };
   /** 测试用：只想要某个扩展时传名字集合。 */
   include?: readonly string[];
+  /**
+   * 无人值守运行（scheduled 定时任务 / autofix 修复会话）：不挂 pi-tool-approval ——
+   * 没人能点确认，挂住就是故障。扩展自身在无 UI 时也 fail-open，但那是兜底；
+   * 显式不装配才不会把确认框排进后台会话的事件流。
+   */
+  skipToolApproval?: boolean;
 }
 
-/** 返回四个 `builtin:` 扩展，顺序与 PI_EXTENSION_BUILTIN_NAMES 一致。 */
+/** 返回六个 `builtin:` 扩展，顺序与 PI_EXTENSION_BUILTIN_NAMES 一致。 */
 export function createPiExtensionBuiltins(options: PiExtensionBuiltinsOptions = {}): InlineExtension[] {
   const include = options.include ? new Set(options.include) : undefined;
   const wants = (name: string) => !include || include.has(name);
@@ -256,6 +296,8 @@ export function createPiExtensionBuiltins(options: PiExtensionBuiltinsOptions = 
       : []),
     ...(wants(PURGE_BUILTIN_NAME) ? [purgeBuiltin()] : []),
     ...(wants(GOAL_BUILTIN_NAME) ? [goalBuiltin()] : []),
+    ...(wants(MEMORY_BUILTIN_NAME) ? [memoryBuiltin()] : []),
+    ...(wants(TOOL_APPROVAL_BUILTIN_NAME) && !options.skipToolApproval ? [toolApprovalBuiltin()] : []),
   ];
 }
 

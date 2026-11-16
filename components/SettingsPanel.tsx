@@ -44,6 +44,9 @@ import { RemoteAccessSection } from "./RemoteAccessSection";
 import { ServerSection } from "./ServerSection";
 import { NetworkProxySection } from "./NetworkProxySection";
 import { KeepaliveSection } from "./KeepaliveSection";
+import { MemorySettings } from "./memory/MemorySettings";
+import { ToolApprovalSettings } from "./ToolApprovalSettings";
+import { OutageSettings } from "./OutageSettings";
 import { RelaySection } from "./RelaySection";
 import { ChatsSettingsSection } from "./ChatsSettingsSection";
 import { CompactionSettingsSection } from "./CompactionSettingsSection";
@@ -370,6 +373,13 @@ function GeneralSettings({
           <ServerSection />
 
           <NetworkProxySection />
+
+          {/* 三个 fork 分节各自自带 <section className="settings-general-section"> 与标题（含三语文案）。 */}
+          <ToolApprovalSettings />
+
+          <MemorySettings />
+
+          <OutageSettings />
 
           <KeepaliveSection />
 
