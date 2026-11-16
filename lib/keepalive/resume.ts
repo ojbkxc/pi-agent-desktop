@@ -17,7 +17,9 @@ import {
  * 把「还有几个任务待接续」展示出来，绝不写对方文件、不抢驱动权。
  *
  * 孤儿判据（与 t3 逐字对齐）：
- * 1. `status ∈ {queued, running, verifying}` 才算活跃；
+ * 1. `status ∈ {queued, running, verifying, waiting-provider}` 才算活跃
+ *    （`waiting-provider` 是 Provider 中断挂起，仍活跃，但 pid 通常为 null、
+ *    记录新鲜，因此只会记成 active/waiting，不会误报 stuck）；
  * 2. `pid` 非空且进程存活 ⇒ **永不判孤儿**（长 agent 轮可能远超心跳阈值）；
  * 3. pid 缺失/已死，再看 `now - updatedAt >= staleMs`（默认 10 分钟）⇒ 可接续（stuck）。
  */
@@ -30,7 +32,7 @@ export type AutofixTaskDisposition =
   | "failed"
   | "unknown";
 
-const ACTIVE_STATUSES = new Set(["queued", "running", "verifying"]);
+const ACTIVE_STATUSES = new Set(["queued", "running", "verifying", "waiting-provider"]);
 const SUCCEEDED_STATUSES = new Set(["succeeded"]);
 const FAILED_STATUSES = new Set(["failed", "exhausted", "stopped"]);
 

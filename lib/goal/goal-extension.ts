@@ -15,6 +15,8 @@
  */
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { classifyOutageError } from "../outage/classify";
+import { isSessionSuspended } from "../outage/store";
 import {
   applyGoalEvent,
   goalGateExceeded,
@@ -60,6 +62,27 @@ export function goalStatusLine(state: GoalState | null): string {
     `Goal (${state.status}): ${state.objective}`,
     `Continuations: ${state.continuations}/${state.maxContinuations} · Elapsed: ${minutes}m`,
   ].join("\n");
+}
+
+/** `goalStatusLine` 等工具函数之后、`GoalStoreAdapter` 之前。 */
+function lastAssistantFailureIsProviderOutage(ctx: ExtensionContext): boolean {
+  try {
+    const branch = ctx.sessionManager.getBranch() as Array<{
+      type?: unknown;
+      message?: { role?: unknown; stopReason?: unknown; errorMessage?: unknown };
+    }>;
+    for (let index = branch.length - 1; index >= 0; index -= 1) {
+      const entry = branch[index];
+      if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+      if (entry.message.stopReason !== "error") return false;
+      const errorText = typeof entry.message.errorMessage === "string" ? entry.message.errorMessage : "";
+      return classifyOutageError({ errorText }).suspend;
+    }
+    return false;
+  } catch {
+    // 读不到会话状态就不做额外抑制（预算双闸仍会兜底）。
+    return false;
+  }
 }
 
 /** 存储适配器（默认走磁盘；测试可注入内存实现）。 */
@@ -165,6 +188,12 @@ export function createGoalExtension(deps: GoalExtensionDeps = {}): (pi: Extensio
     pi.on("agent_settled", (event, ctx) => {
       if (event.aborted) return; // 用户 Esc 中止：不自动续跑
       const sessionId = sessionIdOf(ctx);
+      // Provider 中断：不续跑、不消耗续跑预算，等 outage 调度器恢复后由它续跑。
+      // 两层判据：① 已有挂起记录（调度器续跑后的轮次）；② 扩展事件先于 rpc-manager
+      // 的公共监听器发出，第一次故障时记录还没落盘，所以直接看最后一条 assistant
+      // 的失败原因自己分类（classifyOutageError 是纯函数）。
+      if (isSessionSuspended(sessionId)) return;
+      if (lastAssistantFailureIsProviderOutage(ctx)) return;
       const state = store.read(sessionId);
       if (!state) return;
       const nowMs = now();

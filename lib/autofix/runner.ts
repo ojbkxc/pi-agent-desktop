@@ -20,6 +20,23 @@
  */
 import { randomUUID } from "node:crypto";
 import { isBlockingExtensionUiRequest } from "../browser-notifications";
+import { buildRecoveryNote } from "../keepalive/resume";
+import { advanceOutageBudget, initialOutageBudget, isOutageDue } from "../outage/backoff";
+import { classifyOutageError } from "../outage/classify";
+import {
+  createOutageRecord,
+  finishOutageRecord,
+  getOutageRecord,
+  readOutageSettings,
+  updateOutageRecord,
+} from "../outage/store";
+import {
+  isOutageExpired,
+  isOutageSuspendKind,
+  outageMaxWaitMs,
+  OUTAGE_DEFAULT_MAX_ATTEMPTS,
+  type OutageSuspendKind,
+} from "../outage/types";
 import { isPidAlive } from "../scheduled-tasks/lease";
 import type { BlockingExtensionUiRequest, ExtensionUiRequest } from "../types";
 import { emitAutofixEvent } from "./events";
@@ -239,15 +256,24 @@ export async function driveAutofixTask(id: string, deps: AutofixDeps): Promise<v
     }
 
     const round = task.round + 1;
-    const prompt = buildAutofixPrompt({
-      task: task.task,
-      cwd: task.cwd,
-      verifyCommand: task.verifyCommand,
-      round,
-      maxRounds: task.maxRounds,
-      lastError: task.lastError,
-      lastOutputTail: lastVerifyTail(task),
-    });
+    // 从 Provider 中断恢复：注入接续注记（buildRecoveryNote，此前无人调用），
+    // 让模型先核对工作目录真实状态，别把已完成的步骤再做一遍。
+    const outage = task.sessionId ? getOutageRecord(task.sessionId, agentDir) : undefined;
+    const recovery = outage?.status === "waiting"
+      ? buildRecoveryNote({ task: task.task, cwd: task.cwd, round: task.round, lastError: outage.reason })
+      : null;
+    const prompt = [
+      recovery,
+      buildAutofixPrompt({
+        task: task.task,
+        cwd: task.cwd,
+        verifyCommand: task.verifyCommand,
+        round,
+        maxRounds: task.maxRounds,
+        lastError: task.lastError,
+        lastOutputTail: lastVerifyTail(task),
+      }),
+    ].filter(Boolean).join("\n\n");
     task = touchAutofixTask(id, { status: "running", round, pid: process.pid }, agentDir) ?? task;
     emitAutofixEvent({ type: "task_changed", taskId: id, status: "running" });
 
@@ -279,6 +305,16 @@ export async function driveAutofixTask(id: string, deps: AutofixDeps): Promise<v
       const error = turn.kind === "timeout"
         ? `Agent turn timed out after ${Math.round(turnTimeoutMs / 60_000)} minutes`
         : turn.error;
+      // Provider 中断（5xx/连接拒绝/流中断）或额度耗尽：**不消耗轮次**，
+      // 任务转 waiting-provider 并落一条挂起记录；恢复后由 sweep 重新驱动。
+      // `turn.kind === "error"` 才分类（timeout/aborted/attention 与上游无关）。
+      if (turn.kind === "error") {
+        const classification = classifyOutageError({ errorText: error });
+        if (classification.suspend && isOutageSuspendKind(classification.kind)) {
+          suspendForProviderOutage(id, task, round - 1, classification.kind, error, deps);
+          return;
+        }
+      }
       recordRound(id, {
         round,
         at: now(),
@@ -292,6 +328,9 @@ export async function driveAutofixTask(id: string, deps: AutofixDeps): Promise<v
       }
       continue;
     }
+
+    // 上游恢复、本轮跑通：挂起记录收口（attempts/退避作废，不再续跑该会话）。
+    if (task.sessionId) finishRunOutageRecord(task.sessionId, agentDir);
 
     // ── 判据：引擎自己跑验证命令 ──
     touchAutofixTask(id, { status: "verifying", pid: process.pid }, agentDir);
@@ -339,8 +378,7 @@ function errorText(error: unknown): string {
 }
 
 /** 最近一次验证失败输出（给下一轮 prompt）。 */
-function lastVerifyTail(task: AutofixTask): string | null {
-  for (let index = task.rounds.length - 1; index >= 0; index -= 1) {
+function lastVerifyTail(task: AutofixTask): string | null {  for (let index = task.rounds.length - 1; index >= 0; index -= 1) {
     const round = task.rounds[index];
     if (round.status === "verify-failed" && round.outputTail) return round.outputTail;
   }
@@ -377,6 +415,102 @@ function finishTask(
     ...(lastError ? { lastError: tailOf(lastError, AUTOFIX_ERROR_MAX_CHARS) } : {}),
   }, deps.agentDir);
   emitAutofixEvent({ type: "task_changed", taskId: id, status });
+}
+
+/**
+ * Provider 中断：**不消耗轮次**、不判失败——把 round 退回触发这一轮之前的数值，
+ * 任务转 `waiting-provider`，并在该修复会话上落一条 outage 记录（scope="autofix"）。
+ *
+ * 为什么 scope 是 "autofix"：这条记录的**驱动者是 autofix sweep**，不是通用
+ * outage scheduler（后者只续跑普通会话）。scheduler 见到 scope="autofix" 会跳过。
+ */
+function suspendForProviderOutage(
+  id: string,
+  task: AutofixTask,
+  previousRound: number,
+  kind: OutageSuspendKind,
+  error: string,
+  deps: AutofixDeps,
+): void {
+  const agentDir = deps.agentDir;
+  const now = deps.now();
+  const settings = readOutageSettings();
+  const maxWaitMs = outageMaxWaitMs(kind, settings);
+
+  // 用户关闭了自动等待（或额度等待设为 0）：按普通失败轮上报，尊重设置。
+  if (!settings.enabled || maxWaitMs <= 0) {
+    recordRound(id, {
+      round: previousRound + 1,
+      at: now,
+      status: "agent-error",
+      verifyExitCode: null,
+      error: tailOf(error, AUTOFIX_ERROR_MAX_CHARS),
+    }, deps);
+    if (previousRound + 1 >= task.maxRounds) {
+      finishTask(id, "failed", error, deps);
+    } else {
+      touchAutofixTask(id, { status: "queued", pid: null }, agentDir);
+      emitAutofixEvent({ type: "task_changed", taskId: id, status: "queued" });
+    }
+    return;
+  }
+
+  const sessionId = task.sessionId;
+  if (sessionId) {
+    const existing = getOutageRecord(sessionId, agentDir);
+    let expired = false;
+    if (existing?.status === "waiting") {
+      const advanced = advanceOutageBudget(existing, now);
+      expired = advanced.expired;
+      updateOutageRecord(sessionId, () => ({
+        ...advanced.record,
+        reason: tailOf(error, AUTOFIX_ERROR_MAX_CHARS),
+        lastAttemptAt: now,
+        lastError: null,
+      }), agentDir);
+    } else {
+      // 没有等待中的记录（首次挂起，或旧记录已结束）：新建一条。
+      // 会话文件不在任务里；runner 按 sessionId 重开，不需要 sessionFile。
+      createOutageRecord({
+        sessionId,
+        kind,
+        reason: tailOf(error, AUTOFIX_ERROR_MAX_CHARS),
+        scope: "autofix",
+        // autofix 的重试由本 sweep 驱动，不经过通用探针；origin 留空。
+        origin: { provider: null, modelId: null },
+        resume: { mode: "followup", note: "Autofix round interrupted by a provider outage." },
+        budget: initialOutageBudget({
+          kind,
+          now,
+          maxWaitMs,
+          maxAttempts: OUTAGE_DEFAULT_MAX_ATTEMPTS,
+        }),
+        guard: {},
+        pid: process.pid,
+        now,
+      }, agentDir);
+    }
+    if (expired) {
+      finishOutageRecord(sessionId, "expired", now, { lastError: tailOf(error, AUTOFIX_ERROR_MAX_CHARS) }, agentDir);
+      finishTask(id, "failed", `Provider unavailable for too long: ${error}`, deps);
+      return;
+    }
+  }
+
+  touchAutofixTask(id, {
+    status: "waiting-provider",
+    round: previousRound,
+    pid: null,
+    lastError: tailOf(error, AUTOFIX_ERROR_MAX_CHARS),
+  }, agentDir);
+  emitAutofixEvent({ type: "task_changed", taskId: id, status: "waiting-provider" });
+}
+
+/** 一轮成功跑通 ⇒ 上游已恢复：挂起记录收口为 resumed（不删除，保留排障轨迹）。 */
+function finishRunOutageRecord(sessionId: string, agentDir: string | undefined): void {
+  const record = getOutageRecord(sessionId, agentDir);
+  if (record?.status !== "waiting") return;
+  finishOutageRecord(sessionId, "resumed", Date.now(), {}, agentDir);
 }
 
 /**
@@ -506,6 +640,28 @@ export async function resumeAutofixTasks(
     examined = tasks.length;
     for (const task of tasks) {
       if (isAutofixTaskDriving(task.id)) continue;
+      // Provider 中断挂起：重试时机由 outage 记录决定（退避/死线），不是 pid/staleness。
+      if (task.status === "waiting-provider") {
+        const record = task.sessionId ? getOutageRecord(task.sessionId, options.agentDir) : undefined;
+        if (!record) {
+          // 记录被删（用户取消等待）：按失败收口，不静默重跑。
+          finishTaskInSweep(task.id, "failed", task.lastError ?? "Provider outage record was removed", now, options.agentDir);
+          continue;
+        }
+        if (record.status !== "waiting" || isOutageExpired(record, now)) {
+          if (record.status === "waiting" && task.sessionId) {
+            finishOutageRecord(task.sessionId, "expired", now, {}, options.agentDir);
+          }
+          finishTaskInSweep(task.id, "failed", task.lastError ?? "Provider unavailable for too long", now, options.agentDir);
+          continue;
+        }
+        if (!isOutageDue(record, now)) continue; // 退避未到
+        const requeuedWaiting = touchAutofixTask(task.id, { status: "queued", pid: null }, options.agentDir);
+        if (!requeuedWaiting) continue;
+        resumed.push(task.id);
+        emitAutofixEvent({ type: "task_changed", taskId: task.id, status: "queued" });
+        continue;
+      }
       if (!isAutofixTaskResumable(task, { now, staleMs: options.staleMs, isPidAlive })) continue;
       // 释放旧 owner，排队等驱动（queued 是无主状态，任何 tick 都可接）。
       const requeued = touchAutofixTask(task.id, { status: "queued", pid: null }, options.agentDir);
@@ -524,8 +680,24 @@ export async function resumeAutofixTasks(
   return { examined, resumed };
 }
 
-/** 只读汇总（保活状态展示 / 列表页 badge）。不抛错。 */
-export async function summarizeAutofixTasks(
+/** sweep 专用的终态收口（不持有 AutofixDeps；只落盘 + 广播）。 */
+function finishTaskInSweep(
+  id: string,
+  status: AutofixStatus,
+  lastError: string | null,
+  now: number,
+  agentDir: string | undefined,
+): void {
+  touchAutofixTask(id, {
+    status,
+    pid: null,
+    finishedAt: now,
+    ...(lastError ? { lastError: tailOf(lastError, AUTOFIX_ERROR_MAX_CHARS) } : {}),
+  }, agentDir);
+  emitAutofixEvent({ type: "task_changed", taskId: id, status });
+}
+
+/** 只读汇总（保活状态展示 / 列表页 badge）。不抛错。 */export async function summarizeAutofixTasks(
   options: { now?: number; staleMs?: number; agentDir?: string } = {},
 ): Promise<AutofixSummary> {
   try {
@@ -602,7 +774,11 @@ async function openLiveAutofixSession(task: AutofixTask): Promise<OpenedAutofixS
     }
     const filePath = await resolveSessionPath(task.sessionId);
     if (filePath) {
-      const { session } = await startRpcSession(task.sessionId, filePath, undefined, { toolNames });
+      // 无人值守：没人能点确认，命令审批一律跳过（见 RpcSessionStartOptions.skipToolApproval）。
+      const { session } = await startRpcSession(task.sessionId, filePath, undefined, {
+        toolNames,
+        skipToolApproval: true,
+      });
       return { session: session as unknown as AutofixSessionLike, sessionId: task.sessionId, created: false };
     }
   }
@@ -611,7 +787,7 @@ async function openLiveAutofixSession(task: AutofixTask): Promise<OpenedAutofixS
     `__autofix__${randomUUID()}`,
     "",
     task.cwd,
-    { toolNames, allowInitialModelFallback: true },
+    { toolNames, allowInitialModelFallback: true, skipToolApproval: true },
   );
   allowFileRoot(task.cwd);
   invalidateSessionListCache();

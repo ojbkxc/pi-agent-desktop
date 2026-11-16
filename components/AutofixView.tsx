@@ -117,6 +117,8 @@ export function AutofixView({ defaultCwd, onOpenSession }: Props) {
         return t("autofix.status.exhausted");
       case "stopped":
         return t("autofix.status.stopped");
+      case "waiting-provider":
+        return t("autofix.status.waitingProvider");
       default:
         return task.status;
     }

@@ -468,4 +468,10 @@ export interface AgentTaskSnapshot {
   waiting: { method: string; prompt: string }[];
   /** How the last finished run ended, and when; null when none finished in this process. */
   lastRun: { outcome: AgentRunOutcome; finishedAt: number } | null;
+  /**
+   * The run is suspended waiting for its provider to recover (lib/outage): the last outcome is a
+   * failure, but it must be shown as "waiting for the provider", never as a red error
+   * (docs/agents/fork-provider-outage-resume.md §4.1). Optional so older snapshots stay valid.
+   */
+  waitingForProvider?: boolean;
 }

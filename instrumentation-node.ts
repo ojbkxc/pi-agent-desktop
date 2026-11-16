@@ -29,6 +29,16 @@ export function registerNodeInstrumentation(): void {
   // 自动修 Bug 的任务接续：进程重启后把孤儿任务重新驱动（每 60s 扫一次，同一开关族）。
   if (process.env.PI_WEB_DISABLE_SCHEDULER !== "1") startAutofixSweepLoop();
 
+  // Provider 中断自愈：扫描 ~/.pi/agent/pi-web/outages/ 里的挂起记录，按退避探测并在
+  // 上游恢复后自动续跑（每 30s 扫一次；同一开关族）。懒加载调度器与 rpc-manager。
+  if (process.env.PI_WEB_DISABLE_SCHEDULER !== "1") {
+    void import("@/lib/outage/live")
+      .then(({ startLiveOutageScheduler }) => startLiveOutageScheduler())
+      .catch((error) => {
+        console.error("[outage] scheduler did not start:", error instanceof Error ? error.message : error);
+      });
+  }
+
   // 挂机保活：每 15s 写心跳（外部 scripts/pi-supervisor.mjs 据此判假死）、重启后
   // 接续进度、把「待接续/被打断」记进 ~/.pi/agent/keepalive/。进程级崩溃后的拉起
   // 归外部守护脚本（本进程无法重启自己）。与调度同一开关族：测试/e2e 静默整段。

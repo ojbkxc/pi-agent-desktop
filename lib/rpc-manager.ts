@@ -19,6 +19,8 @@ import {
 import { cacheSessionPath, getLatestModelChange, getLatestResponseModel, getSessionListVersion, invalidateSessionListCache, readLatestSessionEntryId, resolveSessionPath } from "./session-reader";
 import { getProjectTrustStatus, projectTrustReloadOptions } from "./project-trust";
 import { notifySessionEvent } from "./web-push";
+import { notifySessionStopped } from "./attention-push";
+import { cancelOutageOnStop, isSessionWaitingForProvider, onAgentRunSettled } from "./outage/rpc-hook";
 import type { AgentRunOutcome, AgentTaskSnapshot } from "./types";
 export type { AgentRunOutcome, AgentTaskSnapshot } from "./types";
 import { isVerboseLogging } from "../bin/pi-web-options.js";
@@ -332,6 +334,11 @@ export interface RpcSessionStartOptions {
   thinkingLevel?: ThinkingLevel;
   /** Header `parentSession` of a brand-new session (ignored when opening a file). */
   parentSession?: string;
+  /**
+   * 无人值守运行（scheduled 定时任务 / autofix 修复会话）：不挂 pi-tool-approval。
+   * 没人能点确认，确认框挂住就是故障；见 lib/pi-extension-builtins.ts 的同名选项。
+   */
+  skipToolApproval?: boolean;
 }
 
 const CODING_TOOL_NAMES = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"];
@@ -697,9 +704,31 @@ export class AgentSessionWrapper {
       if (event.type === "agent_settled") {
         // Stop during a retry back-off ends the run with no new agent_end (agent-session.js
         // _finishCancelledRetry), so the last one still says "error"; the SDK reports the Stop here.
-        if (event.aborted === true) this.lastRunOutcome = { status: "aborted" };
+        if (event.aborted === true) {
+          this.lastRunOutcome = { status: "aborted" };
+          // 用户对已挂起会话按 Stop：清掉挂起记录，别再让调度器续跑（设计 §3）。scheduler 只发
+          // follow_up、从不 abort，所以能走到这里的 aborted 只会是用户 Stop（或 scheduled runner
+          // 自身超时，那是另一条 session）。best-effort：坏记录不能拦住停止。
+          try {
+            cancelOutageOnStop(this.sessionId);
+          } catch {
+            // A broken outage record must not stop the session from settling.
+          }
+        }
         this.composerQueue.wake();
         this.notifyAgentRunCompleteIfIdle();
+        // Provider 中断自愈：只写一条挂起记录，重活交给 scheduler 异步做。挂在这里而不是
+        // agent_end —— 后者在 SDK 每次自动重试前都会发，会把短抖动误判成挂起。
+        // 绝不 await、绝不让它影响会话收尾（钩子内部也全 try/catch）。
+        void onAgentRunSettled({
+          sessionId: this.sessionId,
+          outcome: this.lastRunOutcome,
+          aborted: event.aborted === true,
+          sessionFile: this.sessionFile || null,
+          cwd: this.cwd,
+        }).catch((error) => {
+          console.error("[pi-web] outage settle hook failed:", error instanceof Error ? error.message : error);
+        });
       }
     });
     this.resetIdleTimer();
@@ -806,6 +835,9 @@ export class AgentSessionWrapper {
       activity,
       waiting,
       lastRun: this.lastFinishedRun,
+      // Suspended on a provider outage: the last outcome is a failure but the Tasks page must
+      // show "waiting for the provider", not a red error (design §4.1). One small sync read.
+      waitingForProvider: isSessionWaitingForProvider(this.sessionId),
     };
   }
 
@@ -3548,7 +3580,10 @@ export async function startRpcSession(
               ),
               // 跨端扩展（builtin:pi-lsp / builtin:pi-team）：复用同一份 subagent
               // runtime 作为团队宿主桥。只进普通会话，见 lib/pi-extension-builtins.ts。
-              ...createPiExtensionBuiltins({ subagentController: SUBAGENT_CONTROLLER }),
+              ...createPiExtensionBuiltins({
+                subagentController: SUBAGENT_CONTROLLER,
+                ...(options.skipToolApproval ? { skipToolApproval: true } : {}),
+              }),
             ],
             extensionsOverride: (base) => preferUserPowerShellExtension(
               preferUserBashExtension(preferPiWebSubagentExtension(base)),
@@ -3644,8 +3679,15 @@ export async function startRpcSession(
       chatFolder,
       chatUnlocked,
       onAgentRunComplete: (completedSessionId, outcome) => {
-        // A run the user stopped needs no message on their phone.
-        if (outcome.status === "aborted") return;
+        // A run the user stopped sends a stop push instead of a completion push: a phone that
+        // started it from the Tasks page is the place that wants to know it really stopped.
+        if (outcome.status === "aborted") {
+          // Best-effort and never rejects; the run-stop path must not fail on a push outage.
+          void notifySessionStopped(completedSessionId, {
+            sessionName: inner.sessionManager.getSessionName() ?? null,
+          });
+          return;
+        }
         // The live session knows its own name; no need to scan every session file.
         const sessionName = inner.sessionManager.getSessionName() ?? null;
         const push = outcome.status === "failed"

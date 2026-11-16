@@ -44,6 +44,8 @@ export const AUTOFIX_STATUSES = [
   "queued",
   "running",
   "verifying",
+  /** 上游不可用：不消耗轮次，等 outage 调度器/下一轮 sweep 重新驱动。 */
+  "waiting-provider",
   "succeeded",
   "failed",
   "exhausted",
@@ -130,12 +132,17 @@ export type AutofixEvent =
 
 /** 纯判定：状态是否活跃（可能还需要驱动）。 */
 export function isActiveAutofixStatus(status: AutofixStatus): boolean {
-  return status === "queued" || status === "running" || status === "verifying";
+  return status === "queued" || status === "running" || status === "verifying" || status === "waiting-provider";
 }
 
 /** 纯判定：状态是否已终结。 */
 export function isTerminalAutofixStatus(status: AutofixStatus): boolean {
   return !isActiveAutofixStatus(status);
+}
+
+/** 纯判定：是否在等上游恢复（由 outage 记录而不是 pid/staleness 决定何时重试）。 */
+export function isWaitingProviderStatus(status: AutofixStatus): boolean {
+  return status === "waiting-provider";
 }
 
 export interface ResumableOptions {
@@ -155,6 +162,10 @@ export interface ResumableOptions {
  */
 export function isAutofixTaskResumable(task: AutofixTask, options: ResumableOptions): boolean {
   if (!isActiveAutofixStatus(task.status)) return false;
+  // waiting-provider 的重试时机由 outage 记录（nextAttemptAt / deadline）决定，
+  // 归 `resumeAutofixTasks` 的专门分支处理；这里一律不按 pid/staleness 接续，
+  // 否则每一轮 sweep 都会去撞仍是 5xx 的上游。
+  if (isWaitingProviderStatus(task.status)) return false;
   if (task.status === "queued" && (task.pid === null || task.pid === undefined)) return true;
   if (typeof task.pid === "number") {
     const alive = options.isPidAlive?.(task.pid);

@@ -1,5 +1,6 @@
 import { getToolNamesForPreset } from "../tool-presets";
 import { isBlockingExtensionUiRequest } from "../browser-notifications";
+import { classifyOutageError } from "../outage/classify";
 import type { ExtensionUiRequest } from "../types";
 import type { MessageParams, RunErrorCode, RunStatus, RunTrigger, ScheduledTask } from "./types";
 
@@ -54,6 +55,12 @@ export function runSessionName(task: ScheduledTask, at: Date): string {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Provider 中断/额度耗尽：不算任务本身的失败（不计入连续失败停用）。 */
+function isProviderOutageText(text: string): boolean {
+  const classification = classifyOutageError({ errorText: text });
+  return classification.suspend;
 }
 
 /**
@@ -166,11 +173,13 @@ export async function executeRun(
     await Promise.race([promptDone, gaveUp]);
     if (timedOut) return timeLimit();
 
-    if (promptError) return { status: "failed", error: promptError, sessionId, countsAsFailure: true };
+    if (promptError) return { status: "failed", error: promptError, sessionId, countsAsFailure: !isProviderOutageText(promptError) };
     const stopReason = lastAssistant?.stopReason;
     if (stopReason === "error") {
       const message = typeof lastAssistant?.errorMessage === "string" ? lastAssistant.errorMessage : "Model request failed";
-      return { status: "failed", error: message, sessionId, countsAsFailure: true };
+      // Provider 中断/额度耗尽不说明任务本身有问题：不计入「连续失败 5 次停用」，
+      // 下一个 slot 正常再跑（设计 §4.4）。
+      return { status: "failed", error: message, sessionId, countsAsFailure: !isProviderOutageText(message) };
     }
     if (stopReason === "aborted") {
       return { status: "aborted", error: "Stopped by the user", errorCode: "stopped", sessionId, countsAsFailure: false };
