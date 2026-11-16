@@ -24,6 +24,7 @@ function makeSession() {
     isBashRunning: false, isCompacting: false, extensionRunner: {},
     settingsManager: { getDefaultTools: () => [] }, sessionManager: { getCwd: () => '/fixture' },
     getContextUsage: () => null, getSteeringMessages: () => [], getFollowUpMessages: () => [],
+    clearQueue: () => ({ steering: [], followUp: [] }),
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }, dispose() {},
     emit(event) { listeners.forEach(fn => fn(event)); },
     finish() { inner.emit({ type: 'agent_end' }); active = false; inner.emit({ type: 'agent_settled' }); complete?.(); complete = undefined; },
