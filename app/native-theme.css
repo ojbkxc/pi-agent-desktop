@@ -2274,6 +2274,98 @@ html.dark .sidebar-view-switcher-thumb {
   flex: none;
 }
 
+/* 「常驻」（pin）分区：与 Needs you 同一套版式，但用强调色而不是警告色 ——
+   它是「一直在」而不是「在等你」。 */
+.sidebar-resident {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+  border-bottom: var(--hairline) solid var(--border);
+}
+
+.sidebar-resident-header {
+  margin-top: 2px;
+}
+
+.sidebar-resident-header .sidebar-project-tree-title {
+  color: var(--accent);
+}
+
+.sidebar-resident-header .sidebar-project-tree-count {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-resident-list {
+  flex: none;
+}
+
+/* 行内叠布局：会话行占满宽度，角色标签与取消按钮浮在行尾。 */
+.sidebar-resident-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-resident-row > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-resident-role {
+  flex: none;
+  margin-left: -6px;
+  margin-right: 4px;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+  pointer-events: auto;
+  max-width: 56px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-resident-role.is-router {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.sidebar-resident-unpin {
+  flex: none;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin-right: 2px;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.sidebar-resident-row:hover .sidebar-resident-unpin,
+.sidebar-resident-unpin:focus-visible {
+  display: inline-flex;
+}
+
+.sidebar-resident-unpin:hover {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+
+@media (hover: none) {
+  .sidebar-resident-unpin { display: inline-flex; }
+}
+
 /* The section title doubles as the fold toggle, like a project row. */
 .sidebar-chats-title {
   display: flex;

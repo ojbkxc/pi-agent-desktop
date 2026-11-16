@@ -323,6 +323,31 @@ function writeNeedsYouCollapsed(collapsed: boolean): void {
   needsYouCollapsedListeners.forEach((cb) => cb());
 }
 
+// 「常驻」分区折叠：与 Needs you 同一套 hydrate 安全的写法。默认展开——
+// 常驻会话本来就该一直可见；折叠只藏行，计数仍在标题上。
+const residentCollapsedListeners = new Set<() => void>();
+function subscribeResidentCollapsed(cb: () => void): () => void {
+  residentCollapsedListeners.add(cb);
+  return () => { residentCollapsedListeners.delete(cb); };
+}
+const readResidentCollapsed = () => getPref(APP_PREF_KEYS.collapsedResident) === "1";
+const serverResidentCollapsed = () => false;
+function writeResidentCollapsed(collapsed: boolean): void {
+  if (collapsed) setPref(APP_PREF_KEYS.collapsedResident, "1");
+  else removePref(APP_PREF_KEYS.collapsedResident);
+  residentCollapsedListeners.forEach((cb) => cb());
+}
+
+/** 常驻会话的服务端形态（GET /api/pinned-sessions）。 */
+interface ResidentSession {
+  sessionId: string;
+  role: "router" | "worker";
+  note?: string;
+  pinnedAt: string;
+  /** 本进程是否真的持有它的 liveness 注册（false = 重启后尚未恢复）。 */
+  registered?: boolean;
+}
+
 function readIdSetPref(key: Parameters<typeof getPrefJson>[0]): Set<string> {
   const stored = getPrefJson<unknown>(key);
   return Array.isArray(stored)
@@ -339,6 +364,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const chatsCollapsed = useSyncExternalStore(subscribeChatsCollapsed, readChatsCollapsed, serverChatsCollapsed);
   // "Needs you" inbox fold. Defaults open; only the rows fold, the count stays.
   const needsYouCollapsed = useSyncExternalStore(subscribeNeedsYouCollapsed, readNeedsYouCollapsed, serverNeedsYouCollapsed);
+  // 「常驻」分区折叠：同上。
+  const residentCollapsed = useSyncExternalStore(subscribeResidentCollapsed, readResidentCollapsed, serverResidentCollapsed);
+  const [residentSessions, setResidentSessions] = useState<ResidentSession[]>([]);
   const [chatSessionPages, setChatSessionPages] = useState(() => {
     const stored = getPrefJson<unknown>(APP_PREF_KEYS.chatSessionPages);
     return typeof stored === "number" && Number.isInteger(stored) && stored > 0 ? stored : 0;
@@ -1567,6 +1595,49 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const needsYouFolded = needsYouCollapsed && !needsYouHidden;
   const setNeedsYouFolded = (folded: boolean) => writeNeedsYouCollapsed(folded);
 
+  // 常驻会话（pin）：服务端是唯一权威（`pinned-sessions.json`），这里只做投影。
+  // 行仍复用 SessionItem；只在会话确实存在时给行，避免点了打不开。
+  const residentRows = useMemo(() => {
+    if (residentSessions.length === 0) return [];
+    const byId = new Map(allSessions.map((session) => [session.id, session]));
+    return residentSessions
+      .map((pin) => ({ pin, session: byId.get(pin.sessionId) }))
+      .filter((row): row is { pin: ResidentSession; session: SessionInfo } => Boolean(row.session));
+  }, [residentSessions, allSessions]);
+  const residentCount = residentRows.length;
+  const residentHidden = trimmedSessionQuery !== "";
+  const residentFolded = residentCollapsed && !residentHidden;
+  const setResidentFolded = (folded: boolean) => writeResidentCollapsed(folded);
+
+  const reloadResident = useCallback(async () => {
+    try {
+      const response = await fetch("/api/pinned-sessions", { headers: { Accept: "application/json" } });
+      if (!response.ok) return;
+      const data = await response.json() as { sessions?: ResidentSession[] };
+      setResidentSessions(Array.isArray(data.sessions) ? data.sessions : []);
+    } catch {
+      // 侧栏是纯投影：拿不到名单就先不显示，不影响会话列表本身。
+    }
+  }, []);
+
+  // 与运行态同一节奏刷新：pin 也可能在另一个页面/手机上被改动。
+  useEffect(() => {
+    void reloadResident();
+    const timer = setInterval(() => { void reloadResident(); }, 30_000);
+    return () => clearInterval(timer);
+  }, [reloadResident]);
+
+  const unpinResident = useCallback(async (sessionId: string) => {
+    // 先本地移行再请求：pin 是服务端权威，失败了下一轮轮询会把它带回来。
+    setResidentSessions((current) => current.filter((pin) => pin.sessionId !== sessionId));
+    try {
+      await fetch(`/api/pinned-sessions?id=${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+    } catch {
+      // 轮询会纠正。
+    }
+    void reloadResident();
+  }, [reloadResident]);
+
   const renderChatFamily = (family: (typeof chatFamilies)[number]) => {
     const [node] = buildSessionTree([family.root, ...family.subagents]);
     if (!node) return null;
@@ -2173,6 +2244,67 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     }}
                     archiveActions={session.transient ? undefined : sessionArchiveActions(session.id)}
                   />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {/* 「常驻」：被 pin 住、不会被 idle 驱逐的会话。行复用 SessionItem，
+            角色只作为副标题出现；取消常驻在行尾的 × 上。 */}
+        {residentCount > 0 && !residentHidden && (
+          <div className="sidebar-resident">
+            <div className="sidebar-project-tree-header sidebar-resident-header">
+              <button
+                type="button"
+                className="sidebar-chats-title"
+                data-sidebar-tree-row
+                aria-expanded={!residentFolded}
+                title={t(residentFolded ? "resident.expand" : "resident.collapse")}
+                onClick={() => setResidentFolded(!residentCollapsed)}
+              >
+                <span className="sidebar-project-tree-title">{t("resident.title")}</span>
+                <span className="sidebar-project-tree-count" title={t("resident.count", { count: residentCount })}>
+                  ({residentCount})
+                </span>
+              </button>
+            </div>
+            {!residentFolded && (
+              <div className="sidebar-project-tree-children sidebar-resident-list">
+                {residentRows.map(({ pin, session }) => (
+                  <div key={pin.sessionId} className="sidebar-resident-row">
+                    <SessionItem
+                      session={session}
+                      isSelected={session.id === selectedSessionId}
+                      onClick={() => handleSelectSessionFromList(session)}
+                      onRenamed={loadSessions}
+                      onDeleted={(id) => {
+                        onSessionDeleted?.(id);
+                        loadSessions();
+                      }}
+                      archiveActions={session.transient === true ? undefined : sessionArchiveActions(session.id)}
+                    />
+                    <span
+                      className={`sidebar-resident-role${pin.role === "router" ? " is-router" : ""}`}
+                      title={pin.note ?? t(pin.role === "router" ? "resident.router" : "resident.worker")}
+                    >
+                      {t(pin.role === "router" ? "resident.router" : "resident.worker")}
+                    </span>
+                    <button
+                      type="button"
+                      className="sidebar-resident-unpin"
+                      title={t("resident.unpin")}
+                      aria-label={t("resident.unpin")}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void unpinResident(pin.sessionId);
+                      }}
+                    >
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+                        <line x1="2" y1="2" x2="8" y2="8" />
+                        <line x1="8" y1="2" x2="2" y2="8" />
+                      </svg>
+                    </button>
+                  </div>
                 ))}
               </div>
             )}

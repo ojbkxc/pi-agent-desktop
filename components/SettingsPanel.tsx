@@ -47,6 +47,7 @@ import { KeepaliveSection } from "./KeepaliveSection";
 import { MemorySettings } from "./memory/MemorySettings";
 import { ToolApprovalSettings } from "./ToolApprovalSettings";
 import { OutageSettings } from "./OutageSettings";
+import { PinnedSessionsSettings } from "./PinnedSessionsSettings";
 import { RelaySection } from "./RelaySection";
 import { ChatsSettingsSection } from "./ChatsSettingsSection";
 import { CompactionSettingsSection } from "./CompactionSettingsSection";
@@ -380,6 +381,8 @@ function GeneralSettings({
           <MemorySettings />
 
           <OutageSettings />
+
+          <PinnedSessionsSettings />
 
           <KeepaliveSection />
 
