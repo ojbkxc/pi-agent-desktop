@@ -5,7 +5,7 @@
  * 拼起来并执行：读团队名册 → 查每个候选的凭据 → 决策 → 切模型 → 续跑。
  *
  * 落点：`lib/rpc-manager.ts` 的 `agent_settled` 钩子（与 outage 同一个位置）。
- * 顺序很重要 —— **先**尝试换模型，换成了就把 outage 记录摘掉（scope 改成 team），
+ * 顺序很重要 —— **先**尝试换模型，换成了就摘掉该会话的 outage 记录、再续跑，
  * 换不成再让 outage 去挂起等待。反过来做就会两套驱动同时往会话里灌消息。
  */
 import { getModelRuntimeWithExtensions } from "./model-runtime";
@@ -27,6 +27,12 @@ import { cancelOutageRecord } from "./outage/store";
 export interface TeamModelFallbackRuntimeDeps {
   /** 找到包含该会话的团队目录名；不属于任何团队返回 null。 */
   findTeam: (sessionId: string) => Promise<string | null>;
+  /**
+   * 该团队真实的 lead 会话 id（config/desktop 标记/成员会话反推）；解不出返回 null。
+   * **lead 不换**：lead 不是执行任务的成员，给它换模型再发「向 lead 回报」的续跑提示
+   * 是错的（而且 nudgeLead 会指向它自己）。
+   */
+  leadSessionId: (teamName: string) => Promise<string | null>;
   /** 读团队名册；失败返回 null。 */
   readRoster: (teamName: string) => Promise<Array<{ name?: string; sessionId?: string; runtime?: { providerId?: string; modelId?: string } }> | null>;
   /** 该会话当前生效的模型。 */
@@ -76,6 +82,12 @@ export async function maybeSwitchTeamMemberModel(
 
     const teamName = await deps.findTeam(input.sessionId);
     if (!teamName) return skip({ action: "skip", reason: "not-provider-failure" });
+
+    // lead 不是「执行中的成员」：不自动换它的模型（也不给它发「向 lead 回报」的提示）。
+    // 解不出 lead 时按「不是 lead」放行 —— 名册命中 + 成员的 parentSessionId 反推
+    // 已经足以说明这个会话是成员会话。
+    const lead = await deps.leadSessionId(teamName).catch(() => null);
+    if (lead && lead === input.sessionId) return skip({ action: "skip", reason: "not-provider-failure" });
 
     const roster = await deps.readRoster(teamName);
     if (!roster) return skip({ action: "skip", reason: "not-provider-failure" });
@@ -202,13 +214,13 @@ function nudgedSessions(): Map<string, number> {
 
 /** 生产默认实现：所有重模块惰性 import，避免把团队/模型栈拖进启动路径。 */
 export async function buildDefaultTeamModelFallbackDeps(): Promise<TeamModelFallbackRuntimeDeps> {
-  const { findTeamBySession } = await import("./agent-teams-swimlane-store");
-  const { teamDirFor } = await import("./agent-teams-swimlane-store");
+  const { findTeamBySession, teamDirFor, resolveTeamLeadSession } = await import("./agent-teams-swimlane-store");
   const { readMergedRoster } = await import("./agent-teams-roster");
   const { getRpcSession } = await import("./rpc-manager");
 
   return {
     findTeam: (sessionId) => findTeamBySession(sessionId),
+    leadSessionId: (teamName) => resolveTeamLeadSession(teamName).catch(() => null),
     readRoster: async (teamName) => {
       try {
         return await readMergedRoster(teamDirFor(teamName));

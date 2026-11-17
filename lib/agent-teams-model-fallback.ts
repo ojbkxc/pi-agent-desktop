@@ -10,9 +10,12 @@
  * 换过去（只换模型串）→ 让它继续干没干完的活。
  *
  * ── 与 outage 的分工（重要） ────────────────────────────────────
- * 换模型优先于挂起等待。一旦本层接手，**必须把该会话的 outage 记录标成 team 域**，
- * 否则 outage scheduler 还会按退避继续给它发续跑提示 —— 两套驱动同时往一个会话灌
- * 消息，重复烧 token、还可能互相打架。见 `lib/outage/scheduler.ts` 对 autofix 的同类处理。
+ * 换模型优先于挂起等待。一旦本层接手（换成功并续跑），**必须先把该会话的 outage
+ * 记录摘掉**——scheduler 只推进 `waiting` 记录，记录没了它就不再给这个会话发续跑提示；
+ * 否则两套驱动同时往一个会话灌消息，重复烧 token、还可能互相打架。做法上是删除记录
+ * （`cancelOutageRecord`）而不是把既有挂起记录改挂到 team 域：续跑由本层直接发出，
+ * 不存在「team 域记录再等某个驱动来推进」的第二段等待。参考 `lib/outage/scheduler.ts`
+ * 对 autofix 的同类处理（那是另一位驱动者的记录，所以只跳过不删）。
  *
  * ── 三条硬约束 ─────────────────────────────────────────────────
  * 1. **只换模型串**：不搬别的成员的会话、任务、profile、cwd。工具集与 transcript 不变，
@@ -109,7 +112,9 @@ export function dedupeModelCandidates(candidates: readonly ModelCandidate[]): Mo
  * 1. 从 `errorText` 分类 —— 只有 `suspend: true`（outage / quota）才算 provider 故障。
  *    代码错误、参数错误、401、模型不存在都**不换**（换模型解决不了，还会掩盖真问题）。
  * 2. 次数上限。
- * 3. 候选 = 名册去重 − 当前模型 − 无凭据。
+ * 3. 候选 = 名册去重 − 当前模型 − 本次故障里已试过的模型 − 无凭据/模型不存在。
+ *    候选排序：**跨 provider 的优先**（provider 级故障时同 provider 多半一起挂），
+ *    组内保持名册顺序。
  */
 export function decideModelFallback(
   input: ModelFallbackDecisionInput,
