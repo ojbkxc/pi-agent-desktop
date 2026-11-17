@@ -30,9 +30,9 @@ export interface TeamModelFallbackRuntimeDeps {
   /**
    * 该团队真实的 lead 会话 id（config/desktop 标记/成员会话反推）；解不出返回 null。
    * **lead 不换**：lead 不是执行任务的成员，给它换模型再发「向 lead 回报」的续跑提示
-   * 是错的（而且 nudgeLead 会指向它自己）。
+   * 是错的（而且 nudgeLead 会指向它自己）。可选：缺省按「解不出 lead」处理。
    */
-  leadSessionId: (teamName: string) => Promise<string | null>;
+  leadSessionId?: (teamName: string) => Promise<string | null>;
   /** 读团队名册；失败返回 null。 */
   readRoster: (teamName: string) => Promise<Array<{ name?: string; sessionId?: string; runtime?: { providerId?: string; modelId?: string } }> | null>;
   /** 该会话当前生效的模型。 */
@@ -84,9 +84,9 @@ export async function maybeSwitchTeamMemberModel(
     if (!teamName) return skip({ action: "skip", reason: "not-provider-failure" });
 
     // lead 不是「执行中的成员」：不自动换它的模型（也不给它发「向 lead 回报」的提示）。
-    // 解不出 lead 时按「不是 lead」放行 —— 名册命中 + 成员的 parentSessionId 反推
-    // 已经足以说明这个会话是成员会话。
-    const lead = await deps.leadSessionId(teamName).catch(() => null);
+    // 解不出 lead、或注入的实现缺位时按「不是 lead」放行 —— 名册命中 + 成员的
+    // parentSessionId 反推已经足以说明这个会话是成员会话。
+    const lead = deps.leadSessionId ? await deps.leadSessionId(teamName).catch(() => null) : null;
     if (lead && lead === input.sessionId) return skip({ action: "skip", reason: "not-provider-failure" });
 
     const roster = await deps.readRoster(teamName);
