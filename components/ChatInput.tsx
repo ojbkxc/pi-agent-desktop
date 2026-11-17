@@ -974,6 +974,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
           : chatOnly ? "chatOnly"
             : undefined;
   const showTeamToggle = !memberSession && !leanMode;
+  // /goal 快捷按钮与团队开关同一可见口径：成员会话不立目标、Lean 模式整行收起。
+  const goalShortcutVisible = !memberSession && !leanMode;
   const teamAvailable = teamUnavailableReason === undefined;
   const showTeamChip = teamEnabled && armed && teamAvailable;
   // 一次性成本确认（A6）：首次勾起时弹一次；「不再提醒」由 lib/agent-teams-notice 记住。
@@ -3158,6 +3160,35 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 onProjectChange={onProjectChange}
                 onSelectProject={onSelectProject}
               />
+            )}
+            {/* /goal 快捷按钮：把 `/goal ` 前缀插到光标处，用户再接一句目标即可。
+                放在团队按钮左边（用户要求的顺序）。它是一个纯输入框助手——命令本身仍由
+                goal 扩展处理，这里不碰任何后端逻辑。 */}
+            {goalShortcutVisible && (
+              <button
+                type="button"
+                className="composer-goal-button"
+                title={t("composer.goalHint")}
+                aria-label={t("composer.goalHint")}
+                onClick={() => {
+                  setValue((current) => `${current}${current && !current.endsWith(" ") ? " " : ""}/goal `);
+                  // 把焦点与光标留在目标文本该在的位置，用户可以直接接着写目标。
+                  requestAnimationFrame(() => {
+                    const el = textareaRef.current;
+                    if (!el) return;
+                    el.focus();
+                    const end = el.value.length;
+                    el.setSelectionRange(end, end);
+                  });
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" />
+                  <circle cx="12" cy="12" r="4" />
+                  <circle cx="12" cy="12" r="1" fill="currentColor" />
+                </svg>
+                <span>/goal</span>
+              </button>
             )}
             {/* A2: Agent Team switch. Hidden only in a subagent/member session or under
                 Lean mode (whole row gone); greyed and leading to Settings when the feature
