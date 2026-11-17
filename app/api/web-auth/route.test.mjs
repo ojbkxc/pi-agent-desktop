@@ -84,3 +84,42 @@ test("rejects cross-origin login attempts", async () => {
   ));
   assert.equal(response.status, 403);
 });
+
+test("rejects an oversized declared login body before buffering it whole (413)", async () => {
+  const huge = "x".repeat(64 * 1024);
+  const response = await POST(new NextRequest("http://localhost/api/web-auth", {
+    method: "POST",
+    headers: {
+      Host: "localhost",
+      Origin: "http://localhost",
+      "Sec-Fetch-Site": "same-origin",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ password: huge }),
+  }));
+  assert.equal(response.status, 413);
+  assert.deepEqual(await response.json(), { error: "Request body too large" });
+});
+
+test("a chunked oversized login body is also rejected (413)", async () => {
+  // 无 Content-Length（chunked）：靠逐块累计字节上限拦下，而不是先整包缓冲。
+  const chunk = new Uint8Array(8192).fill(120); // 'x'
+  const body = new ReadableStream({
+    start(controller) {
+      for (let i = 0; i < 8; i++) controller.enqueue(chunk);
+      controller.close();
+    },
+  });
+  const response = await POST(new NextRequest("http://localhost/api/web-auth", {
+    method: "POST",
+    headers: {
+      Host: "localhost",
+      Origin: "http://localhost",
+      "Sec-Fetch-Site": "same-origin",
+      "Content-Type": "application/json",
+    },
+    body,
+    duplex: "half",
+  }));
+  assert.equal(response.status, 413);
+});

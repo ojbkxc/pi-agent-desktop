@@ -4,6 +4,18 @@ import { mergeStoredLiteralApiKeys, redactModelsJson } from "@/lib/models-config
 
 export const dynamic = "force-dynamic";
 
+/**
+ * 错误收敛（数据/测试审计 A-8）：`ModelsConfigReadError.message` 带绝对路径
+ * （`Failed to read /home/.../models.json: ...`），不能原样回给客户端——隧道暴露后
+ * 会把用户目录结构泄露给任何访问者。原始文本只进服务端日志，响应只给稳定 code。
+ */
+function readErrorResponse(status: number) {
+  return NextResponse.json(
+    { error: "The models configuration could not be read.", code: "models-config-unreadable" },
+    { status },
+  );
+}
+
 export async function GET() {
   try {
     // Literal apiKey values never leave the server; shell/env references and
@@ -11,9 +23,10 @@ export async function GET() {
     return NextResponse.json(redactModelsJson(readModelsConfig()));
   } catch (error) {
     if (error instanceof ModelsConfigReadError) {
-      return NextResponse.json({ error: error.message }, { status: 422 });
+      console.error(`[models-config] ${error.message}`);
+      return readErrorResponse(422);
     }
-    return NextResponse.json({ error: String(error) }, { status: 500 });
+    return NextResponse.json({ error: "Could not read the models configuration.", code: "models-config-read-failed" }, { status: 500 });
   }
 }
 
@@ -38,8 +51,9 @@ export async function PUT(req: Request) {
     return NextResponse.json({ success: true });
   } catch (error) {
     if (error instanceof ModelsConfigReadError) {
-      return NextResponse.json({ error: error.message }, { status: 409 });
+      console.error(`[models-config] ${error.message}`);
+      return readErrorResponse(409);
     }
-    return NextResponse.json({ error: String(error) }, { status: 500 });
+    return NextResponse.json({ error: "Could not save the models configuration.", code: "models-config-write-failed" }, { status: 500 });
   }
 }

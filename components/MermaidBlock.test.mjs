@@ -201,8 +201,12 @@ test("fit mode stays off unless asked for", () => {
 test("code-block copy failure is caught and surfaced, never an unhandled rejection (d5-27)", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("./MermaidBlock.tsx", import.meta.url), "utf8");
-  // copyText 的 then 必须带 onRejected；失败走 copyFailed 状态与成功同节奏复位。
-  assert.match(source, /setCopyFailed\(true\);\s*setTimeout\(\(\) => setCopyFailed\(false\), 1500\);/);
+  // 复制的成功/失败反馈与复位定时器统一由共享 hook 管理（hooks/useCopyFeedback）：
+  // 失败有提示、不会产生未处理的 rejection，连点两次也不会让上一次的定时器提前复位。
+  assert.match(source, /import \{ useCopyFeedback \} from "@\/hooks\/useCopyFeedback"/);
+  assert.match(source, /const \{ copied, failed: copyFailed, copy: copyFeedback \} = useCopyFeedback\(\)/);
+  assert.match(source, /void copyFeedback\(code\)/);
+  assert.doesNotMatch(source, /setTimeout\(\(\) => setCopyFailed\(false\), 1500\)/);
   assert.match(source, /copyFailed \? t\("i18n\.copyFailed"\) : copied \? t\("i18n\.copied"\) : t\("i18n\.copy"\)/);
   // 三语键必须齐（本仓 i18n 动态键纪律）。
   const { enLocale } = await jiti.import("@/lib/i18n/messages/en");

@@ -227,6 +227,15 @@ const COMPOSITION_END_ENTER_GRACE_MS = 100;
 /** d5-19：内置命令 POST 的超时上限——agent-client 裸 fetch 无 signal，挂起会让
  *  fieldset 冻结整个 composer。超时后解冻、输入保留，用户可重试。 */
 const BUILTIN_COMMAND_TIMEOUT_MS = 15_000;
+
+/**
+ * 内置命令的三态结果：
+ * - handled：命令已处理（含 error 结果，由命令层自己展示）；
+ * - unhandled：命令层明确不认识 → 调用方可以按普通消息继续；
+ * - timeout：15s 内没有答复 → 必须终止本次发送，不能再当普通消息发出去
+ *   （原请求可能稍后仍在服务端完成，fall-through 会造成「命令 + 聊天消息」双执行）。
+ */
+type BuiltinCommandOutcome = "handled" | "unhandled" | "timeout";
 const TEXT_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 const ANCHORED_MENU_GAP = 8;
 
@@ -1039,6 +1048,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const [historyActiveIndex, setHistoryActiveIndex] = useState(0);
   const [builtinCommandPending, setBuiltinCommandPending] = useState(false);
   const builtinCommandPendingRef = useRef(false);
+  // 内置命令 15s 超时：本次发送被终止（输入保留），用一条常驻提示引导重试。
+  const [builtinCommandTimeout, setBuiltinCommandTimeout] = useState(false);
   const [fileIndex, setFileIndex] = useState<{ cwd: string; entries: FileIndexEntry[]; truncated: boolean } | null>(null);
   const [fileIndexLoading, setFileIndexLoading] = useState(false);
   const [atServerResult, setAtServerResult] = useState<{ cwd: string; query: string; matches: FileIndexEntry[] } | null>(null);
@@ -1552,22 +1563,26 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     };
   }, []);
 
-  const runBuiltinCommand = useCallback(async (msg: string): Promise<boolean> => {
-    if (attachedImages.length || attachedFilesRef.current.length || !msg.startsWith("/") || !onBuiltinCommand) return false;
-    if (builtinCommandPendingRef.current) return true;
+  const runBuiltinCommand = useCallback(async (msg: string): Promise<BuiltinCommandOutcome> => {
+    if (attachedImages.length || attachedFilesRef.current.length || !msg.startsWith("/") || !onBuiltinCommand) return "unhandled";
+    if (builtinCommandPendingRef.current) return "handled";
     builtinCommandPendingRef.current = true;
     setBuiltinCommandPending(true);
     try {
       // d5-19：onBuiltinCommand 底层是 agent-client 的裸 fetch（无 signal）——挂起时
-      // fieldset 全 composer 冻结且 Esc 不可达。15s 上限兜底：超时按未处理返回，
-      // pending 在 finally 复位解冻，输入保留（不 clearInput），用户可重试。
+      // fieldset 全 composer 冻结且 Esc 不可达。15s 上限兜底：超时单列一态（不是
+      // 「未处理」），pending 在 finally 复位解冻，输入保留（不 clearInput），用户可重试。
+      // 超时若按未处理 fall-through，/命令 会被当普通消息发给模型并清空输入，
+      // 而原请求仍可能在服务端完成 → 命令与聊天消息双执行。
+      const timedOut = Symbol("builtin-command-timeout");
       const result = await Promise.race([
         onBuiltinCommand(msg),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), BUILTIN_COMMAND_TIMEOUT_MS)),
+        new Promise<typeof timedOut>((resolve) => setTimeout(() => resolve(timedOut), BUILTIN_COMMAND_TIMEOUT_MS)),
       ]);
-      if (!result || !result.handled) return false;
+      if (result === timedOut) return "timeout";
+      if (!result || !result.handled) return "unhandled";
       if (!result.error && canClearBuiltinCommandInput(valueRef.current, attachedImagesRef.current.length, msg)) clearInput();
-      return true;
+      return "handled";
     } finally {
       builtinCommandPendingRef.current = false;
       setBuiltinCommandPending(false);
@@ -1616,8 +1631,19 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     // 不用在依赖里追 attachedImages（闭包快照会漏掉刚落地的图）。
     if (!msg && !attachedImagesRef.current.length && !attachedFilesRef.current.length) return;
     onAudioUnlock?.();
+    // 每次新的发送先收起上一次「命令超时」提示。
+    setBuiltinCommandTimeout(false);
     const builtinAllowed = !isStreaming || offersBuiltinSlashCommandWhileStreaming(msg);
-    if (builtinAllowed && await runBuiltinCommand(msg)) return;
+    if (builtinAllowed) {
+      const builtinOutcome = await runBuiltinCommand(msg);
+      if (builtinOutcome === "handled") return;
+      // 超时：终止本次发送——不清输入、也不把 /命令 当普通消息发出去（否则会双执行），
+      // 只提示用户重试。
+      if (builtinOutcome === "timeout") {
+        setBuiltinCommandTimeout(true);
+        return;
+      }
+    }
     if (isStreaming) return;
     // A run cannot start in a cwd that is gone; keep the draft until it is back or another project is picked.
     if (workspaceUnavailable) return;
@@ -1919,16 +1945,20 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     if (!attachedImagesRef.current.length && !attachedFilesRef.current.length && onBuiltinCommand && canRunBuiltinSlashCommandWhileStreaming(msg)) {
       // The builtin layer may not know the command (handled:false); like the
       // bare /mcp branch below, fall through to queueing instead of dropping it.
-      void runBuiltinCommand(msg).then((handled) => {
-        if (!handled) void queue();
+      void runBuiltinCommand(msg).then((outcome) => {
+        // 只有命令层明确「不认识」才退回队列；超时不能把 /命令 当普通消息排队。
+        if (outcome === "unhandled") void queue();
+        else if (outcome === "timeout") setBuiltinCommandTimeout(true);
       }, () => void queue());
       return;
     }
     if (!attachedImagesRef.current.length && !attachedFilesRef.current.length && onBuiltinCommand && isBareMcpCommand(msg)) {
       // Settings > MCP opens when pi's built-in MCP extension owns /mcp; another
       // extension's /mcp is queued as before. The composer is disabled meanwhile.
-      void runBuiltinCommand(msg).then((handled) => {
-        if (!handled) void queue();
+      void runBuiltinCommand(msg).then((outcome) => {
+        // 只有命令层明确「不认识」才退回队列；超时不能把 /命令 当普通消息排队。
+        if (outcome === "unhandled") void queue();
+        else if (outcome === "timeout") setBuiltinCommandTimeout(true);
       }, () => void queue());
       return;
     }
@@ -2412,6 +2442,16 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
           dismissLabel={t("chat.modelScopeDismiss")}
           onOpenModelsConfig={onOpenModelsConfig}
         />
+        {/* 内置命令超时：本次发送已终止、输入保留，仅提示重试。 */}
+        {builtinCommandTimeout && (
+          <ModelNoticeBanner
+            tone="error"
+            title={t("chat.builtinCommandTimeout")}
+            body=""
+            onClose={() => setBuiltinCommandTimeout(false)}
+            dismissLabel={t("chat.modelScopeDismiss")}
+          />
+        )}
         {showImageUnsupportedWarning && (() => {
           const entry = modelList?.find((m) => m.provider === model?.provider && m.id === model?.modelId);
           return (
@@ -3355,7 +3395,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                     position: "absolute",
                     bottom: "calc(100% + 6px)",
                     ...(isMobile ? { left: 0 } : { right: 0 }),
-                    zIndex: 100,
+                    zIndex: "var(--z-dropdown)",
                     overflow: "hidden", minWidth: 240,
                     maxHeight: maxH, display: "flex", flexDirection: "column",
                   }}>
@@ -3500,7 +3540,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                   return (
                   <div className="native-popover app-menu composer-tool-menu" role="listbox" aria-label={t("chat.changeToolPreset")} style={{
                     position: "absolute", bottom: "calc(100% + 6px)", right: anchorRight - left - width,
-                    zIndex: 100, background: "var(--bg)", border: "var(--hairline) solid var(--border)",
+                    zIndex: "var(--z-dropdown)", background: "var(--bg)", border: "var(--hairline) solid var(--border)",
                     borderRadius: "var(--radius-md)", boxShadow: "var(--shadow-popover)",
                     overflow: "hidden", minWidth: 120,
                     maxHeight: maxH, display: "flex", flexDirection: "column",

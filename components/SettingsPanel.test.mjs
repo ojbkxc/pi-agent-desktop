@@ -82,17 +82,30 @@ test("keeps visited settings sections mounted and contains nested Escape handlin
   assert.match(panelSource, /mountedSections\.has\(id\)/);
   assert.match(panelSource, /hidden=\{section !== id\}/);
   // Settings closes on an Escape nothing nearer handled (lib/stacked-dialog.test.mjs pins the phases).
-  assert.match(panelSource, /useEffect\(\(\) => listenForPanelEscape\(document, \(\) => \{ if \(!busy\) onClose\(\); \}\), \[onClose, busy\]\);/);
+  assert.match(panelSource, /const requestClose = useCallback\(\(\) => \{\n\s*if \(!busy\) onClose\(\);\n\s*\}, \[busy, onClose\]\);/);
+  // The shared hook owns Escape while Settings is the topmost modal, traps Tab
+  // inside the panel and lets Radix Select portals through (a11y P1). Its
+  // onDismiss is requestClose, so a busy update still cannot be dismissed.
+  assert.match(panelSource, /const dialogRef = useModalDismiss<HTMLDivElement>\(requestClose\);/);
+  assert.match(panelSource, /useEffect\(\(\) => listenForPanelEscape\(document, requestClose\), \[requestClose\]\);/);
   assert.doesNotMatch(panelSource, /addEventListener\("keydown"/);
+  // One guard for every dismiss path: the header × used to call onClose directly,
+  // which let a desktop update be dismissed mid-install (AGENTS.md hard rule).
+  assert.match(panelSource, /onClick=\{\(event\) => \{ if \(event\.target === event\.currentTarget\) requestClose\(\); \}\}/);
+  assert.match(panelSource, /<button type="button" onClick=\{requestClose\} title=\{t\("i18n\.close"\)\}/);
+  assert.doesNotMatch(panelSource, /<button type="button" onClick=\{onClose\}/);
   // An Escape that cancels an IME composition is the input method's, not a request to close.
   assert.match(stackedDialogSource, /if \(event\.key !== "Escape" \|\| event\.defaultPrevented \|\| cancelsComposition\(event\)\) return;/);
-  assert.match(modelsSource, /e\.preventDefault\(\);\s*e\.stopPropagation\(\);\s*onClose\(\);/);
+  // The nested add-provider modal now lets the shared hook own Escape (document
+  // level, so it still works after Tab left the dialog); it no longer binds
+  // onKeyDown to the dialog element.
+  assert.match(modelsSource, /useModalDismiss<HTMLDivElement>\(onClose\)/);
 });
 
 test("focus moves into Settings as it opens and back to its opener as it closes", () => {
   // Left on the composer a bare /mcp opened Settings from, Escape stopped a running agent
   // and Settings stayed open (lib/stacked-dialog.test.mjs runs focusModalPanel()).
-  assert.match(panelSource, /const dialogRef = useRef<HTMLDivElement>\(null\);\n\s*useLayoutEffect\(\(\) => focusModalPanel\(document, dialogRef\.current, \{\n\s*restoreTextEntry: !window\.matchMedia\?\.\("\(pointer: coarse\)"\)\.matches,\n\s*\}\), \[\]\);/);
+  assert.match(panelSource, /const dialogRef = useModalDismiss<HTMLDivElement>\(requestClose\);\n\s*useLayoutEffect\(\(\) => focusModalPanel\(document, dialogRef\.current, \{\n\s*restoreTextEntry: !window\.matchMedia\?\.\("\(pointer: coarse\)"\)\.matches,\n\s*\}\), \[\]\);/);
   assert.match(panelSource, /<div\n\s*ref=\{dialogRef\}\n\s*role="dialog"\n\s*aria-modal="true"\n\s*aria-label=\{t\("settings\.title"\)\}\n\s*tabIndex=\{-1\}/);
   // The dialog element is not a control: no focus ring around the whole page.
   assert.match(cssSource, /\.settings-dialog-backdrop:focus \{\n\s*outline: none;\n\}/);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 
 export type LifecycleAction = "stop" | "reclaim";
@@ -107,7 +107,15 @@ export function LifecycleOutcomeMessage({ outcome }: { outcome: LifecycleOutcome
   );
 }
 
-/** 回收的二次确认（不可逆）：文案带 displayName 与 memberCount。 */
+/**
+ * 回收的二次确认（不可逆）：文案带 displayName 与 memberCount。
+ *
+ * 语义与行为必须一致（a11y.md P2）：这是**内联**确认区，不是模态——没有遮罩、
+ * 不圈禁 Tab、也不接管 document 级 Esc，所以不能挂 `role="alertdialog"`（读屏器
+ * 会按模态播报）。改用 `role="group"` + aria-label，并在出现时把焦点移到
+ * 「取消」（键盘触发「回收」后焦点不会停在危险按钮上）；Esc 由本组件的
+ * onKeyDown 取消并把焦点还回「回收」按钮。
+ */
 export function ReclaimConfirm({
   displayName,
   memberCount,
@@ -122,8 +130,43 @@ export function ReclaimConfirm({
   onCancel: () => void;
 }) {
   const { t } = useI18n();
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const confirmRef = useRef<HTMLDivElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+
+  // 出现即聚焦「取消」（安全选项）；卸载时把焦点还回触发「回收」的按钮。
+  useEffect(() => {
+    openerRef.current = typeof document === "undefined"
+      ? null
+      : document.activeElement as HTMLElement | null;
+    cancelRef.current?.focus({ preventScroll: true });
+    return () => {
+      const opener = openerRef.current;
+      if (!opener || !opener.isConnected) return;
+      const active = typeof document === "undefined" ? null : document.activeElement;
+      if (active === null || active === document.body || confirmRef.current?.contains(active)) {
+        opener.focus({ preventScroll: true });
+      }
+    };
+  }, []);
+
   return (
-    <div className="team-lifecycle-confirm" role="alertdialog" aria-label={t("teams.lifecycle.reclaim")} data-testid="reclaim-confirm">
+    <div
+      ref={confirmRef}
+      className="team-lifecycle-confirm"
+      role="group"
+      aria-label={t("teams.lifecycle.reclaim")}
+      data-testid="reclaim-confirm"
+      onKeyDown={(event) => {
+        // 内联区块：Escape 只取消本次确认，stopPropagation 防它冒泡到全局
+        // Esc 停掉运行中的 agent。
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          event.preventDefault();
+          onCancel();
+        }
+      }}
+    >
       <p className="team-lifecycle-confirm-text">
         {t("teams.lifecycle.confirmReclaim", { team: displayName, count: memberCount })}
       </p>
@@ -131,7 +174,7 @@ export function ReclaimConfirm({
         <button type="button" className="team-lifecycle-confirm-danger" disabled={busy} onClick={onConfirm}>
           {busy ? t("teams.lifecycle.busy") : t("teams.lifecycle.confirmReclaimAction")}
         </button>
-        <button type="button" className="team-lifecycle-cancel" disabled={busy} onClick={onCancel}>
+        <button ref={cancelRef} type="button" className="team-lifecycle-cancel" disabled={busy} onClick={onCancel}>
           {t("teams.lifecycle.cancel")}
         </button>
       </div>

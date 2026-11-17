@@ -50,6 +50,8 @@ const FAKE = {
   "teams.plan.state.cancelled": "Cancelled",
   "teams.plan.state.interrupted": "Interrupted",
   "teams.plan.saveBeforeApprove": "Save your changes before approving — otherwise the team launches with the old models.",
+  "teams.plan.discardUnsaved": "Discard the unsaved changes?",
+  "teams.plan.discardAndClose": "Discard and close",
 };
 function tFake(key, params) {
   let text = FAKE[key] ?? key;
@@ -252,6 +254,50 @@ test("状态标签键与徽标色覆盖四态（纯函数输出）", () => {
   assert.equal(planStateToneColor("review_pending"), "var(--accent)");
   assert.equal(planStateToneColor("launch_failed"), "var(--danger)");
   assert.equal(planStateToneColor("draft"), "var(--text-muted)");
+});
+
+// ── interaction.md P1：dirty 时 Esc / 遮罩 / Close 不能静默丢草稿 ──────────────
+test("dirty 时关闭路径走 requestClose（遮罩 / Close / Esc 同一条），不再直接 onClose", async () => {
+  const { readFile } = await jiti.import("node:fs/promises");
+  const source = (await readFile(new URL("./AgentTeamPlanCard.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+  // 遮罩与 Close 都接 requestClose（dirty 时进二次确认）；旧实现是 onClick={options.onClose}。
+  assert.match(source, /data-testid="team-plan-overlay" onClick=\{requestClose\}/, "遮罩走 requestClose");
+  assert.match(source, /data-testid="team-plan-close" style=\{S\.ghost\} onClick=\{requestClose\}/, "Close 走 requestClose");
+  // Esc 由共享模态 hook 接管（capture 段 preventDefault + stopPropagation），不再是
+  // 原来的 document 冒泡监听直接把 setOpen(false)。
+  assert.match(source, /useModalDismiss<HTMLDivElement>\(requestClose, open\)/);
+  assert.doesNotMatch(source, /document\.addEventListener\("keydown", onKey\)/, "不得留旧的 Esc 冒泡监听");
+  // requestClose：busy 按住；确认态再按一次 = 撤销这次关闭（不是放弃草稿）；
+  // dirty 进二次确认；否则真关。
+  assert.match(source, /if \(busy\) return;[\s\S]*if \(discardPrompt\) \{\s*\n\s*setDiscardPrompt\(false\);\s*\n\s*return;[\s\S]*if \(dirty\) setDiscardPrompt\(true\);[\s\S]*setOpen\(false\);/);
+});
+
+test("二次确认行：dirty+discardPrompt 时出现，取消留在卡片、确认才真关", () => {
+  let cancelDiscard = 0;
+  let discard = 0;
+  const tree = planModalView(tFake, view(), {
+    dirty: true,
+    discardPrompt: true,
+    onDiscard: () => { discard += 1; },
+    onCancelDiscard: () => { cancelDiscard += 1; },
+  });
+  const prompt = byTestId(tree, "team-plan-discard-prompt");
+  assert.ok(prompt, "确认行必须出现");
+  // 二次确认态下「saveBeforeApprove」的常驻告警让位给确认文案（不叠加两条红字）。
+  assert.equal(byTestId(tree, "team-plan-unsaved"), undefined);
+  byTestId(tree, "team-plan-discard-cancel").props.onClick();
+  assert.equal(cancelDiscard, 1, "取消只退出确认，不关卡片");
+  byTestId(tree, "team-plan-discard-confirm").props.onClick();
+  assert.equal(discard, 1, "确认才丢弃并关闭");
+
+  // 非 dirty / 未进确认态：不渲染确认行。
+  assert.equal(byTestId(planModalView(tFake, view()), "team-plan-discard-prompt"), undefined);
+});
+
+test("i18n：新增的丢弃确认键不得漏成原文（三语由 fix-shared-css 落库）", () => {
+  const html = renderToStaticMarkup(planModalView(tFake, view(), { dirty: true, discardPrompt: true }));
+  assert.doesNotMatch(html, /teams\.plan\.discard/, "确认文案必须走 i18n");
+  assert.match(html, /Discard the unsaved changes\?/);
 });
 
 test("editable 路径：传 editor 才渲染可编辑区，且 draft / review_pending 才允许保存", async () => {

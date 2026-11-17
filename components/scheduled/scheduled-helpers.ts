@@ -78,6 +78,22 @@ export function canWrite(preset: ScheduledTaskView["toolPreset"]): boolean {
   return preset === "default" || preset === "full";
 }
 
+/**
+ * 把「cron 预览」与它对应的表达式绑定。
+ *
+ * 只有 `preview.expr` 与当前 `expr` 一致时，才把它当作可展示/可校验的结果：
+ * 表达式一改，旧预览立即失效，既不展示旧表达式的 next runs，也不会用旧结果
+ * 放行非法 cron（interaction.md P2）。`pending` 表示当前表达式还没有对应预览，
+ * 此时提交必须被禁止。
+ */
+export function bindCronPreview<T extends { valid: boolean }>(
+  expr: string | null,
+  preview: { expr: string; result: T } | null,
+): { shown: T | null; pending: boolean; invalid: boolean } {
+  const shown = expr && preview && preview.expr === expr ? preview.result : null;
+  return { shown, pending: Boolean(expr && !shown), invalid: Boolean(shown && !shown.valid) };
+}
+
 /** `datetime-local` value for an ISO instant, in the viewer's own time zone. */
 export function toLocalInputValue(iso: string): string {
   const date = new Date(iso);

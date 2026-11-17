@@ -51,7 +51,7 @@ test("active 态：标题 + 目标文本（截断带 title）+ 元信息，且�
 test("isRunning=true → Loop running（与 Active 区分）", () => {
   const html = text(render(base, { isRunning: true }));
   assert.ok(html.includes("Loop running"), "running word");
-  assert.ok(!html.includes("Active goal") === false || html.includes("Active goal"), "title still shown");
+  assert.ok(html.includes("Active goal"), "title still shown");
 });
 
 test("paused → 状态词 Paused", () => {

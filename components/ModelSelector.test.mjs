@@ -9,3 +9,13 @@ test("does not autofocus the model filter on mobile", () => {
   assert.match(source, /aria-label=\{t\("chat\.filterModels"\)\}[\s\S]*?autoFocus=\{!isMobile\}/);
   assert.doesNotMatch(source, /^\s*autoFocus\s*$/m);
 });
+
+test("portals the fixed popup out of the settings dialog", () => {
+  // The Settings surface keeps a transform from its entry animation (`both`), so a
+  // fixed popup rendered inside it is offset by the dialog corner and clipped by
+  // its overflow — only when reduced motion is off. The popup lays itself out with
+  // viewport coordinates and therefore has to live on <body>.
+  assert.match(source, /import \{ createPortal \} from "react-dom";/);
+  assert.match(source, /return createPortal\(/);
+  assert.match(source, /document\.body,\r?\n\s*\);\r?\n\s*\}\)\(\)\}/);
+});

@@ -146,3 +146,17 @@ test("空态：无消息时渲染空态且无消息行", () => {
   assert.doesNotMatch(html, /data-find-row=/, "空态不应有任何消息行");
   assert.match(html, /data-testid="agent-teams-filter-all"[^>]*data-count="0"/);
 });
+
+// ── A-9：时间戳必须跟随应用语言（不是 OS locale）──────────────────────────────
+// 原实现 `toLocaleTimeString([], ...)` 传空数组 = 跟随系统语言，与仓库
+// 「Dates follow the app language, not the OS locale」规则相反。
+test("消息时间跟随应用语言：en 与 zh-CN 渲染出的时间戳来自各自 locale", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = (await readFile(new URL("./AgentTeamsCommunicationFeed.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+  assert.match(source, /formatUpdatedTime\(time\.getTime\(\), locale\)/, "时间必须按应用 locale 格式化");
+  assert.doesNotMatch(source, /toLocaleTimeString\(\[\]/, "不得再跟随 OS locale");
+  // locale 从 useI18n 取，并一路传到 rows 与 FeedRow。
+  assert.match(source, /const \{ t, locale \} = useI18n\(\)/);
+  assert.match(source, /feedRowFindText\(row, t, locale\)/);
+  assert.match(source, /locale=\{locale\}/);
+});

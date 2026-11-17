@@ -436,3 +436,15 @@ test("alert markers inside lists stay ordinary quotes", () => {
   const html = renderMarkdown("- item\n\n  > [!NOTE]\n  > nested");
   assert.doesNotMatch(html, /markdown-alert/);
 });
+
+// ── state.md P2：MathDisplay 的「已复制」计时器无主（共享 hook 接管）───────────
+test("数学公式复制反馈复用共享 useCopyFeedback（失败也有提示）", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("./MarkdownBody.tsx", import.meta.url), "utf8");
+  assert.match(source, /import \{ useCopyFeedback \} from "@\/hooks\/useCopyFeedback"/, "复用共享 hook");
+  assert.match(source, /const \{ copied, failed, copy \} = useCopyFeedback\(\);/, "MathDisplay 接共享 hook");
+  assert.match(source, /void copy\(source\)/, "复制走共享实现");
+  assert.match(source, /failed \? t\("i18n\.copyFailed"\)/, "失败也有提示");
+  assert.doesNotMatch(source, /function useCopyFeedback\(\)/, "不得保留第二套本地实现");
+  assert.doesNotMatch(source, /setTimeout\(\(\) => setCopied\(false\), 1500\)/, "裸计时器必须消失");
+});

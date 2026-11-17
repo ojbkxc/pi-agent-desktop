@@ -80,3 +80,20 @@ test("every viewer's change event invalidates in-flight meta responses", () => {
   // the size/error the change just set.
   assert.equal((source.match(/es\.addEventListener\("change", \(e\) => \{\s*syncRequestRef\.current \+= 1;/g) ?? []).length, 4);
 });
+
+test("a failed load-more keeps the loaded content; a failed first read offers retry", () => {
+  // interaction.md P1：首读与增量读的 error 原先把同一份状态写进 error，渲染层只要
+  // error 就整页早退 —— 一次「加载更多」的网络错误会把已读内容全部清空且无重试入口。
+  assert.match(source, /const \[loadMoreError, setLoadMoreError\] = useState<\{ error: string; offset: number \} \| null>\(null\)/);
+  assert.match(source, /const keepsContent = \(\) => offset > 0 \|\| dataRef\.current !== null;/);
+  assert.match(source, /if \(keepsContent\(\)\) setLoadMoreError\(\{ error: d\.error, offset \}\);\s*\n\s*else setError\(d\.error\);/);
+  assert.match(source, /if \(keepsContent\(\)\) setLoadMoreError\(\{ error: String\(e\), offset \}\);\s*\n\s*else setError\(String\(e\)\);/);
+
+  // 首读失败的错误页带重试按钮，复用既有 .file-viewer-retry-button 样式。
+  assert.match(source, /className="file-viewer-status is-error" role="alert"/);
+  assert.match(source, /className="file-viewer-retry-button"[\s\S]*?onClick=\{\(\) => \{\s*setLoading\(true\);\s*setError\(null\);\s*void fetchContent\(filePath\)\.finally\(\(\) => setLoading\(false\)\);\s*\}\}[\s\S]*?t\("common\.retry"\)/);
+
+  // 增量/重载失败只在内容上方内联报错，重试按失败时的 offset 续读。
+  assert.match(source, /\{loadMoreError && \(\s*\n\s*<div\s*\n\s*role="alert"/);
+  assert.match(source, /const \{ offset \} = loadMoreError;[\s\S]*?fetchContent\(filePath, offset\)/);
+});

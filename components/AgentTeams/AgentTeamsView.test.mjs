@@ -15,7 +15,27 @@ test("团队下拉：value 用目录名，label 用 displayName", async () => {
   assert.doesNotMatch(source, /label:\s*team\.name\b/, "label 不得再用目录名");
 });
 
-// ── C9 Live 指示（对抗验证 M3：此前零断言）──────────────────────────────────
+// ── interaction.md P2：整页根节点的 Esc 不能落到全局快捷键（会停掉后台 agent）──
+test("根 main 挂载即聚焦，Esc 必须 preventDefault（同 ScheduledView / AutofixView）", async () => {
+  const source = (await readFile(new URL("./AgentTeamsView.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+  // 根节点确实会在挂载时抢焦点——所以它的按键会被 window 级 Esc 看到。
+  assert.match(source, /rootRef\.current\?\.focus\(\{ preventScroll: true \}\)/);
+  // main 开始标签里必须有 Escape preventDefault。开始标签以 `>` 收尾，而箭头函数里
+  // 也有 `=>`——所以用「main 起点 → onKeyDown 之后的下一个换行缩进的 `>`」定界。
+  const mainStart = source.indexOf("<main");
+  assert.ok(mainStart > 0);
+  const keyHandler = source.indexOf('if (event.key === "Escape") event.preventDefault();', mainStart);
+  assert.ok(keyHandler > mainStart, "main 上必须有 Escape preventDefault");
+  const tagEnd = source.indexOf("\n    >", keyHandler);
+  assert.ok(tagEnd > keyHandler, "Escape 处理必须留在 main 的开始标签内");
+  assert.ok(source.indexOf("agent-teams-workbench-row", mainStart) > tagEnd, "开始标签在第一个子节点之前闭合");
+});
+
+// 同型整页视图（TasksView）由本组一并修复（lead 指派，components/tasks/** 无其他 owner）。
+test("TasksView 的 main 同样吞掉 Escape", async () => {
+  const source = (await readFile(new URL("../tasks/TasksView.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+  assert.match(source, /if \(event\.key === "Escape"\) event\.preventDefault\(\);/);
+});
 // SSR 渲染 AgentTeamsView 时 snapshot 为 null（数据靠挂载后 fetch），live 条不会出现；
 // 因此把「三态 hint / 已用时长 / 会话时钟」的派生抽成模块级纯函数 deriveLiveIndicator，
 // 直接覆盖其边界，再用源码断言钉住 live 条本体的挂载点。

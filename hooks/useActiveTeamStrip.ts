@@ -108,9 +108,15 @@ export function isActiveTeamPhase(status: string | undefined): boolean {
 export function useActiveTeamStrip(sessionId: string | null, refreshKey: number = 0): ActiveTeamStrip {
   const [snapshot, setSnapshot] = useState<TeamWorkbenchSnapshot | null>(null);
 
+  // 换会话时才清空（同一条会话的刷新键不动旧快照）：之前 setSnapshot(null) 在
+  // 主 effect 开头无条件执行，而 refreshKey（AppShell 传消息计数）每发一条消息
+  // 都会重跑 effect → 头部团队条先卸载再挂回，团队运行期间每轮消息闪一次
+  // （state.md P2）。拆成只依赖 sessionId 的小 effect 后，refreshKey 只负责补拉。
   useEffect(() => {
-    // 换会话 / 收到新消息：先清掉上一条团队，避免把 A 会话的条串到 B。
     setSnapshot(null);
+  }, [sessionId]);
+
+  useEffect(() => {
     if (!sessionId) return;
 
     let stopped = false;

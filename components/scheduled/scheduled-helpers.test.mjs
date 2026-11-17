@@ -68,3 +68,30 @@ test("local datetime values round-trip through an instant", () => {
 test("only the presets that can change files are flagged as writing", () => {
   assert.deepEqual(["none", "read-only", "default", "full"].map(h.canWrite), [false, false, true, true]);
 });
+
+test("a cron preview only counts for the expression it was computed from", () => {
+  // interaction.md P2：预览必须与表达式绑定。旧实现只存 CronPreview 本身，表达式
+  // 改成非法值后、新预览返回前，界面仍展示旧表达式的 next runs 并用旧结果判合法。
+  const stale = { expr: "*/5 * * * *", result: { valid: true, nextRuns: ["2026-11-18T00:05:00Z"] } };
+
+  // 表达式变了：旧预览既不能展示，也不能放行提交；此时处于「校验中」。
+  assert.deepEqual(h.bindCronPreview("* * * *", stale), { shown: null, pending: true, invalid: false });
+
+  // 表达式一致：合法预览可展示、无 pending、不算非法。
+  assert.deepEqual(h.bindCronPreview("*/5 * * * *", stale), {
+    shown: stale.result,
+    pending: false,
+    invalid: false,
+  });
+
+  // 一致但非法：不允许提交。
+  const invalidPreview = { expr: "* * * *", result: { valid: false, error: "bad" } };
+  assert.deepEqual(h.bindCronPreview("* * * *", invalidPreview), {
+    shown: invalidPreview.result,
+    pending: false,
+    invalid: true,
+  });
+
+  // 非 cron 表单（expr 为 null）：没有预览，也不算 pending/非法。
+  assert.deepEqual(h.bindCronPreview(null, stale), { shown: null, pending: false, invalid: false });
+});

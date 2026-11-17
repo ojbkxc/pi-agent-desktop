@@ -15,7 +15,7 @@ import {
   type SchedulePreset,
 } from "@/lib/scheduled-tasks/schedule-presets";
 import { DEFAULT_MAX_DURATION_MINUTES, MAX_DURATION_MINUTES, type ScheduledTaskView } from "@/lib/scheduled-tasks/types";
-import { TOOL_PRESET_KEYS, canWrite, formatDateTime, fromLocalInputValue, toLocalInputValue } from "./scheduled-helpers";
+import { TOOL_PRESET_KEYS, bindCronPreview, canWrite, formatDateTime, fromLocalInputValue, toLocalInputValue } from "./scheduled-helpers";
 
 type ScheduleKind = SchedulePreset | "manual" | "once" | "custom";
 type ToolPreset = ScheduledTaskView["toolPreset"];
@@ -212,7 +212,9 @@ export function ScheduledTaskEditor({ task, projectRoots, defaultCwd, onBrowseFo
   const untrustedProject = useUntrustedProject(form.cwd);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [preview, setPreview] = useState<CronPreview | null>(null);
+  // 预览与它对应的表达式一起存：表达式一变，旧预览立即作废，避免在新防抖+网络
+  // 返回前展示旧表达式的 next runs，或用旧结果判「合法」（interaction.md P2）。
+  const [preview, setPreview] = useState<{ expr: string; result: CronPreview } | null>(null);
 
   const timezone = task?.schedule.kind === "cron" ? task.schedule.timezone : browserTimezone();
   const expr = cronOf(form);
@@ -220,16 +222,20 @@ export function ScheduledTaskEditor({ task, projectRoots, defaultCwd, onBrowseFo
 
   // A live look at the upcoming runs, checked by the same code that will accept the task.
   useEffect(() => {
+    // 表达式（或时区）变化即清空：上一个表达式的预览不得继续参与展示或校验。
+    setPreview(null);
     if (!expr) return;
     let cancelled = false;
     const timer = setTimeout(() => {
       scheduledApi.preview(expr, timezone)
-        .then((result) => { if (!cancelled) setPreview(result); })
+        .then((result) => { if (!cancelled) setPreview({ expr, result }); })
         .catch(() => { if (!cancelled) setPreview(null); });
     }, 250);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [expr, timezone]);
-  const shownPreview = expr ? preview : null;
+  // 只认与当前表达式匹配的预览；pending 表示当前表达式还没有对应预览（防抖/网络
+  // 窗口内，或请求失败），此时必须禁止提交，否则未校验的 cron 会直接发到服务端才报错。
+  const { shown: shownPreview, pending: schedulePending, invalid: scheduleInvalid } = bindCronPreview(expr, preview);
 
   const needsAck = canWrite(form.toolPreset) && (!task || task.toolPreset !== form.toolPreset);
   const missing = useMemo(() => {
@@ -239,11 +245,10 @@ export function ScheduledTaskEditor({ task, projectRoots, defaultCwd, onBrowseFo
     if (form.kind !== "manual" && form.kind !== "once" && form.kind !== "custom" && form.kind !== "hourly" && !parseClock(form.time)) return true;
     return needsAck && !form.acknowledged;
   }, [form, needsAck]);
-  const scheduleInvalid = Boolean(expr && shownPreview && !shownPreview.valid);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (saving || missing || scheduleInvalid) return;
+    if (saving || missing || scheduleInvalid || schedulePending) return;
     setSaving(true);
     setError(null);
     try {
@@ -344,6 +349,7 @@ export function ScheduledTaskEditor({ task, projectRoots, defaultCwd, onBrowseFo
         {expr && (
           <div className="scheduled-preview" aria-live="polite">
             <span className="scheduled-hint">{t("scheduled.schedule.timezone", { zone: timezone })}</span>
+            {schedulePending && <span className="scheduled-hint">{t("scheduled.preview.checking")}</span>}
             {shownPreview?.valid === false && (
               <p className="scheduled-error" role="alert">{shownPreview.key ? t(shownPreview.key, shownPreview.params) : shownPreview.error}</p>
             )}
@@ -413,7 +419,7 @@ export function ScheduledTaskEditor({ task, projectRoots, defaultCwd, onBrowseFo
 
       <div className="scheduled-actions">
         <button type="button" className="scheduled-button" onClick={onCancel} disabled={saving}>{t("scheduled.cancel")}</button>
-        <button type="submit" className="scheduled-button scheduled-button--primary" disabled={saving || missing || scheduleInvalid}>
+        <button type="submit" className="scheduled-button scheduled-button--primary" disabled={saving || missing || scheduleInvalid || schedulePending}>
           {saving ? t("scheduled.saving") : task ? t("scheduled.save") : t("scheduled.create")}
         </button>
       </div>

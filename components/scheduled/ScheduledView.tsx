@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { isModalOpen } from "@/lib/modal-focus";
 import { refreshScheduledTasks, useScheduledTasks } from "@/hooks/useScheduledTasks";
 import { useI18n } from "@/hooks/useI18n";
 import { useModalDismiss } from "@/hooks/useModalDismiss";
@@ -122,7 +124,11 @@ export function ScheduledView({ projectRoots, defaultCwd, onBrowseFolder, onOpen
       tabIndex={-1}
       aria-label={t("scheduled.title")}
       // Esc here must not reach the global shortcut that stops the agent running behind this page.
-      onKeyDown={(event) => { if (event.key === "Escape") event.preventDefault(); }}
+      // 但删除确认是 portal 到 body 的 React 子树模态：合成事件按「组件树」冒泡，
+      // 对话框里的 Esc 也会先经过这个守卫。有模态时必须退让，否则这里的
+      // preventDefault 会让 useModalDismiss 因 event.defaultPrevented 跳过，确认框关不掉
+      // （verify-browser F5 实测回归）。
+      onKeyDown={(event) => { if (event.key === "Escape" && !isModalOpen()) event.preventDefault(); }}
     >
       <div className="scheduled-shell">
         {effectiveMode.kind === "list" && (
@@ -239,7 +245,10 @@ export function ScheduledView({ projectRoots, defaultCwd, onBrowseFolder, onOpen
         )}
       </div>
 
-      {confirmDelete && (
+      {confirmDelete && typeof document !== "undefined" && createPortal(
+        // 门户到 body：`.scheduled-view` 自身是 absolute + --z-sticky 的层叠上下文，
+        // 确认框留在里面时任何 z-index 都封顶在 30，顶栏（--z-chrome）仍可点；
+        // 打开后以 body 为层叠根，backdrop 的 z-index 才按 --z-modal 生效。
         <DeleteDialog
           task={confirmDelete}
           onCancel={() => setConfirmDelete(null)}
@@ -249,7 +258,8 @@ export function ScheduledView({ projectRoots, defaultCwd, onBrowseFolder, onOpen
             await act("delete", () => scheduledApi.remove(task.id));
             setMode({ kind: "list" });
           }}
-        />
+        />,
+        document.body,
       )}
     </section>
   );

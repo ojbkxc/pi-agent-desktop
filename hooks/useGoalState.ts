@@ -11,7 +11,9 @@ import type { GoalState } from "@/lib/goal/goal-types";
  * - 页面不可见（`document.visibilityState !== "visible"`）时暂停，切回前台立即补拉；
  * - `sessionId` 为 null 时**零请求**；
  * - 该会话没有目标（`{ goal: null }`）时停止轮询、快照置空；由 `refreshKey`（会话消息数）
- *   触发下一次拉取，使随后新建的目标及时出现。
+ *   触发下一次拉取，使随后新建的目标及时出现；
+ * - 快照清空**只发生在 `sessionId` 变化时**：`refreshKey` 只补拉、保留旧快照直到新响应
+ *   落地，否则每发/收一条消息 `/goal` 条都会整体卸载再挂回（头部跳动）。
  *
  * 不 import 任何含 node:fs 的模块：只依赖纯类型。
  */
@@ -34,10 +36,15 @@ export function useGoalState(sessionId: string | null, refreshKey: number = 0): 
   // 轮询外触发的一次性补拉计数（refresh）。
   const [tick, setTick] = useState(0);
 
+  // 换会话：清掉上一条目标的快照，避免把 A 会话的目标串到 B。
+  // 只依赖 sessionId：refreshKey 是消息计数，若也在这里清空，/goal 条会每发/收一条
+  // 消息就整体卸载再挂回（头部跳动）。refreshKey 只触发下面的补拉，旧快照保留到新响应落地。
   useEffect(() => {
-    // 换会话：先清掉上一条目标，避免把 A 会话的目标串到 B。
     setGoal(null);
     setError(null);
+  }, [sessionId]);
+
+  useEffect(() => {
     if (!sessionId) return;
 
     let stopped = false;

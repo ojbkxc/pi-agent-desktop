@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties, type Ref } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { useModalDismiss } from "@/hooks/useModalDismiss";
 import type { TranslationParams } from "@/lib/i18n/types";
 import {
   derivePlanReview,
@@ -139,6 +140,7 @@ const S: Record<string, CSSProperties> = {
   prompt: { fontFamily: "var(--font-mono)", fontSize: "var(--fs-micro)", color: "var(--text-dim)", whiteSpace: "pre-wrap", margin: "4px 0 0" },
   task: { padding: "6px 0", borderTop: "1px solid var(--border)", fontSize: "var(--fs-caption)", color: "var(--text)" },
   alert: { color: "var(--danger)", fontSize: "var(--fs-caption)", margin: "6px 0" },
+  confirmRow: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "6px 0", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--danger)", background: "var(--bg-panel)" },
   footer: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 },
   ghost: { border: "1px solid var(--border)", background: "transparent", color: "var(--text)", borderRadius: 7, padding: "5px 11px", fontSize: "var(--fs-caption)", cursor: "pointer" },
   stop: { border: "1px solid var(--danger)", background: "transparent", color: "var(--danger)", borderRadius: 7, padding: "5px 12px", fontSize: "var(--fs-caption)", fontWeight: "var(--fw-semibold)", cursor: "pointer" },
@@ -181,6 +183,18 @@ export function planModalView(
     /** 可编辑区有未保存改动（批准必须被拦住）。 */
     dirty?: boolean;
     onDirtyChange?: (dirty: boolean) => void;
+    /** 关闭确认进行中（dirty 时点关闭进入此态，面板内出现二次确认行）。 */
+    discardPrompt?: boolean;
+    /** 二次确认：放弃未保存改动并关闭。 */
+    onDiscard?: () => void;
+    /** 二次确认里点「取消」：留在卡片里继续编辑。 */
+    onCancelDiscard?: () => void;
+    /** dirty 时点关闭/遮罩/Esc/Close 走这里（必须走 requestClose，不能直接 onClose）。 */
+    onRequestClose?: () => void;
+    /** 关闭按钮是否禁用（busy 时禁用，dirty 时仍可点以进入二次确认）。 */
+    closeDisabled?: boolean;
+    /** 模态面板 ref（useModalDismiss 返回；纯视图不传时降级为无焦点管理）。 */
+    panelRef?: Ref<HTMLDivElement>;
     /** 批准失败的原因（投递失败 / 409 等），由 useTeamPlan 记录。 */
     approveError?: string | null;
     /** 点「停止」（停 lead 会话生成）；缺省时停止按钮不出现。 */
@@ -194,12 +208,17 @@ export function planModalView(
     isApproveDisabled(plan) || !isPlanApprovable(plan) || Boolean(options.busy) || Boolean(options.dirty);
   // cc-haha 同款口径：带 parentPlanId 的卡片（加入运行中团队的新增计划）才给停止按钮。
   const canStop = Boolean(plan.parentPlanId) && Boolean(options.onStop);
+  // 三条关闭路径（遮罩 / Close / Esc）统一走 requestClose：dirty 时先进二次确认，
+  // 不再静默卸载 PlanEditor 丢掉模型/负责人草稿（interaction.md P1）。没有可编辑
+  // 区时 requestClose 就是 onClose 的同义词。
+  const requestClose = options.onRequestClose ?? options.onClose;
   const ownerName = (ownerId: string | undefined) =>
     plan.members.find((member) => member.id === ownerId)?.name ?? t("teams.plan.unassigned");
   const editable = options.editor === true && (plan.state === "draft" || plan.state === "review_pending");
   return (
-    <div style={S.overlay} data-testid="team-plan-overlay" onClick={options.onClose}>
+    <div style={S.overlay} data-testid="team-plan-overlay" onClick={requestClose}>
       <div
+        ref={options.panelRef}
         style={S.dialog}
         role="dialog"
         aria-modal="true"
@@ -283,10 +302,25 @@ export function planModalView(
           </>
         )}
 
-        {options.dirty ? (
+        {options.dirty && !options.discardPrompt ? (
           <p style={S.alert} role="alert" data-testid="team-plan-unsaved">
             {t("teams.plan.saveBeforeApprove")}
           </p>
+        ) : null}
+        {/* dirty 时点关闭 → 二次确认行（interaction.md P1：草稿不能被静默丢弃）。
+            Esc / 遮罩 / Close 三条路径都由 requestClose 走进这里，不再直接卸载。 */}
+        {options.discardPrompt ? (
+          <div style={S.confirmRow} data-testid="team-plan-discard-prompt">
+            <p style={{ ...S.alert, margin: 0, flex: 1 }} role="alert">
+              {t("teams.plan.discardUnsaved")}
+            </p>
+            <button type="button" data-testid="team-plan-discard-cancel" style={S.ghost} onClick={options.onCancelDiscard}>
+              {t("i18n.cancel")}
+            </button>
+            <button type="button" data-testid="team-plan-discard-confirm" style={S.stop} onClick={options.onDiscard}>
+              {t("teams.plan.discardAndClose")}
+            </button>
+          </div>
         ) : null}
         {options.approveError ? (
           <p style={S.alert} role="alert" data-testid="team-plan-approve-error">
@@ -295,7 +329,7 @@ export function planModalView(
         ) : null}
 
         <div style={S.footer}>
-          <button type="button" data-testid="team-plan-close" style={S.ghost} onClick={options.onClose} disabled={options.busy}>
+          <button type="button" data-testid="team-plan-close" style={S.ghost} onClick={requestClose} disabled={options.closeDisabled ?? options.busy}>
             {t("teams.plan.close")}
           </button>
           <button
@@ -342,29 +376,50 @@ export function AgentTeamPlanCard({
   const [open, setOpen] = useState(false);
   // 可编辑区有未保存改动时，批准必须被拦住（否则按旧模型启动团队）。
   const [dirty, setDirty] = useState(false);
+  // dirty 时点关闭 → 停在卡片里问「放弃未保存的修改？」（interaction.md P1）。
+  // 三条关闭路径（Esc / 遮罩 / Close）都先到这里，确认后才真关。
+  const [discardPrompt, setDiscardPrompt] = useState(false);
   // 正在执行停止的 planId（按钮禁用 + 「正在停止…」）；对齐 cc-haha：不主动清，
   // 停止生效后计划流转（取消/中断/批准）自然让卡片退场。
   const [stoppingPlanId, setStoppingPlanId] = useState<string | null>(null);
 
   // 审批通过（state 变 launching）后卡片本就隐藏；这里顺手把 Modal 关掉，避免退场残留。
   useEffect(() => {
-    if (!isPlanCardVisible(plan)) setOpen(false);
+    if (!isPlanCardVisible(plan)) { setOpen(false); setDiscardPrompt(false); }
   }, [plan]);
 
   // 关掉弹框后「有未保存改动」不再成立（草稿随 PlanEditor 卸载而消失）。计划本身变化时
   // **不**在这里清 —— 有未保存改动时 PlanEditor 会保留草稿，由它自己上报真实的 dirty。
   useEffect(() => {
-    if (!open) setDirty(false);
+    if (!open) {
+      setDirty(false);
+      setDiscardPrompt(false);
+    }
   }, [open]);
 
-  useEffect(() => {
-    if (!open || typeof document === "undefined") return;
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open]);
+  // 关闭的唯一入口：busy 时按住不放（批准/停止在途）；二次确认已展开时先撤掉它
+  // （Esc / 再点遮罩 = 取消这次关闭，不是放弃草稿）；dirty 时先进二次确认。
+  const requestClose = (): void => {
+    if (busy) return;
+    if (discardPrompt) {
+      setDiscardPrompt(false);
+      return;
+    }
+    if (dirty) setDiscardPrompt(true);
+    else setOpen(false);
+  };
+  const discardAndClose = (): void => {
+    setDiscardPrompt(false);
+    setDirty(false);
+    setOpen(false);
+  };
+
+  // 共享模态 hook：Esc 在 capture 段收口（preventDefault + stopPropagation，
+  // 不会再冒泡到全局 Esc 停掉正在运行的 agent、也不会冒泡到 Settings 的
+  // listenForPanelEscape），Tab 圈禁在面板内，打开时焦点进面板、关闭归还
+  // 「审阅」按钮（a11y.md P1）。Esc 与遮罩/Close 走同一条 requestClose。
+  // `enabled` 只取决于 open：dirty 切换不能重挂模态（否则模态栈被反复压入）。
+  const panelRef = useModalDismiss<HTMLDivElement>(requestClose, open);
 
   if (!isPlanCardVisible(plan) || !plan) return null;
 
@@ -404,6 +459,11 @@ export function AgentTeamPlanCard({
             busy,
             onApprove,
             onClose: () => setOpen(false),
+            onRequestClose: requestClose,
+            onDiscard: discardAndClose,
+            onCancelDiscard: () => setDiscardPrompt(false),
+            discardPrompt,
+            panelRef,
             editor: true,
             cwd,
             saving,

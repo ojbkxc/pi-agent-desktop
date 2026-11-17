@@ -64,6 +64,18 @@ export function AutofixView({ defaultCwd, onOpenSession }: Props) {
     }
   }
 
+  // 列表加载失败后的手动重试：refreshAutofixTasks 把错误写进共享 store（自身不抛出），
+  // 所以这里只负责短暂的 busy 反馈，不必等共享 SSE 的下一次刷新。
+  async function reload() {
+    setBusy("reload");
+    setActionError(null);
+    try {
+      await refreshAutofixTasks();
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function start() {
     setActionError(null);
     if (!taskText.trim()) {
@@ -215,11 +227,25 @@ export function AutofixView({ defaultCwd, onOpenSession }: Props) {
         </div>
 
         {actionError && <p className="scheduled-error" role="alert">{actionError}</p>}
-        {error && <p className="scheduled-error" role="alert">{t("autofix.loadFailed", { error })}</p>}
+        {error && (
+          <p className="scheduled-error" role="alert">
+            {t("autofix.loadFailed", { error })}
+            <button
+              type="button"
+              className="scheduled-button scheduled-button--small"
+              style={{ marginLeft: 8 }}
+              disabled={busy !== null}
+              onClick={() => void reload()}
+            >
+              {t("autofix.retry")}
+            </button>
+          </p>
+        )}
 
         {/* ── 任务列表 ── */}
         {!loaded && <p className="scheduled-inline">{t("autofix.loading")}</p>}
-        {loaded && tasks.length === 0 && (
+        {/* 失败时 store 会保留 tasks=[]，若不加 !error 错误与空态会同屏出现（interaction.md P2）。 */}
+        {loaded && !error && tasks.length === 0 && (
           <div className="scheduled-empty">
             <h3>{t("autofix.emptyTitle")}</h3>
             <p>{t("autofix.emptyBody")}</p>

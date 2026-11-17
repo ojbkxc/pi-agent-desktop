@@ -9,6 +9,8 @@
  * passed in, so tests can hand over a stand-in for `document`.
  */
 
+import { isModalOpen } from "./modal-focus.ts";
+
 type KeyDownListener = (event: KeyboardEvent) => void;
 
 /**
@@ -63,11 +65,15 @@ export function listenForStackedDialogEscape(target: EscapeKeyTarget, onEscape: 
  * menu or a nested modal inside the panel. An Escape that cancels an IME
  * composition in one of the panel's text boxes is left to the input method,
  * unhandled: closing would throw away what was typed, such as an Add draft.
+ * While a `useModalDismiss` modal is open above the panel, the panel yields:
+ * both listen on `document`'s bubble phase, and the panel (mounted first) would
+ * otherwise run first and close Settings while leaving the modal on top.
  * Returns the cleanup.
  */
 export function listenForPanelEscape(target: EscapeKeyTarget, onEscape: () => void): () => void {
   const handleKeyDown: KeyDownListener = (event) => {
     if (event.key !== "Escape" || event.defaultPrevented || cancelsComposition(event)) return;
+    if (isModalOpen()) return;
     event.preventDefault();
     onEscape();
   };

@@ -192,7 +192,7 @@ async function readAllMessages(teamDir: string, memberNames: readonly string[]):
 }
 
 /** 读取一个团队的泳道快照；团队不存在（无 config.json）返回 null。 */
-export async function readTeamWorkbench(teamName: string): Promise<TeamWorkbenchSnapshot | null> {
+export async function readTeamWorkbench(teamName: string, options: { messagesLimit?: number } = {}): Promise<TeamWorkbenchSnapshot | null> {
   const teamDir = teamDirFor(teamName);
   const team = await readJson<TeamFileLike>(join(teamDir, "config.json"));
   if (!team || !Array.isArray(team.members)) return null;
@@ -216,6 +216,7 @@ export async function readTeamWorkbench(teamName: string): Promise<TeamWorkbench
     runtimeTickets,
     receipts,
     generatedAt: new Date().toISOString(),
+    ...(options.messagesLimit === undefined ? {} : { messagesLimit: options.messagesLimit }),
   });
 }
 

@@ -22,6 +22,7 @@ import {
   revealHiddenCharacters,
 } from "@/lib/mcp-server-display";
 import { openStackedDialog } from "@/lib/stacked-dialog";
+import { useModalDismiss } from "@/hooks/useModalDismiss";
 
 /** How long the dialog waits for the listing before it stops holding Trust back. */
 export const MCP_LISTING_TIMEOUT_MS = 10_000;
@@ -205,6 +206,18 @@ export function ProjectTrustDialogView({
     if (!busyRef.current) onCancelRef.current();
   }), []);
 
+  // Tab 圈禁走共享 hook。为什么不自己监听：Settings 打开时它自己的 hook 早已
+  // 在 document 上注册了 Tab 监听，事件按注册顺序先到它；只有本对话框也进模态栈、
+  // 让 Settings 的 `isTopModal()` 为假，Settings 才会让出 Tab（否则焦点被拉回
+  // 背景）。hook 的 Esc 监听在冒泡段，而 openStackedDialog 的 capture 监听已经
+  // stopPropagation，因此不会重复关闭。调用位置必须在 openStackedDialog 的
+  // effect 之后：先由它把初始焦点放到对话框根节点（屏幕阅读器读标题，回车不会
+  // 误触「信任项目」），hook 看到焦点已在容器内就不再抢占；卸载时先由它归还
+  // opener，hook 发现焦点已不在容器内也不会二次抢夺。
+  const modalRef = useModalDismiss<HTMLDivElement>(() => {
+    if (!busyRef.current) onCancelRef.current();
+  });
+
   return (
     <div
       role="presentation"
@@ -214,7 +227,7 @@ export function ProjectTrustDialogView({
       }}
     >
       <div
-        ref={dialogRef}
+        ref={(node) => { dialogRef.current = node; modalRef.current = node; }}
         role="dialog"
         aria-modal="true"
         aria-labelledby="project-trust-title"

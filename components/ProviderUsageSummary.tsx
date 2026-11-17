@@ -137,7 +137,7 @@ function ProviderUsageContent({ providerId, enabled }: { providerId: string; ena
           {report.buckets.map((bucket) => (
             <div key={bucket.id} style={{ display: "contents" }}>
               <span style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bucket.groupLabel ? `${bucket.groupLabel} / ${bucket.label}` : bucket.label}</span>
-              <span style={{ color: "var(--text)", fontFamily: "var(--font-mono)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{formatBucket(bucket, t("providerUsage.available"))}</span>
+              <span style={{ color: "var(--text)", fontFamily: "var(--font-mono)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{formatBucket(bucket, t("providerUsage.available"), locale)}</span>
             </div>
           ))}
           {report.metrics.map((metric) => (
@@ -152,9 +152,9 @@ function ProviderUsageContent({ providerId, enabled }: { providerId: string; ena
   );
 }
 
-function formatBucket(bucket: UsageBucket, availableLabel: string): string {
+function formatBucket(bucket: UsageBucket, availableLabel: string, locale: string): string {
   if (bucket.unit === "percent" && bucket.remaining !== undefined) {
-    const reset = bucket.resetsAt ? ` / ${formatReset(bucket.resetsAt)}` : "";
+    const reset = bucket.resetsAt ? ` / ${formatReset(bucket.resetsAt, locale)}` : "";
     return `${Math.round(bucket.remaining)}%${reset}`;
   }
   if (bucket.unit === "currency") return `${bucket.currency === "CNY" ? "CNY " : "$"}${formatAmount(bucket.remaining ?? bucket.limit)}`;
@@ -171,6 +171,8 @@ function formatAmount(value: number | undefined): string {
   return value === undefined ? "-" : Number.isInteger(value) ? String(value) : value.toFixed(2);
 }
 
-function formatReset(seconds: number): string {
-  return new Date(seconds * 1_000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+// 跟随应用语言，而不是 OS locale：同一张卡片上「更新时间」用 formatUpdatedTime(…, locale)，
+// 复位时间若把 toLocaleString 的第一参数传 undefined 就会按系统语言格式化，出现两种口径（data-tests A-9）。
+function formatReset(seconds: number, locale: string): string {
+  return new Date(seconds * 1_000).toLocaleString(locale, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }

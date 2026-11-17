@@ -60,5 +60,11 @@ test("resume / interrupted 数组读取带可选链与空值兜底", () => {
 
 test("空状态渲染 loading 文案且不抛", () => {
   const html = render();
-  assert.ok(html.includes("settings-keepalive") || html.length > 0, html.slice(0, 200));
+  // 原来这里是 `html.includes("settings-keepalive") || html.length > 0`：
+  // 第二个析取项让任何非空渲染都通过，测试名里的「loading 文案」从未被断言。
+  // 组件没有 props，服务端渲染阶段 status 恒为 null，因此 loading 分支是唯一
+  // 可达状态——直接钉住这条文案（zh-CN）与承载它的 status 行。
+  assert.ok(html.length > 0);
+  assert.ok(html.includes("读取中…"), html.slice(0, 400));
+  assert.match(html, /class="settings-option-hint" role="status">读取中…</);
 });

@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { useModalDismiss } from "@/hooks/useModalDismiss";
 import { useNativeAppMenu } from "@/hooks/useNativeAppMenu";
 import { selectProjectDirectoryNative } from "./ProjectPicker";
 import { SessionSidebar } from "./SessionSidebar";
@@ -144,6 +145,16 @@ const FILE_TREE_AUTO_COLLAPSE_WIDTH = FILE_TREE_MIN_WIDTH + 320;
 
 function parkedNewSessionDraftKey(cwd: string): string {
   return `parked-new:${cwd}`;
+}
+
+// 顶栏下拉面板与 More 菜单的 Esc。它们监听在 document 冒泡段，而全局快捷键
+// （hooks/useKeyboardShortcuts.ts）挂在 window 上、以 defaultPrevented 判定
+// 「是否已被更近的层处理」——document 先到。只关面板不 preventDefault 时，事件
+// 继续到 window，globalAbortHandler() 会把正在流式输出的回答一并 abort 掉。
+function closeTopLayerOnEscape(event: KeyboardEvent, close: () => void): void {
+  if (event.key !== "Escape" || isImeComposing(event)) return;
+  event.preventDefault();
+  close();
 }
 
 export function AppShell() {
@@ -313,7 +324,13 @@ export function AppShell() {
   const [topMoreAnchor, setTopMoreAnchor] = useState<MenuAnchor | null>(null);
   useMenuNavigation(topMoreOpen && Boolean(topMorePos), topMoreMenuRef, () => setTopMoreOpen(false));
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
-  const shortcutHelpDialogRef = useRef<HTMLDivElement | null>(null);
+  // 快捷键帮助是模态：Esc（preventDefault + stopPropagation，不停 running agent）、
+  // Tab/Shift+Tab 只在首/尾边界回绕、初始焦点进面板、关闭归还打开它的元素，
+  // 全部交给共享 hook。这里不放 enabled=true —— 未打开时不能占模态栈。
+  const shortcutHelpDialogRef = useModalDismiss<HTMLDivElement>(
+    () => setShortcutHelpOpen(false),
+    shortcutHelpOpen,
+  );
   const [projectTrust, setProjectTrust] = useState<ProjectTrustStatus | null>(null);
   const [projectTrustDialogOpen, setProjectTrustDialogOpen] = useState(false);
   const [projectTrustBusy, setProjectTrustBusy] = useState(false);
@@ -476,8 +493,11 @@ export function AppShell() {
   useEffect(() => {
     setMobileSidebarReady(true);
   }, []);
+  // 右侧面板的开/关都会改变侧栏与文件树的上限（getSidebarMaxWidth 计入已打开的
+  // 右面板宽度），所以两个方向都要重钳：关闭时不重钳，被压窄的侧栏会一直停在
+  // 窄宽度（state.md P1「关闭面板不回弹」）。重钳语义由 useResizablePanel 保证
+  // ——只按当前上限重新计算显示宽度，不会把瞬态值写进 localStorage。
   useEffect(() => {
-    if (!rightPanelOpen) return;
     reclampSidebarWidth();
     reclampRightPanelWidth();
     reclampFileTreeWidth();
@@ -683,7 +703,7 @@ export function AppShell() {
       if (!inside) setTopMoreOpen(false);
     };
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !isImeComposing(event)) setTopMoreOpen(false);
+      closeTopLayerOnEscape(event, () => setTopMoreOpen(false));
     };
 
     document.addEventListener("mousedown", handlePointerDown);
@@ -711,7 +731,7 @@ export function AppShell() {
       if (!inside) setActiveTopPanel(null);
     };
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !isImeComposing(event)) setActiveTopPanel(null);
+      closeTopLayerOnEscape(event, () => setActiveTopPanel(null));
     };
 
     document.addEventListener("mousedown", handlePointerDown);
@@ -1338,35 +1358,9 @@ export function AppShell() {
     onFocusComposer: settingsSection || shortcutHelpOpen ? undefined : () => chatInputRef.current?.focus(),
   });
 
-  useEffect(() => {
-    if (!shortcutHelpOpen) return;
-    const dialog = shortcutHelpDialogRef.current;
-    const opener = document.activeElement;
-    dialog?.focus({ preventScroll: true });
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !event.defaultPrevented) {
-        event.preventDefault();
-        setShortcutHelpOpen(false);
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const focusable = dialog?.querySelectorAll<HTMLElement>(`
-        button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])
-      `);
-      if (!focusable?.length) return;
-      event.preventDefault();
-      const next = event.shiftKey ? focusable[focusable.length - 1] : focusable[0];
-      next.focus({ preventScroll: true });
-    };
-    document.addEventListener("keydown", handleKeyDown, true);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown, true);
-      const focusable = opener as (Element & Partial<HTMLElement>) | null;
-      if (focusable?.isConnected && typeof focusable.focus === "function") {
-        focusable.focus({ preventScroll: true });
-      }
-    };
-  }, [shortcutHelpOpen]);
+  // 快捷键帮助的 Esc / Tab 圈禁 / 焦点进出全部交给 useModalDismiss（见上方
+  // shortcutHelpDialogRef）。原自带的「任何 Tab 都跳到首/尾」capture 监听已删：
+  // 那会让对话框里出现第二个可聚焦元素后无法用 Tab 移动。
 
   // d5-7：当前选中会话 id 的渲染期镜像——await 期间用户切换后，回调里能读到最新值。
   const selectedSessionIdRef = useRef<string | null>(null);

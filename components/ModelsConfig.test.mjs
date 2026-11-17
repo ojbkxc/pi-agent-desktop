@@ -372,4 +372,27 @@ test("the add-provider picker is portaled to the body and sized against the view
   // dialog's --z-modal, below --z-toast); the 1100 fallback keeps the picker
   // on that tier even if the token is not defined yet.
   assert.match(picker, /zIndex: "var\(--z-modal-nested, 1100\)"/);
+  // a11y P1: Escape used to be bound to the dialog element's onKeyDown, so it
+  // stopped working as soon as Tab left the dialog. The shared hook takes it on
+  // document, traps Tab and returns focus to the opener.
+  assert.match(picker, /const panelRef = useModalDismiss<HTMLDivElement>\(onClose\);/);
+  assert.match(picker, /ref=\{panelRef\}/);
+  assert.doesNotMatch(picker, /onKeyDown=\{\(e\) => \{\n\s*if \(e\.key !== "Escape"\)/);
+});
+
+// interaction.md P2：OAuth「断开连接」没有进行中状态、不检查 res.ok（双击两个
+// POST、失败也显示已断开）；API Key 输入框 Enter 绕过 saving（连按两次两个 POST）。
+test("disconnect and API-key submit are not re-entrant and report failures", () => {
+  const logoutStart = source.indexOf("const handleLogout = useCallback(");
+  assert.ok(logoutStart > 0);
+  const logout = source.slice(logoutStart, source.indexOf("const submitCode", logoutStart));
+  assert.match(logout, /if \(logoutBusy\) return;/);
+  assert.match(logout, /setLogoutBusy\(true\)/);
+  assert.match(logout, /if \(!res\.ok\) \{/);
+  assert.match(logout, /setLoginState\(\{ phase: "error", message: data\.error \?\? `Server error \$\{res\.status\}` \}\);/);
+  assert.match(logout, /finally \{\n\s*setLogoutBusy\(false\);/);
+  assert.match(source, /onClick=\{handleLogout\}\n\s*disabled=\{logoutBusy\}/);
+  // Enter must respect the same guard as the Save button.
+  assert.match(source, /if \(!apiKey\.trim\(\) \|\| saving\) return;/);
+  assert.match(source, /if \(e\.key === "Enter" && apiKey\.trim\(\) && !saving && !savedOk\) handleSave\(\);/);
 });

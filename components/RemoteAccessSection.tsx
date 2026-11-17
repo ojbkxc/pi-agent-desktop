@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
-import { copyText } from "@/lib/clipboard";
+import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import { isTauriDesktop } from "@/lib/desktop-updater";
 import {
   disablePushOnThisDevice,
@@ -29,7 +29,8 @@ function currentPort(): string {
 
 function CopyRow({ label, value }: { label: string; value: string }) {
   const { t } = useI18n();
-  const [copied, setCopied] = useState(false);
+  // 共享反馈：失败有提示、连点不互踩、卸载清理定时器。
+  const { copied, failed, copy } = useCopyFeedback();
   return (
     <div className="remote-access-step">
       <span className="settings-option-hint">{label}</span>
@@ -37,14 +38,9 @@ function CopyRow({ label, value }: { label: string; value: string }) {
         <code>{value}</code>
         <ConfigButton
           variant="ghost"
-          onClick={() => {
-            void copyText(value).then(() => {
-              setCopied(true);
-              window.setTimeout(() => setCopied(false), 1500);
-            });
-          }}
+          onClick={() => { void copy(value); }}
         >
-          {copied ? t("remoteAccess.copied") : t("remoteAccess.copy")}
+          {failed ? t("i18n.copyFailed") : copied ? t("remoteAccess.copied") : t("remoteAccess.copy")}
         </ConfigButton>
       </div>
     </div>

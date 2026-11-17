@@ -58,6 +58,8 @@ test("dialogs sit on the dialog layer, anchor menus sit below it", () => {
   // 真模态：必须在 --z-modal（设置对话框同层）。曾经各自用 literal 750 / --z-chrome。
   assert.equal(zIndexOf(".shortcut-help-backdrop"), "var(--z-modal)");
   assert.equal(zIndexOf(".project-picker-modal-overlay"), "var(--z-modal)");
+  // Scheduled 页的删除确认：曾用 literal 400（只决定 .scheduled-view 页内次序）。
+  assert.equal(zIndexOf(".scheduled-dialog-backdrop"), "var(--z-modal)");
   // 锚定菜单：不能盖住已打开的设置对话框（曾用 --z-modal，浮在设置之上）。
   assert.equal(zIndexOf(".sidebar-project-context-menu"), "var(--z-popover)");
   assert.equal(zIndexOf(".project-view-menu"), "var(--z-popover)");

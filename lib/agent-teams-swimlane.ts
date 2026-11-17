@@ -169,6 +169,11 @@ export interface SwimlaneInput {
   receipts?: ReceiptLike[];
   /** 快照生成时间（ISO）；缺省由调用方传入，保持纯函数确定性。 */
   generatedAt?: string;
+  /**
+   * messages 保留条数上限（尾部，最新的一段）。缺省不截断。
+   * 数据/测试审计 A-3：团队跑久了 history.jsonl 线性增长，3 秒轮询会把它整个下发。
+   */
+  messagesLimit?: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -361,8 +366,11 @@ export interface TeamWorkbenchSnapshot {
   /**
    * 邮箱消息的通信流投影（新增字段，按 timestamp 升序，保持投影输入顺序）。
    * 供 components/AgentTeams/AgentTeamsCommunicationFeed 消费；不影响既有字段语义。
+   * 超过 `messagesLimit` 时只保留**最新**的 N 条（尾部）。
    */
   messages: WorkbenchMessage[];
+  /** messages 是否因超过上限被截断（截断后 messages 只剩最新的一段）。 */
+  messagesTruncated: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -555,6 +563,7 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
     runtimeTickets = [],
     receipts = [],
     generatedAt = "",
+    messagesLimit,
   } = input;
 
   const members = buildRoster(team, plan, lifecycle);
@@ -814,7 +823,12 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
   // ── messages[]：邮箱消息的通信流投影（新增）─────────────────────────────────
   // 保留 id（回执对齐）、kind、recipients 与结构化 protocolType/taskId——flows[] 缺的四样。
   // 排序沿用输入顺序（store 已按 timestamp 升序稳定排序），组件再反转成最新在上。
-  const projectedMessages: WorkbenchMessage[] = messages.map((message) => {
+  // 超过 messagesLimit 时只投影**最新**的 N 条（尾部），并置 messagesTruncated（A-3）。
+  const boundedMessages = messagesLimit !== undefined && messagesLimit >= 0 && messages.length > messagesLimit
+    ? messages.slice(messages.length - messagesLimit)
+    : messages;
+  const messagesTruncated = boundedMessages !== messages;
+  const projectedMessages: WorkbenchMessage[] = boundedMessages.map((message) => {
     const text = message.text ?? "";
     const to = message.to ?? "";
     const meta = parseProtocolMeta(text);
@@ -898,6 +912,7 @@ function deriveTeamStatus(
     tasks: compatTasks,
     receipts: receiptItems,
     messages: projectedMessages,
+    messagesTruncated,
   };
 }
 

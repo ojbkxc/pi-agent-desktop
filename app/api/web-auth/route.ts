@@ -6,6 +6,7 @@ import {
   retryAfterSeconds,
 } from "@/lib/auth-throttle";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { parseJsonWithinLimit, RequestBodyTooLargeError } from "@/lib/bounded-form-data";
 import {
   createWebSessionToken,
   isValidBasicAuthorization,
@@ -18,6 +19,10 @@ import {
 import { clearSessionCookie, setSessionCookie } from "./session-cookie";
 
 export const dynamic = "force-dynamic";
+
+// 登录接口在认证之前就读请求体，必须设硬上限：隧道暴露后，任何访问者可用 chunked
+// 大包在认证前打满进程内存（数据/测试审计 A-2）。密码本身 ≤1024 字符，16 KB 足够。
+const MAX_LOGIN_BODY_BYTES = 16 * 1024;
 
 function tooManyAttempts(retryAfterMs: number): NextResponse {
   return NextResponse.json(
@@ -65,7 +70,15 @@ export async function POST(request: NextRequest) {
     return tooManyAttempts(retryAfterMs);
   }
 
-  const body = await request.json().catch(() => null) as { password?: unknown } | null;
+  let body: { password?: unknown } | null;
+  try {
+    body = await parseJsonWithinLimit(request, MAX_LOGIN_BODY_BYTES) as { password?: unknown } | null;
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return NextResponse.json({ error: "Request body too large" }, { status: 413 });
+    }
+    body = null;
+  }
   if (!body || typeof body.password !== "string" || !isValidWebPassword(body.password)) {
     const delayMs = recordAuthFailure();
     console.warn(`[web-auth] Password authentication failed; next attempt blocked for ${delayMs}ms`);

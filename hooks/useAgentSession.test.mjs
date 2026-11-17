@@ -894,8 +894,14 @@ test("the model list is requested after the session's opening read, with a bound
   );
   // The load effect must come first: both run in the same commit, in declaration order.
   assert.ok(openSource.includes("sessionOpenLoadRef.current = openLoad;"));
-  assert.ok(openSource.indexOf("sessionOpenLoadRef.current = null;") < openSource.indexOf("if (session) {"));
+  // 跨行匹配而不是 indexOf 比较：被守护的赋值若被删除，indexOf 返回 -1，
+  // `-1 < 任意正数` 恒真（B-1，P0 恒真断言）。
+  assert.match(openSource, /sessionOpenLoadRef\.current = null;\s*\n\s*if \(session\) \{/);
   assert.match(modelsSource, /const openLoad = sessionOpenLoadRef\.current;/);
   assert.match(modelsSource, /Promise\.race\(\[openLoad\.catch\(\(\) => \{\}\), delay\(MODELS_AFTER_SESSION_MAX_WAIT_MS\)\]\)/);
-  assert.ok(modelsSource.indexOf("Promise.race") < modelsSource.indexOf("await loadModels(controller.signal)"));
+  // 顺序断言同样先显式确认两侧都存在，避免同一恒真陷阱。
+  const raceAt = modelsSource.indexOf("Promise.race");
+  const loadAt = modelsSource.indexOf("await loadModels(controller.signal)");
+  assert.ok(raceAt !== -1 && loadAt !== -1, "both anchors must exist");
+  assert.ok(raceAt < loadAt, "the bounded wait must precede the model load");
 });

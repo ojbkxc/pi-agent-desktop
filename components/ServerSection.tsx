@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
-import { copyText } from "@/lib/clipboard";
+import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import { openExternal } from "@/lib/desktop-native";
 import { formatRelativeTime } from "@/lib/i18n/format";
 import { AppSelect } from "./AppSelect";
+import { ChatConfirmDialog } from "./ChatConfirmDialog";
 import { ConfigButton, ConfigSwitch } from "./SettingsUi";
 
 /** 服务端诊断事件（lib/public-access/diagnostics.ts 的契约；字段都可选地缺席）。 */
@@ -204,7 +206,8 @@ export function ServerSection() {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  // 复制反馈：失败也要有提示，连点时前一个复位定时器不能提前清掉后一个提示。
+  const { copied, failed: copyFailed, copy } = useCopyFeedback();
   // 「下载 cloudflared」自己的状态：它是一次可能长达十几分钟的子进程下载，**不能**借用
   // 全局 busy —— 那会把端口/模式/Token/Save 一起锁死，用户会以为整个设置页坏了（打包版
   // 实际就是这个观感）。失败文案走本地化固定文案，原始 stderr 只进 title。
@@ -475,8 +478,8 @@ export function ServerSection() {
     }
   }, [t]);
 
-  // 撤销一台已配对手机：下一次请求就验不过。
-  const revokePhone = useCallback(async (id: string) => {
+  // 撤销一台已配对手机：下一次请求就验不过。失败时把错误留在面板上，调用方据此保持确认框。
+  const revokePhone = useCallback(async (id: string): Promise<boolean> => {
     setPairingBusy(true);
     setPairingError(null);
     try {
@@ -485,8 +488,10 @@ export function ServerSection() {
         setPairingError(response.status === 403 ? t("publicAccess.localOnly") : t("publicAccess.device.revokeFailed"));
       }
       setDevicesKick((kick) => kick + 1);
+      return response.ok;
     } catch {
       setPairingError(t("publicAccess.device.revokeFailed"));
+      return false;
     } finally {
       setPairingBusy(false);
     }
@@ -541,7 +546,14 @@ export function ServerSection() {
     }
   }, [loadWebAuth, passwordErrorText, pwCurrent, pwNext, pwRepeat, t, webAuth?.source]);
 
-  const clearPassword = useCallback(async () => {
+  // Both destructive actions below are irreversible for the user (the password is
+  // removed from the server, a paired phone loses its device token), and the DELETE
+  // routes only check `isLocalRequest` — no password re-entry. Confirm first, the
+  // same way conversation deletion does.
+  const [clearPasswordOpen, setClearPasswordOpen] = useState(false);
+  const [revokeTarget, setRevokeTarget] = useState<{ id: string; name: string } | null>(null);
+
+  const clearPassword = useCallback(async (): Promise<boolean> => {
     setPwBusy(true);
     setPwError(null);
     setPwNote(null);
@@ -550,12 +562,14 @@ export function ServerSection() {
       const body = await response.json().catch(() => ({})) as Record<string, unknown>;
       if (!response.ok) {
         setPwError(passwordErrorText(response.status, body));
-        return;
+        return false;
       }
       setPwNote(t("webPassword.cleared"));
       await loadWebAuth();
+      return true;
     } catch {
       setPwError(t("webPassword.error.failed"));
+      return false;
     } finally {
       setPwBusy(false);
     }
@@ -713,7 +727,7 @@ export function ServerSection() {
               className="settings-option-action"
               variant="ghost"
               disabled={pwBusy}
-              onClick={() => void clearPassword()}
+              onClick={() => setClearPasswordOpen(true)}
             >
               {t("webPassword.clearPassword")}
             </ConfigButton>
@@ -779,14 +793,9 @@ export function ServerSection() {
               <ConfigButton
                 className="settings-option-action"
                 variant="ghost"
-                onClick={() => {
-                  void copyText(view.publicUrl!).then(() => {
-                    setCopied(true);
-                    window.setTimeout(() => setCopied(false), 1500);
-                  });
-                }}
+                onClick={() => { void copy(view.publicUrl!); }}
               >
-                {copied ? t("publicAccess.copied") : t("publicAccess.copy")}
+                {copyFailed ? t("i18n.copyFailed") : copied ? t("publicAccess.copied") : t("publicAccess.copy")}
               </ConfigButton>
               <ConfigButton
                 className="settings-option-action"
@@ -1008,7 +1017,7 @@ export function ServerSection() {
                           className="settings-option-action"
                           variant="ghost"
                           disabled={pairingBusy}
-                          onClick={() => void revokePhone(device.id)}
+                          onClick={() => setRevokeTarget({ id: device.id, name: device.name })}
                         >
                           {t("publicAccess.device.revoke")}
                         </ConfigButton>
@@ -1089,6 +1098,39 @@ export function ServerSection() {
           </span>
         )}
       </div>
+      {/* Portaled to <body>: the Settings surface keeps a transform from its entry
+          animation, which would make a fixed confirm layer relative to (and clipped
+          by) the dialog instead of the viewport. ChatConfirmDialog supplies the
+          stacked escape (one Esc closes only this layer) and the Tab trap. */}
+      {clearPasswordOpen && createPortal(
+        <ChatConfirmDialog
+          title={t("webPassword.clearConfirmTitle")}
+          body={t("webPassword.clearConfirmBody")}
+          confirmLabel={t("webPassword.clearPassword")}
+          cancelLabel={t("i18n.cancel")}
+          danger
+          busy={pwBusy}
+          error={pwError}
+          onCancel={() => { if (!pwBusy) { setClearPasswordOpen(false); setPwError(null); } }}
+          onConfirm={() => { void clearPassword().then((ok) => { if (ok) setClearPasswordOpen(false); }); }}
+        />,
+        document.body,
+      )}
+      {revokeTarget && createPortal(
+        <ChatConfirmDialog
+          title={t("publicAccess.device.revokeConfirmTitle")}
+          subject={revokeTarget.name}
+          body={t("publicAccess.device.revokeConfirmBody")}
+          confirmLabel={t("publicAccess.device.revoke")}
+          cancelLabel={t("i18n.cancel")}
+          danger
+          busy={pairingBusy}
+          error={pairingError}
+          onCancel={() => { if (!pairingBusy) { setRevokeTarget(null); setPairingError(null); } }}
+          onConfirm={() => { void revokePhone(revokeTarget.id).then((ok) => { if (ok) setRevokeTarget(null); }); }}
+        />,
+        document.body,
+      )}
     </section>
   );
 }

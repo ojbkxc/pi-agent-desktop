@@ -1126,6 +1126,9 @@ function TextFileViewer({
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 增量读（「加载更多」）或后台重载失败：保留已加载内容，只在底部内联报错 + 重试。
+  // 与首读失败分开，避免一次网络抖动把整页内容清空（interaction.md P1）。
+  const [loadMoreError, setLoadMoreError] = useState<{ error: string; offset: number } | null>(null);
   // The path default is resolved here, before the first fetch, so a markdown or
   // HTML file renders its preview as the first thing painted. Deciding it after
   // the contents load painted the source view for a frame first.
@@ -1145,6 +1148,9 @@ function TextFileViewer({
   const esRef = useRef<EventSource | null>(null);
   const contentRequestRef = useRef(0);
   const gitDiffRequestRef = useRef(0);
+  // 同步镜像已展示内容：fetchContent 的错误分支据此区分「首读」与「重载/增量」。
+  const dataRef = useRef<FileData | null>(null);
+  useEffect(() => { dataRef.current = data; }, [data]);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const autoDiffAppliedRef = useRef(false);
   const scrollRestorePendingRef = useRef(true);
@@ -1203,15 +1209,19 @@ function TextFileViewer({
 
   const fetchContent = useCallback((filePath: string, offset = 0) => {
     const requestId = ++contentRequestRef.current;
+    // 已有内容（增量读，或后台重载）时，错误只内联提示、保留 data；首读失败才整页报错。
+    const keepsContent = () => offset > 0 || dataRef.current !== null;
     return fetch(getFileApiUrl(filePath, "read", sourceSessionId, { offset: offset || undefined }))
       .then((r) => r.json())
       .then((d: FileData & { error?: string }) => {
         if (requestId !== contentRequestRef.current) return null;
         if (d.error) {
-          setError(d.error);
+          if (keepsContent()) setLoadMoreError({ error: d.error, offset });
+          else setError(d.error);
           return null;
         }
         setError(null);
+        setLoadMoreError(null);
         setData((current) => offset && current
           ? { ...d, content: current.content + d.content }
           : d);
@@ -1219,7 +1229,8 @@ function TextFileViewer({
       })
       .catch((e) => {
         if (requestId !== contentRequestRef.current) return null;
-        setError(String(e));
+        if (keepsContent()) setLoadMoreError({ error: String(e), offset });
+        else setError(String(e));
         return null;
       });
   }, [sourceSessionId]);
@@ -1256,6 +1267,7 @@ function TextFileViewer({
     let active = true;
     setLoading(true);
     setError(null);
+    setLoadMoreError(null);
     setData(null);
     setGitDiff(null);
     setGitDiffResolved(false);
@@ -1519,8 +1531,26 @@ function TextFileViewer({
 
   if (error && !isDeletedDiff) {
     return (
-      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--danger)", fontSize: "var(--fs-body)" }}>
-        {describeFileError(error, t)}
+      <div className="file-viewer-status is-error" role="alert">
+        <span className="file-viewer-status-icon" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 8v5" />
+            <path d="M12 16h.01" />
+          </svg>
+        </span>
+        <span style={{ color: "var(--danger)" }}>{describeFileError(error, t)}</span>
+        <button
+          type="button"
+          className="file-viewer-retry-button"
+          onClick={() => {
+            setLoading(true);
+            setError(null);
+            void fetchContent(filePath).finally(() => setLoading(false));
+          }}
+        >
+          {t("common.retry")}
+        </button>
       </div>
     );
   }
@@ -1665,6 +1695,39 @@ function TextFileViewer({
           {!isDeletedDiff && <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />}
         </div>
       </div>
+
+      {/* 增量读/后台重载失败：保留已加载内容，只在内容区上方内联报错并提供重试。 */}
+      {loadMoreError && (
+        <div
+          role="alert"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 10,
+            padding: "5px 12px",
+            borderBottom: "var(--hairline) solid var(--border)",
+            color: "var(--danger)",
+            fontSize: "var(--fs-micro)",
+            background: "var(--bg)",
+          }}
+        >
+          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{describeFileError(loadMoreError.error, t)}</span>
+          <button
+            type="button"
+            className="file-viewer-retry-button"
+            disabled={loadingMore}
+            onClick={() => {
+              const { offset } = loadMoreError;
+              setLoadingMore(true);
+              setLoadMoreError(null);
+              void fetchContent(filePath, offset).finally(() => setLoadingMore(false));
+            }}
+          >
+            {t("common.retry")}
+          </button>
+        </div>
+      )}
 
       {data?.truncated && (
         <div

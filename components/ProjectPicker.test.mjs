@@ -45,3 +45,15 @@ test("a selected project already inside the cap is not duplicated", () => {
   assert.equal(visible.filter((p) => p === "/work/project-2").length, 1);
   assert.equal(visible.length, 7);
 });
+
+// a11y P2：文件夹 / 下拉箭头 / 加号是纯装饰图标，读屏器不应把它们当图形节点。
+// 方向键菜单语义（role=menu/menuitem + useMenuNavigation）成本较高，本轮未做。
+test("decorative icons leave the accessibility tree", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = (await readFile(new URL("./ProjectPicker.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+  for (const icon of [
+    /<svg width="14" height="14" viewBox="0 0 24 24"[^>]*aria-hidden="true"/,
+    /<svg width="9" height="9" viewBox="0 0 10 10"[^>]*aria-hidden="true"/,
+    /<svg width="12" height="12" viewBox="0 0 10 10"[^>]*aria-hidden="true"/,
+  ]) assert.match(source, icon);
+});

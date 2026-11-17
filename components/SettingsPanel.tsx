@@ -2,7 +2,7 @@
 
 import { AppSelect } from "./AppSelect";
 
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { useDiffViewMode } from "@/hooks/useDiffViewMode";
 import { PRODUCT_NAME } from "@/lib/branding";
@@ -23,6 +23,7 @@ import {
   settingsSectionRequiresProject,
   type SettingsSection,
 } from "@/lib/settings-navigation";
+import { useModalDismiss } from "@/hooks/useModalDismiss";
 import { focusModalPanel, listenForPanelEscape } from "@/lib/stacked-dialog";
 import { applyUiPlatform } from "@/lib/ui-platform";
 import {
@@ -464,6 +465,13 @@ export function SettingsPanel({
 
   useEffect(() => setLastSettingsSection(initialSection), [initialSection]);
 
+  // All three dismiss paths (Escape, backdrop, ×) share the same guard: a signed
+  // desktop update installs and relaunches from this dialog, so none of them may
+  // close it mid-install. The × used to call onClose directly and was the hole.
+  const requestClose = useCallback(() => {
+    if (!busy) onClose();
+  }, [busy, onClose]);
+
   // Per-platform dialog styling (native-theme.css) keys off <html data-platform>; set before paint.
   useLayoutEffect(() => { applyUiPlatform(); }, []);
 
@@ -471,13 +479,17 @@ export function SettingsPanel({
   // which opens above Settings, takes Escape in the capture phase and stops it,
   // so one Escape closes that dialog and leaves Settings open. A busy update
   // keeps the dialog open with it (see onBusyChange above).
-  useEffect(() => listenForPanelEscape(document, () => { if (!busy) onClose(); }), [onClose, busy]);
+  useEffect(() => listenForPanelEscape(document, requestClose), [requestClose]);
 
   // Focus moves into Settings as it opens and back to what had it once it closes. Left
   // on the chat composer (a bare /mcp opens Settings from there), Escape would reach the
   // composer first and stop a running agent, which also kept Settings open. A layout
   // effect, so the opener is read before a section focuses its own search box.
-  const dialogRef = useRef<HTMLDivElement>(null);
+  // The shared hook adds the missing Tab trap (a11y audit P1) and owns Escape while it
+  // is the topmost modal; Radix Select portals are let through on purpose. The panel
+  // keeps listenForPanelEscape as the IME-safe fallback (lib/ime.test.mjs pins it) —
+  // whichever handler runs first marks the key, and the other one sees `defaultPrevented`.
+  const dialogRef = useModalDismiss<HTMLDivElement>(requestClose);
   useLayoutEffect(() => focusModalPanel(document, dialogRef.current, {
     restoreTextEntry: !window.matchMedia?.("(pointer: coarse)").matches,
   }), []);
@@ -512,7 +524,7 @@ export function SettingsPanel({
       aria-modal="true"
       aria-label={t("settings.title")}
       tabIndex={-1}
-      onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}
+      onClick={(event) => { if (event.target === event.currentTarget) requestClose(); }}
       className="settings-dialog-backdrop"
     >
       <div className="settings-dialog-surface">
@@ -545,7 +557,7 @@ export function SettingsPanel({
               );
             })}
           </nav>
-          <button type="button" onClick={onClose} title={t("i18n.close")} aria-label={t("i18n.close")} className="config-close-button settings-dialog-close">×</button>
+          <button type="button" onClick={requestClose} title={t("i18n.close")} aria-label={t("i18n.close")} className="config-close-button settings-dialog-close">×</button>
         </div>
 
         <main className="settings-dialog-main">

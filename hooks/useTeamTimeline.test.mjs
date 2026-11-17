@@ -431,3 +431,58 @@ test("hook wiring keeps the polling, visibility and pinning seams", async () => 
   assert.match(source, /setPinnedFrame\(frameKey\(/);
   assert.doesNotMatch(source, /setHistoryIndex/, "historyIndex must stay a derived value");
 });
+
+// ── state.md P1：判死定时器必须收口，fetch 必须带 signal ─────────────────────
+test("判死定时器在成功路径被 clearTimeout（不留 20s 僵尸），stop() 后也不复燃", async (t) => {
+  // 判死用真实 setTimeout（见 load 注释），所以用 node:test mock 时钟统计真实定时器
+  // 数量：成功拉的每一拍都必须把自己那个 20s 判死收回。若没有 finally clearTimeout，
+  // 这里会看到一个 20000 的残留定时器。
+  const drain = () => new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+
+  const fake = createFakeTimers(); // 轮询节奏队列（注入，不受 mock 时钟影响）
+  let fetches = 0;
+  const poller = createSnapshotPoller({
+    fetchSnapshot: async () => {
+      fetches += 1;
+      return snapshot(at(fetches));
+    },
+    onSnapshot: () => {},
+    onError: () => {},
+    isLive: () => true,
+    isVisible: () => true,
+    timers: fake.timers,
+    intervalMs: LIVE_REFRESH_MS,
+  });
+
+  poller.start();
+  await drain();
+  assert.equal(fetches, 1);
+  // 判死定时器已被 finally 收回：再快进 20s 不该有任何回调触发。
+  const before = fetches;
+  t.mock.timers.tick(SNAPSHOT_TIMEOUT_MS);
+  await drain();
+  assert.equal(fetches, before, "成功拉的判死定时器不得在 20s 后仍触发");
+
+  // 再拉一拍（手动点火轮询队列）后 stop：判死也必须随 finally 收回。
+  fake.fireNext();
+  await drain();
+  assert.equal(fetches, before + 1);
+  poller.stop();
+  t.mock.timers.tick(SNAPSHOT_TIMEOUT_MS);
+  await drain();
+  assert.equal(fetches, before + 1, "stop 后判死定时器不得复燃");
+});
+
+test("快照拉取带 AbortSignal.timeout（超时不仅让 race 落地，还要真正 abort 请求）", async () => {
+  const source = await readFile(new URL("./useTeamTimeline.ts", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /signal: AbortSignal\.timeout\(SNAPSHOT_TIMEOUT_MS\)/,
+    "fetch 必须挂 signal，否则半开连接下挂起请求无界增长",
+  );
+  // 判死句柄必须保存并在 finally 里清。
+  assert.match(source, /let deadline: ReturnType<typeof setTimeout> \| undefined;/);
+  assert.match(source, /deadline = setTimeout\(/);
+  assert.match(source, /if \(deadline !== undefined\) \{\s*\n\s*clearTimeout\(deadline\);/);
+});

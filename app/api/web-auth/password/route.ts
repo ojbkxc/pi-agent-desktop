@@ -7,6 +7,7 @@ import {
 } from "@/lib/auth-throttle";
 import { isLocalRequest } from "@/lib/remote-access";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { parseJsonWithinLimit, RequestBodyTooLargeError } from "@/lib/bounded-form-data";
 import {
   createWebSessionToken,
   webPasswordSource,
@@ -23,6 +24,8 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const MAX_PASSWORD_LENGTH = 1024;
+// 请求体上限：两个密码字段各 ≤1024 字符，16 KB 足够；防止在认证前缓冲超大请求体。
+const MAX_PASSWORD_BODY_BYTES = 16 * 1024;
 const NO_STORE = { "Cache-Control": "no-store" } as const;
 
 function jsonError(body: Record<string, unknown>, status: number, headers: Record<string, string> = {}): NextResponse {
@@ -67,10 +70,18 @@ export async function PUT(request: NextRequest) {
     );
   }
 
-  const body = await request.json().catch(() => null) as {
-    currentPassword?: unknown;
-    newPassword?: unknown;
-  } | null;
+  let body: { currentPassword?: unknown; newPassword?: unknown } | null;
+  try {
+    body = await parseJsonWithinLimit(request, MAX_PASSWORD_BODY_BYTES) as {
+      currentPassword?: unknown;
+      newPassword?: unknown;
+    } | null;
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return jsonError({ error: "Request body too large" }, 413);
+    }
+    body = null;
+  }
   if (!body) {
     return jsonError({ error: "Expected a JSON body" }, 400);
   }

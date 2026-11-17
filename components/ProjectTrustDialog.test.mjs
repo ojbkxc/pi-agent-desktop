@@ -332,7 +332,6 @@ test("the dialog takes focus when it opens and Escape closes it alone, even abov
   const html = view();
   // Focus goes to the dialog itself: a screen reader reads its title, and no stray Enter trusts the folder.
   assert.match(html, /<div role="dialog" aria-modal="true" aria-labelledby="project-trust-title" aria-describedby="project-trust-description" tabindex="-1" class="project-trust-dialog">/);
-  assert.match(source, /ref=\{dialogRef\}/);
   assert.match(settingsCss, /\.project-trust-dialog:focus \{\s*outline: none;\s*\}/);
   // One listener for the dialog's life, in the capture phase (lib/stacked-dialog.ts), which
   // also hands focus back on close. While trusting, Escape is ignored like Cancel and the
@@ -342,6 +341,17 @@ test("the dialog takes focus when it opens and Escape closes it alone, even abov
   assert.match(view_, /useEffect\(\(\) => \{\n\s*busyRef\.current = busy;\n\s*onCancelRef\.current = onCancel;\n\s*\}, \[busy, onCancel\]\);/);
   assert.match(source, /import \{ openStackedDialog \} from "@\/lib\/stacked-dialog";/);
   assert.doesNotMatch(source, /addEventListener\("keydown"/);
+  // Tab 圈禁走共享模态 hook，同时把对话框压入模态栈。Settings 的 hook 在 document
+  // 上的 Tab 监听注册得更早，只有 `isTopModal()` 为假时它才让出；自己监听 Tab 的
+  // 旧做法会被 Settings 先抢走（「Settings › MCP → Trust」正是审计复现场景）。
+  // ref 同时喂给两套基建：openStackedDialog 负责初始焦点（对话框根）与 Esc，
+  // hook 负责 Tab 与模态栈身份。
+  assert.match(source, /import \{ useModalDismiss \} from "@\/hooks\/useModalDismiss";/);
+  assert.match(
+    view_,
+    /const modalRef = useModalDismiss<HTMLDivElement>\(\(\) => \{\n\s*if \(!busyRef\.current\) onCancelRef\.current\(\);\n\s*\}\);/,
+  );
+  assert.match(view_, /ref=\{\(node\) => \{ dialogRef\.current = node; modalRef\.current = node; \}\}/);
 });
 
 test("every string the dialog shows is translated", async () => {
@@ -396,4 +406,14 @@ test("the page keeps a refusal's reason for the dialog and follows the status th
   const trust = appShellSource.slice(appShellSource.indexOf("const handleTrustProject"), appShellSource.indexOf("const activeFileTab ="));
   assert.match(trust, /setProjectTrustError\(\{ error: data\.error \?\? `HTTP \$\{response\.status\}`, \.\.\.\(data\.reason \? \{ reason: data\.reason \} : \{\}\) \}\);/);
   assert.match(appShellSource, /<ProjectTrustDialog[\s\S]*?onStatus=\{setProjectTrust\}[\s\S]*?\/>/);
+});
+
+test("Tab is trapped via the shared modal stack while the stacked capture Escape is kept", () => {
+  // a11y.md P1：openStackedDialog 只做 Esc 分层 + 初始焦点 + 归还，没有 Tab 圈禁，
+  // 「取消/信任项目」之后 Tab 会落进被遮罩的 Settings。保留 capture Esc 方案；
+  // Tab 走 useModalDismiss —— 本对话框进栈后 Settings 的 hook 因非栈顶而让出 Tab。
+  assert.match(source, /openStackedDialog\(document, dialogRef\.current/);
+  assert.match(source, /import \{ useModalDismiss \} from "@\/hooks\/useModalDismiss"/);
+  assert.match(source, /const modalRef = useModalDismiss<HTMLDivElement>\(\(\) => \{/);
+  assert.match(source, /ref=\{\(node\) => \{ dialogRef\.current = node; modalRef\.current = node; \}\}/);
 });

@@ -37,11 +37,16 @@ test("a models.json with a syntax error is reported instead of read as empty, an
 
   let response = await GET();
   assert.equal(response.status, 422);
-  assert.match((await response.json()).error, /models\.json/);
+  // A-8：响应只给稳定 code，绝不回带绝对路径的原始异常文本（隧道暴露会泄露目录结构）。
+  const getBody = await response.json();
+  assert.equal(getBody.code, "models-config-unreadable");
+  assert.doesNotMatch(JSON.stringify(getBody), /models\.json|\/|\\/, "response must not leak a filesystem path");
 
   response = await PUT(put({ providers: {} }));
   assert.equal(response.status, 409);
-  assert.match((await response.json()).error, /models\.json/);
+  const putBody = await response.json();
+  assert.equal(putBody.code, "models-config-unreadable");
+  assert.doesNotMatch(JSON.stringify(putBody), /models\.json|\/|\\/);
   assert.equal(await readFile(modelsPath, "utf8"), original);
 });
 

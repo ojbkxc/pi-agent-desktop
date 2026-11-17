@@ -767,3 +767,22 @@ test("空 toolCallId 不与其它结果配对：不再把别人的时长挂到�
   // 空 id 的卡片也不能被当成「已完成」：没有可配对结果就是 aborted（取消）态。
   assert.match(html, /chat\.toolCancelled|Cancelled|cancelled/i);
 });
+
+// ── state.md P2 / interaction.md P2：复制反馈定时器无主 + 失败无反馈 ────────────
+test("复制反馈：三处复制按钮复用共享 useCopyFeedback，失败有提示", () => {
+  // Timer 句柄/清理语义由 hooks/useCopyFeedback.test.mjs 覆盖；组件侧只断言接线。
+  assert.match(messageViewSource, /import \{ useCopyFeedback \} from "@\/hooks\/useCopyFeedback"/, "复用共享 hook");
+  assert.equal(
+    (messageViewSource.match(/const \{ copied, failed, copy \} = useCopyFeedback\(\);/g) ?? []).length,
+    3,
+    "用户/助手/自定义消息三处都接共享 hook",
+  );
+  assert.equal(
+    (messageViewSource.match(/void copy\(copyTarget\)|void copy\(textContent\)|void copy\(text \|\| detailsText\)/g) ?? []).length,
+    3,
+    "三处 copy 调用都走共享实现",
+  );
+  assert.match(messageViewSource, /failed \? t\("i18n\.copyFailed"\)/, "失败时显示复制失败");
+  assert.doesNotMatch(messageViewSource, /setTimeout\(\(\) => setCopied\(false\), 1500\)/, "裸计时器必须消失");
+  assert.doesNotMatch(messageViewSource, /function useCopyFeedback\(\)/, "不得保留第二套本地实现");
+});

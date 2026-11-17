@@ -350,6 +350,9 @@ export function AgentTeamsView({
       aria-label={t("teams.title")}
       data-source-session-id={sourceSessionId ?? undefined}
       style={{ overflow: "hidden" }}
+      // 根节点挂载时就会拿到焦点（:216）。Esc 在这里不能落到 window 的全局快捷键，
+      // 否则会停掉仍在后台运行的 agent（与 ScheduledView / AutofixView 同一写法）。
+      onKeyDown={(event) => { if (event.key === "Escape") event.preventDefault(); }}
     >
       {/* 左右分栏：左=既有整页工作台（自身滚动），右=成员检查器/通信流/导轨（C7/C11）。 */}
       <div className="agent-teams-workbench-row" style={{ display: "flex", height: "100%", minHeight: 0 }}>

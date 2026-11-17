@@ -5,7 +5,7 @@ import { SyntaxHighlighter } from "@/lib/syntax-highlighting";
 import { calmCodeTheme } from "@/lib/code-theme";
 import { useTheme } from "@/hooks/useTheme";
 import { useI18n } from "@/hooks/useI18n";
-import { copyText } from "@/lib/clipboard";
+import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import { isImeComposing } from "@/lib/ime";
 
 interface MermaidBlockProps {
@@ -414,10 +414,10 @@ interface CodeBlockProps {
  */
 export const CodeBlock = memo(function CodeBlock({ code, lang, headerAction, isStreaming }: CodeBlockProps) {
   const { t } = useI18n();
-  const [copied, setCopied] = useState(false);
-  const [copyFailed, setCopyFailed] = useState(false);
   const [wrap, setWrap] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  // 复制反馈走共享 hook：失败有提示、计时器有主（连点不会提前复位），与 ArtifactView 一致。
+  const { copied, failed: copyFailed, copy: copyFeedback } = useCopyFeedback();
   const lineCount = codeLineCount(code);
   // A block keeps growing while it streams, so it only folds once complete.
   const foldable = !isStreaming && lineCount > CODE_FOLD_LINES;
@@ -425,17 +425,10 @@ export const CodeBlock = memo(function CodeBlock({ code, lang, headerAction, isS
   const showLineNumbers = lineCount >= CODE_LINE_NUMBER_MIN_LINES;
 
   // d5-27：copyText 可 reject（HTTP 明文部署下 clipboard API 不可用、窗口失焦
-  // 等），无 .catch 会变成 unhandled rejection 且按钮零反馈。失败也给出短暂
-  // 状态，与成功同节奏复位。
+  // 等），无 .catch 会变成 unhandled rejection 且按钮零反馈。共享 hook 已同时
+  // 处理成功/失败反馈与复位定时器。
   const copy = () => {
-    copyText(code).then(() => {
-      setCopied(true);
-      setCopyFailed(false);
-      setTimeout(() => setCopied(false), 1500);
-    }, () => {
-      setCopyFailed(true);
-      setTimeout(() => setCopyFailed(false), 1500);
-    });
+    void copyFeedback(code);
   };
 
   return (

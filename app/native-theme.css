@@ -1,6 +1,9 @@
 /* Type scale: whole pixels, 11px floor (CJK strokes merge below it). micro =
    badges and chips, caption = secondary lines, small = controls and dense rows, body = list rows and prose,
    title = dialog and panel headings. Add a tier before adding a size. */
+/* 规则：新增规则禁止再写 `!important`（存量基线由
+   scripts/native-theme-important-baseline.test.mjs 冻结）。上游合并带来的
+   加码不是新增的理由——优先用特异性（显式子选择器、:where() 之外）解决。 */
 :root {
   --fs-micro: 11px;
   --fs-caption: 12px;
@@ -476,7 +479,7 @@
 .sidebar-project-context-menu .sidebar-project-context-menu-confirm-actions .sidebar-project-context-menu-danger {
   border-color: transparent;
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
   font-weight: var(--fw-semibold);
 }
 .sidebar-project-context-menu .sidebar-project-context-menu-confirm-actions .sidebar-project-context-menu-primary {
@@ -497,7 +500,7 @@
 }
 .sidebar-project-context-menu .sidebar-project-context-menu-confirm-actions .sidebar-project-context-menu-danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 86%, var(--bg)) !important;
-  color: #fff !important;
+  color: var(--on-danger) !important;
 }
 .sidebar-project-context-menu-hint.sidebar-project-context-menu-error {
   color: var(--danger);
@@ -873,7 +876,7 @@
   border-radius: 999px;
   background: var(--accent);
   color: var(--bg-panel);
-  font-family: var(--font-sans, inherit);
+  font-family: var(--font-ui);
   font-size: var(--fs-micro);
   font-weight: var(--fw-bold);
   white-space: nowrap;
@@ -1070,6 +1073,10 @@
   --success: #22863a;
   --warning: #a5680d;
   --info: #315bd2;
+  /* 实心 danger / success 按钮上的前景色（WCAG AA：白字对 #d93a35 = 4.56:1、
+     对 #22863a = 4.63:1）。深色主题底色更亮，前景须换成深色字，见 html.dark。 */
+  --on-danger: #ffffff;
+  --on-success: #ffffff;
   --user-bg: rgba(0, 0, 0, 0.045);
   --assistant-bg: transparent;
   --tool-bg: rgba(0, 0, 0, 0.04);
@@ -1149,7 +1156,8 @@ html.dark {
   --surface-elevated: #262626;
   --text: #ececec;
   --text-muted: #a8a8ad;
-  --text-dim: #8a8a8e;
+  /* #8a8a8e 对 --surface-elevated #262626 只有 4.40:1（AA 需 4.5）；提到 #90909a = 4.79:1。 */
+  --text-dim: #90909a;
   --text-meta: #a8a8ad;
   --accent: #ececec;
   --accent-hover: #ffffff;
@@ -1163,6 +1171,10 @@ html.dark {
   --success: #4fd17a;
   --warning: #f0a33a;
   --info: #6b93ff;
+  /* 深色下 danger/success 更亮：白字仅 2.82:1 / 1.96:1，改用深色前景
+     （#161616 对 #ff6961 = 6.42:1、对 #4fd17a = 9.25:1）。 */
+  --on-danger: #161616;
+  --on-success: #161616;
   --user-bg: rgba(255, 255, 255, 0.07);
   --assistant-bg: transparent;
   --tool-bg: rgba(255, 255, 255, 0.06);
@@ -1191,6 +1203,9 @@ html.dark {
   top: 50%;
   z-index: var(--z-sticky);
   width: 42px;
+  /* 高度沿用 base 层（:69 区）的 min(46vh, 280px)，显式写在这里，
+     避免「看不见的继承」——两代定义并存时靠书写顺序静默接管。 */
+  height: min(46vh, 280px);
   transform: translateY(-50%);
   pointer-events: none;
 }
@@ -1656,12 +1671,6 @@ html.dark .conversation-navigator-preview {
 
 
 
-.file-add-menu button:hover:not(:disabled) {
-  background: var(--bg-hover) !important;
-}
-
-
-
 .context-panel-files-toolbar::after {
   position: absolute;
   right: 0;
@@ -1680,13 +1689,6 @@ html.dark .conversation-navigator-preview {
   align-items: center;
   height: var(--control-h-md);
 }
-
-
-.context-panel-file-filter:focus {
-  border-color: color-mix(in srgb, var(--text-muted) 55%, var(--border));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-muted) 10%, transparent);
-}
-
 
 
 .file-viewer-meta {
@@ -4057,36 +4059,9 @@ html.dark {
   }
 }
 
-.native-modal-backdrop {
-  padding: 16px;
-  background: rgba(16, 16, 18, 0.34) !important;
-  -webkit-backdrop-filter: blur(3px) saturate(110%);
-  backdrop-filter: blur(3px) saturate(110%);
-  animation: native-backdrop-in var(--dur-base) var(--ease-native) both;
-}
-
-.native-modal {
-  border: var(--hairline) solid var(--border) !important;
-  border-radius: var(--radius-lg) !important;
-  background: var(--surface-elevated) !important;
-  box-shadow: var(--shadow-dialog) !important;
-  animation: native-modal-in var(--dur-base) var(--ease-sheet) both;
-}
-
-.native-modal-header {
-  min-height: 52px;
-  padding: 14px 18px !important;
-  border-bottom: var(--hairline) solid var(--separator) !important;
-  background: color-mix(in srgb, var(--surface-elevated) 92%, var(--bg));
-}
-
-.native-modal-title {
-  color: var(--text);
-  font-family: var(--font-display);
-  font-size: var(--fs-title) !important;
-  font-weight: var(--fw-semibold) !important;
-  letter-spacing: 0;
-}
+/* `.native-modal` / `.native-modal-backdrop` / `-header` / `-title` 曾是无主死类
+   （全仓无 className 引用），已删除；仅 `.native-modal-close` 仍被
+   UpdateReminder.tsx 使用，保留。 */
 
 .native-modal-close {
   display: inline-flex !important;
@@ -4132,10 +4107,7 @@ html.dark {
 }
 
 .native-input,
-.native-select,
-.settings-modal input:not([type="checkbox"]):not([type="radio"]),
-.settings-modal textarea,
-.settings-modal select {
+.native-select {
   width: 100%;
   min-height: var(--control-height);
   padding: 6px 10px !important;
@@ -4152,41 +4124,24 @@ html.dark {
     box-shadow var(--dur-fast) var(--ease-native);
 }
 
-.settings-modal textarea {
-  min-height: 72px;
-  line-height: 1.5;
-  resize: vertical;
-}
-
 .native-input:hover:not(:disabled),
-.native-select:hover:not(:disabled),
-.settings-modal input:not([type="checkbox"]):not([type="radio"]):hover:not(:disabled),
-.settings-modal textarea:hover:not(:disabled),
-.settings-modal select:hover:not(:disabled) {
+.native-select:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--text-dim) 54%, var(--border)) !important;
 }
 
 .native-input:focus,
-.native-select:focus,
-.settings-modal input:not([type="checkbox"]):not([type="radio"]):focus,
-.settings-modal textarea:focus,
-.settings-modal select:focus {
+.native-select:focus {
   border-color: var(--accent-border) !important;
   background: var(--surface) !important;
   box-shadow: 0 0 0 3px var(--focus-ring) !important;
 }
 
-.native-input::placeholder,
-.settings-modal input::placeholder,
-.settings-modal textarea::placeholder {
+.native-input::placeholder {
   color: var(--text-dim);
 }
 
 .native-input:disabled,
-.native-select:disabled,
-.settings-modal input:disabled,
-.settings-modal textarea:disabled,
-.settings-modal select:disabled {
+.native-select:disabled {
   opacity: 0.58;
   cursor: not-allowed;
 }
@@ -4276,7 +4231,7 @@ html.dark {
 .native-button-primary:hover:not(:disabled) {
   border-color: transparent !important;
   background: var(--accent-hover) !important;
-  color: #fff !important;
+  color: var(--accent-contrast) !important;
 }
 
 .native-button-primary:disabled {
@@ -4287,7 +4242,7 @@ html.dark {
 
 .native-button-primary.is-success {
   background: var(--success) !important;
-  color: #fff !important;
+  color: var(--on-success) !important;
 }
 
 .native-button.is-success:not(.native-button-primary) {
@@ -4308,71 +4263,9 @@ html.dark {
   color: var(--danger) !important;
 }
 
-.settings-modal {
-  width: min(900px, calc(100vw - 32px));
-  color: var(--text);
-}
-
-.settings-modal code {
-  color: var(--text-dim) !important;
-}
-
-.settings-modal-body {
-  min-height: 0;
-  background: var(--surface-elevated);
-}
-
-.settings-sidebar {
-  border-color: var(--separator) !important;
-  background: color-mix(in srgb, var(--bg-panel) 92%, var(--surface)) !important;
-}
-
-.settings-sidebar-scroll {
-  padding: 10px 8px !important;
-}
-
-.settings-list-row {
-  min-height: 32px;
-  margin: 1px 0;
-  padding: 7px 9px !important;
-  border: var(--hairline) solid transparent;
-  border-radius: var(--radius-md) !important;
-  background: transparent !important;
-  cursor: pointer;
-  transition:
-    color var(--dur-fast) var(--ease-native),
-    border-color var(--dur-fast) var(--ease-native),
-    background var(--dur-fast) var(--ease-native);
-}
-
-.settings-list-row:hover {
-  background: var(--bg-hover) !important;
-}
-
-.settings-list-row.is-selected {
-  border-color: color-mix(in srgb, var(--accent) 8%, transparent);
-  background: var(--bg-selected) !important;
-}
-
-.settings-list-row-nested {
-  min-height: 28px;
-  padding-left: 28px !important;
-}
-
-.settings-list-add {
-  color: var(--text-dim) !important;
-}
-
-.settings-list-add:hover,
-.settings-list-add.is-selected {
-  color: var(--accent) !important;
-}
-
-.settings-add-button {
-  width: 100%;
-  border-style: dashed !important;
-  box-shadow: none;
-}
+/* `.settings-modal` / `-body` / `.settings-sidebar*` / `.settings-list-row*` /
+   `.settings-list-add` / `.settings-add-button` 曾是无主死类（全仓无 className
+   引用），已删除。 */
 
 .settings-detail {
   min-width: 0;
@@ -4417,15 +4310,6 @@ html.dark {
 
 .settings-footer-status.is-success {
   color: var(--success) !important;
-}
-
-.settings-modal button:not(.native-modal-close) {
-  transition:
-    color var(--dur-fast) var(--ease-native),
-    border-color var(--dur-fast) var(--ease-native),
-    background var(--dur-fast) var(--ease-native),
-    opacity var(--dur-fast) var(--ease-native),
-    transform var(--dur-fast) var(--ease-native);
 }
 
 .provider-picker-search {
@@ -4503,7 +4387,11 @@ html.dark {
   --settings-control-on-hover: color-mix(in srgb, var(--menu-selection-color) 88%, var(--text));
   --settings-control-knob-on: #ffffff;
   box-shadow: var(--shadow-dialog);
-  animation: native-modal-in var(--dur-base) var(--ease-sheet) both;
+  /* fill-mode 用 backwards 而非 both：both 会把收尾帧 translateY(0) scale(1)
+     永久保留，任何非 none 的 transform 都会成为 fixed 后代的包含块，令面板内
+     fixed 浮层（ModelSelector）按对话框坐标定位并越过 overflow:hidden 被裁切。
+     backwards 只在入场前套 from 帧，动画结束后 transform 回到 none。 */
+  animation: native-modal-in var(--dur-base) var(--ease-sheet) backwards;
 }
 
 .settings-dialog-surface .config-switch[aria-checked="true"] {
@@ -6164,64 +6052,7 @@ html.dark {
   }
 }
 
-.file-add-menu-anchor {
-  display: contents;
-}
-
-
-
-.file-add-menu {
-  position: absolute;
-  z-index: 700;
-  width: 230px;
-  padding: 5px;
-  top: calc(100% + 7px);
-  left: -4px;
-}
-
-
-
-
-.file-add-menu button {
-  border-radius: var(--radius-md) !important;
-  display: flex;
-  width: 100%;
-  min-height: 42px;
-  padding: 7px 9px;
-  align-items: center;
-  gap: 10px;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--fs-small);
-  text-align: left;
-}
-
-
-.file-add-menu button:disabled {
-  color: var(--text-dim);
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-
-.file-add-menu-icon {
-  flex-basis: 26px;
-  display: inline-flex;
-  width: 24px;
-  height: var(--control-h-sm);
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 24px;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 17px;
-}
-
-
-
+/* `.file-add-menu*` 曾是无主死类（全仓无 className 引用），已删除。 */
 
 .file-workbench-breadcrumb > span:first-child {
   overflow: hidden;
@@ -6325,9 +6156,14 @@ html.dark {
   color: var(--text-dim);
 }
 
-.context-panel-file-filter:focus {
+/* 焦点环只留这一条（与 .app-select-trigger:focus-visible 同语汇）。基类已
+   `outline: none !important` 清掉鼠标 :focus 的环，这里只给键盘 :focus-visible 画环，
+   避免旧「最后一次误写即生效」把环抹掉。 */
+.context-panel-file-filter:focus-visible {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent);
+  outline: 2px solid var(--menu-focus-ring) !important;
+  outline-offset: 1px;
+  box-shadow: none !important;
 }
 
 .context-browser-panel {
@@ -7307,33 +7143,6 @@ span.linenumber {
     display: none !important;
   }
 
-  .native-modal-backdrop {
-    padding: 8px;
-  }
-
-  .settings-modal {
-    width: calc(100vw - 16px) !important;
-    height: calc(100dvh - 16px) !important;
-    max-height: calc(100dvh - 16px) !important;
-    border-radius: var(--radius-lg) !important;
-  }
-
-  .settings-modal .native-modal-header {
-    min-height: 48px;
-    padding: 11px 13px !important;
-  }
-
-  .settings-modal-body {
-    flex-direction: column !important;
-  }
-
-  .settings-sidebar {
-    width: 100% !important;
-    max-height: min(34dvh, 260px) !important;
-    border-right: 0 !important;
-    border-bottom: var(--hairline) solid var(--separator) !important;
-  }
-
   .settings-detail {
     padding: 18px 16px !important;
   }
@@ -7514,12 +7323,11 @@ span.linenumber {
   color: var(--text-dim);
 }
 
-.context-panel-file-filter:focus,
-.context-panel-file-filter:focus-visible {
+/* 第三代规则只保留底色/border 过渡；焦点环由上面的 :focus-visible 提供，
+   这里不得再写 outline/box-shadow 覆盖（旧代码 `outline:none !important` 把环抹掉）。 */
+.context-panel-file-filter:focus {
   border-color: var(--accent-border);
   background: var(--surface);
-  outline: none !important;
-  box-shadow: none !important;
 }
 
 
@@ -8391,6 +8199,9 @@ span.linenumber {
 .scheduled-run-dot { margin-top: 5px; }
 .scheduled-run--succeeded .scheduled-run-dot { background: var(--success); }
 .scheduled-run--running .scheduled-run-dot { background: var(--success); animation: scheduled-pulse 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .scheduled-run--running .scheduled-run-dot { animation: none; }
+}
 .scheduled-run--failed .scheduled-run-dot { background: var(--danger); }
 .scheduled-run--aborted .scheduled-run-dot { background: var(--warning); }
 .scheduled-run--skipped .scheduled-run-dot { background: var(--text-dim); }
@@ -8577,11 +8388,12 @@ span.linenumber {
 
 .scheduled-check input { margin-top: 2px; }
 
-/* Delete confirmation */
+/* Delete confirmation. z-index 走 --z-modal 令牌（原 literal 400 只是 .scheduled-view
+   这个 z-index:30 层叠上下文内的次序；真正脱层叠上下文由组件 createPortal 到 body 完成）。 */
 .scheduled-dialog-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 400;
+  z-index: var(--z-modal);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -9151,7 +8963,8 @@ html.native-desktop :is(
 @media (prefers-reduced-motion: reduce) {
   .native-popover:not(.animated-native-popover),
   .native-modal,
-  .native-modal-backdrop {
+  .native-modal-backdrop,
+  .native-update-reminder {
     animation-duration: 0.001ms !important;
   }
 }
@@ -10092,7 +9905,7 @@ html.native-desktop :is(
 .project-trust-button.is-danger {
   background: var(--danger);
   border-color: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
 }
 
 /* Above the composer: the model asked for a shell this chat does not have. */

@@ -241,7 +241,7 @@ export function ProjectPicker({ recentProjects, selectedCwd, selectedProject, ho
           background: dropdownOpen ? "var(--bg-hover)" : undefined,
         }}
       >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, color: isInline ? undefined : "var(--text-muted)" }}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0, color: isInline ? undefined : "var(--text-muted)" }}>
           <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
         </svg>
         {isInline ? (
@@ -273,7 +273,7 @@ export function ProjectPicker({ recentProjects, selectedCwd, selectedProject, ho
                 ? ((selectedProject ?? selectedCwd).split("/").filter(Boolean).pop() ?? displayCwd(selectedProject ?? selectedCwd, homeDir))
                 : t("sidebar.selectProject")}
             </span>
-            <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="var(--text-dim)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+            <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="var(--text-dim)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
               <polyline points="2 3.5 5 6.5 8 3.5" />
             </svg>
           </>
@@ -397,7 +397,7 @@ export function ProjectPicker({ recentProjects, selectedCwd, selectedProject, ho
             fontSize: "var(--fs-micro)",
           }}
         >
-          <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" style={{ flexShrink: 0 }}>
+          <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" aria-hidden="true" style={{ flexShrink: 0 }}>
             <line x1="5" y1="1" x2="5" y2="9" />
             <line x1="1" y1="5" x2="9" y2="5" />
           </svg>

@@ -1,10 +1,10 @@
-import { existsSync, readFileSync, rmSync, statSync } from "fs";
+import { existsSync, rmSync, statSync } from "fs";
 import { resolve } from "path";
 import { NextResponse } from "next/server";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { isChatFolderPath, isChatWorkspacePath } from "@/lib/chat-workspace";
 import { allowFileRoot } from "@/lib/file-access";
-import { replaceFileAtomicSync } from "@/lib/atomic-file";
+import { forgetChatSystemPrompt } from "@/lib/chat-continue";
 import { getRpcSession } from "@/lib/rpc-manager";
 import {
   invalidateSessionListCache,
@@ -56,7 +56,7 @@ export async function POST(
     const copiedFile = manager.getSessionFile();
     if (copiedFile) {
       try {
-        forgetChatSystemPrompt(copiedFile);
+        await forgetChatSystemPrompt(copiedFile);
       } catch (error) {
         // A copy that still carries the chat's prompt and tool limits would be a broken project session.
         rmSync(copiedFile, { force: true });
@@ -82,36 +82,5 @@ export async function POST(
 
 /**
  * Remove the system messages from a copied transcript, joining the entries around them.
- * They hold the chat's prompt and tool declarations; without them pi builds the project
- * session's own prompt and default tools on its next run, as it does for a new session.
+ * 实现在 lib/chat-continue.ts（流式两遍，便于单测；数据/测试审计 A-4）。
  */
-function forgetChatSystemPrompt(file: string): void {
-  const entries = readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => {
-    try {
-      return JSON.parse(line) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-  });
-  if (entries.some((entry) => entry === null)) {
-    throw new Error("This chat's transcript is damaged and cannot be continued in a project");
-  }
-  const parents = new Map<string, string | null>();
-  const kept = (entries as Record<string, unknown>[]).filter((entry) => {
-    const message = entry.message as { role?: string } | undefined;
-    if (entry.type === "message" && message?.role === "system" && typeof entry.id === "string") {
-      parents.set(entry.id, (entry.parentId as string | null | undefined) ?? null);
-      return false;
-    }
-    return true;
-  });
-  const survivor = (id: string | null | undefined): string | null => {
-    let current = id ?? null;
-    while (current !== null && parents.has(current)) current = parents.get(current) ?? null;
-    return current;
-  };
-  const rewritten = kept.map((entry) => (
-    "parentId" in entry ? { ...entry, parentId: survivor(entry.parentId as string | null | undefined) } : entry
-  ));
-  replaceFileAtomicSync(file, `${rewritten.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
-}

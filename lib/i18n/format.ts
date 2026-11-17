@@ -104,3 +104,32 @@ export function formatCompactRelativeTime(date: Date | string, locale: Locale, n
   const [unit, size] = COMPACT_UNITS[index];
   return new Intl.NumberFormat(locale, { style: "unit", unit, unitDisplay: "narrow" }).format(Math.floor(ageMs / size));
 }
+
+/**
+ * 日期时间 → 跟随**应用语言**（而不是操作系统 locale）的本地化文本（数据/测试审计 A-9）。
+ *
+ * 为什么需要：调用点各自写的 `toLocaleString(undefined, …)` 跟随操作系统，与同一张卡片里
+ * 跟随应用语言的 `formatUpdatedTime` 不一致。统一走这个助手（显式传 locale）。
+ *
+ * @param value Date、毫秒时间戳或 ISO 字符串
+ * @param locale 应用语言
+ * @param options 传给 Intl.DateTimeFormat 的选项（缺省：date + time，short）
+ * @returns 本地化文本；无效时间返回空串
+ */
+export function formatDateTime(
+  value: Date | string | number,
+  locale: Locale,
+  options: Intl.DateTimeFormatOptions = { dateStyle: "short", timeStyle: "short" },
+): string {
+  const target = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(target.getTime())) return "";
+  return new Intl.DateTimeFormat(locale, options).format(target);
+}
+
+/**
+ * 时刻 → 跟随应用语言的 HH:MM（`formatUpdatedTime` 的显式 locale 版本，
+ * 供需要固定时刻而非相对时间的卡片使用）。无效时间返回空串。
+ */
+export function formatClockTime(value: Date | string | number, locale: Locale): string {
+  return formatDateTime(value, locale, { hour: "2-digit", minute: "2-digit" });
+}

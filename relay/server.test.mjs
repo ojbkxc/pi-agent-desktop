@@ -186,7 +186,16 @@ test("strangers cannot crowd out the owner: the oldest stranger makes room", asy
   t.after(() => relay.close());
   const a = await connectAgent(url, await agentKeys());
   const opens = [];
-  a.ws.on("message", (d) => { if (d[0] === KIND.open) opens.push(d.subarray(1, 17)); });
+  // B-7：原来用固定 50ms 睡眠后按索引取第 3 帧 open，负载高的 CI 上该帧可能没到，
+  // 负载一高就随机红。改为等第 3 帧真的到达再发送，不依赖计时。
+  let resolveThreeOpens = () => {};
+  const threeOpens = new Promise((resolve) => { resolveThreeOpens = resolve; });
+  a.ws.on("message", (d) => {
+    if (d[0] === KIND.open) {
+      opens.push(d.subarray(1, 17));
+      if (opens.length >= 3) resolveThreeOpens();
+    }
+  });
   const s1 = connectClient(url, a.ready.agentId);
   const s2 = connectClient(url, a.ready.agentId);
   await Promise.all([s1.opened, s2.opened]);
@@ -195,9 +204,9 @@ test("strangers cannot crowd out the owner: the oldest stranger makes room", asy
   await owner.opened;
   assert.equal((await s1Closed)[0], 4429, "the oldest stranger was dropped, the newcomer got in");
   // The desktop authenticates the owner; authenticated phones have their own cap.
-  await new Promise((r) => setTimeout(r, 50));
+  await threeOpens;
   a.ws.send(Buffer.concat([Buffer.of(KIND.auth), opens[2]]));
-  await new Promise((r) => setTimeout(r, 50));
+  // 中继按到达顺序处理消息：auth 帧先于新客户端的 open 帧入队，无需固定睡眠等它处理。
   const second = connectClient(url, a.ready.agentId);
   await second.opened;
   owner.send(Buffer.from("still here"));

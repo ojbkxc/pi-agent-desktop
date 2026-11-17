@@ -178,12 +178,17 @@ export function createSnapshotPoller(options: SnapshotPollerOptions): SnapshotPo
     // useModelCatalog 的超时口径同量级；超时按失败走既有的退避重试路径。
     // 判死用真实 setTimeout，不经注入的 timers——那是轮询节奏的队列，单测靠
     // 「恰一个轮询定时器」的断言驱动，混入判死帧会污染它。
+    //
+    // state.md P1：判死句柄必须保存并在 finally 里清掉。此前成功路径从不
+    // clearTimeout，工作台打开期间每个 3 秒拉取都遗留一个 20s 后仍会触发的
+    // 僵尸定时器（约 7 个常驻）；`stop()` 后它们仍在跑，单测进程也会被占住。
     let settled = false;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     try {
       const snapshot = await Promise.race([
         options.fetchSnapshot(),
         new Promise<never>((_, reject) => {
-          setTimeout(() => {
+          deadline = setTimeout(() => {
             if (!settled) reject(new Error("snapshot fetch timed out"));
           }, SNAPSHOT_TIMEOUT_MS);
         }),
@@ -200,6 +205,12 @@ export function createSnapshotPoller(options: SnapshotPollerOptions): SnapshotPo
       attempt += 1;
       schedule(Math.min(maxRetryMs, intervalMs * 2 ** (attempt - 1)));
     } finally {
+      // 无论成功/失败/超时都收回判死定时器：race 一旦落地它就没有意义，
+      // 留着只会在 20s 后白触发一次（stop() 之后也照样触发）。
+      if (deadline !== undefined) {
+        clearTimeout(deadline);
+        deadline = undefined;
+      }
       inFlight = false;
     }
   }
@@ -283,7 +294,12 @@ export function useTeamTimeline(teamName: string | null): TeamTimelineController
     setLoading(true);
     const poller = createSnapshotPoller({
       fetchSnapshot: async () => {
-        const response = await fetch(`/api/teams/${encodeURIComponent(teamName)}/workbench`, { cache: "no-store" });
+        // signal 与判死同源：超时不仅让 race 落地，还要真正 abort 底层请求，
+        // 否则半开连接下挂起请求只增不减（state.md P1）。
+        const response = await fetch(`/api/teams/${encodeURIComponent(teamName)}/workbench`, {
+          cache: "no-store",
+          signal: AbortSignal.timeout(SNAPSHOT_TIMEOUT_MS),
+        });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return await response.json() as TeamWorkbenchSnapshot;
       },

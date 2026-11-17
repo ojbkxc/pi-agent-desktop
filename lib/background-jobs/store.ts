@@ -118,7 +118,15 @@ export function readJob(id: string, agentDir = getAgentDir()): BackgroundJob | n
   if (!isJobId(id)) return null;
   const filePath = jobRecordPath(id, agentDir);
   if (!existsSync(filePath)) return null;
-  return asBackgroundJob(JSON.parse(readFileSync(filePath, "utf8")), filePath);
+  // 损坏记录（截断 JSON、形状不符）应返回 null → 路由 404，而不是把 V8 的
+  // "Unexpected token ..." 原文以 500 抛给客户端（数据/测试审计 A-5）。
+  // 与 listJobs() 的逐条 warn 口径一致。
+  try {
+    return asBackgroundJob(JSON.parse(readFileSync(filePath, "utf8")), filePath);
+  } catch (error) {
+    console.warn(`[pi-web] 跳过损坏的后台 job 记录 ${filePath}:`, error instanceof Error ? error.message : error);
+    return null;
+  }
 }
 
 export function writeJob(job: BackgroundJob, agentDir = getAgentDir()): void {

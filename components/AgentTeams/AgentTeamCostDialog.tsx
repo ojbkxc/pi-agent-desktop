@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { useModalDismiss } from "@/hooks/useModalDismiss";
 import { dismissAgentTeamCostNotice } from "@/lib/agent-teams-notice";
 
 /**
@@ -30,13 +31,23 @@ export function AgentTeamCostDialog({ open, onConfirm, onCancel }: Props) {
     if (open) setDontRemind(false);
   }, [open]);
 
-  if (!open) return null;
-
   const settle = (confirmed: boolean) => {
     if (dontRemind) dismissAgentTeamCostNotice();
     if (confirmed) onConfirm();
     else onCancel();
   };
+
+  // 共享模态 hook（见 test-results/detail-audit/a11y.md）：
+  // - Esc 只关本层（capture 由 hook 的 document 监听完成，preventDefault +
+  //   stopPropagation，不会再冒泡到 Settings 的 listenForPanelEscape 或
+  //   useKeyboardShortcuts 的全局 abort —— 实测这两条是当前的真实缺陷）；
+  // - 初始焦点进对话框（含「不再提醒」勾选框），Tab 圈在面板内；
+  // - 卸载归还焦点（composer 的团队开关 / Settings 的开关）。
+  // 注意 `enabled` 用 open：组件 open=false 时直接返回 null，但 effect 在
+  // 返回值之前就已排队，必须挡住，否则关闭后还压着一层模态栈。
+  const panelRef = useModalDismiss<HTMLDivElement>(() => settle(false), open);
+
+  if (!open) return null;
 
   return (
     <div
@@ -45,6 +56,7 @@ export function AgentTeamCostDialog({ open, onConfirm, onCancel }: Props) {
       onClick={(event) => { if (event.target === event.currentTarget) settle(false); }}
     >
       <div
+        ref={panelRef}
         className="agent-team-cost-dialog"
         role="dialog"
         aria-modal="true"
@@ -61,7 +73,7 @@ export function AgentTeamCostDialog({ open, onConfirm, onCancel }: Props) {
           <span>{t("chat.agentTeam.cost.dontRemind")}</span>
         </label>
         <div className="agent-team-cost-actions">
-          <button type="button" className="agent-team-cost-cancel" onClick={() => settle(false)}>
+          <button type="button" className="agent-team-cost-cancel" data-autofocus onClick={() => settle(false)}>
             {t("i18n.cancel")}
           </button>
           <button type="button" className="agent-team-cost-confirm native-primary-button" onClick={() => settle(true)}>

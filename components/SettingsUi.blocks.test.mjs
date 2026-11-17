@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createJiti } from "jiti";
 
@@ -222,4 +223,15 @@ test("the single-line add box keeps taking focus, and the multiline one never on
   assert.match(effect, /if \(typeof window !== "undefined" && window\.matchMedia\?\.\("\(pointer: coarse\)"\)\.matches\) return;\n\s*textareaRef\.current\?\.focus\(\);/);
   // The textarea submits only through addSourceKeySubmits(), never on a plain Enter.
   assert.match(source, /onKeyDown=\{\(event\) => \{\n\s*if \(!addSourceKeySubmits\(event\)\) return;\n\s*event\.preventDefault\(\);\n\s*if \(canSubmit\) onSubmit\(\);/);
+});
+
+test("a standalone config panel is a trapped modal; embedded panels stay inert", async () => {
+  const source = (await readFile(new URL("./SettingsUi.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+  // a11y P1: the old shell set aria-modal but never trapped Tab, so focus walked
+  // into the page behind it. The shared hook owns Escape/Tab/initial focus/restore.
+  assert.match(source, /const panelRef = useModalDismiss<HTMLDivElement>\(onClose, !embedded\);/);
+  assert.match(source, /ref=\{embedded \? undefined : panelRef\}/);
+  assert.match(source, /role=\{embedded \? undefined : "dialog"\}/);
+  // The backdrop is presentation; the dialog surface carries the role.
+  assert.match(source, /role=\{embedded \? undefined : "presentation"\}/);
 });

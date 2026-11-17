@@ -210,6 +210,8 @@ export function SkillMarketDetail({
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   // 代际守卫：快速点两张卡时，先发的详情后落地不能盖掉后选的。
   const seqRef = useRef(0);
+  // 安装确认是内联区块（非模态）：出现时把焦点移到「取消」（a11y.md P2）。
+  const cancelConfirmRef = useRef<HTMLButtonElement>(null);
 
   const load = useCallback(async (id: string) => {
     const generation = ++seqRef.current;
@@ -334,11 +336,22 @@ export function SkillMarketDetail({
     });
   }, [detail?.skill]);
 
+  // 确认区出现时聚焦「取消」：它是内联 group 而非模态，焦点进入确认区是这里
+  // 全部的键盘可达性要求；不做 Tab 圈禁、不接管 Esc（页面其他部分仍可用）。
+  // effect 必须在 `if (!selectedId) return null` **之前**：selectedId 初始为 null，
+  // hook 不能条件调用（首次 0 个额外 hook、点开技能后 +1，React 会抛
+  // "Rendered more hooks than during the previous render"）。
+  const installedCandidate = detail?.status === "ready" && detail.skill?.installState === "installed";
+  useEffect(() => {
+    if (selectedId && confirming && !installedCandidate) cancelConfirmRef.current?.focus({ preventScroll: true });
+  }, [selectedId, confirming, installedCandidate]);
+
   if (!selectedId) return null;
 
   const skill = detail?.status === "ready" ? detail.skill : undefined;
   const installed = skill?.installState === "installed";
   const installedPath = skill?.installedInfo?.dirName;
+
   // 作者主页来自第三方源：协议白名单不过关就不渲染外链（确认框里的来源也只用白名单值）。
   const sourceUrl = skill ? safeMarketUrl(skill.pageUrl) : null;
 
@@ -423,7 +436,7 @@ export function SkillMarketDetail({
           {actionError && <p className="scheduled-error" role="alert">{actionError}</p>}
 
           {confirming && !installed && (
-            <div className="market-confirm" role="alertdialog" aria-label={t("market.confirmTitle")}>
+            <div className="market-confirm" role="group" aria-label={t("market.confirmTitle")}>
               <p className="market-confirm-title">{t("market.confirmTitle")}</p>
               <p className="scheduled-hint">{t("market.confirmBody", { source: sourceUrl || skill.name })}</p>
               <dl className="market-confirm-facts">
@@ -435,7 +448,7 @@ export function SkillMarketDetail({
                 <div><dt>{t("market.fact.security")}</dt><dd>{t(`market.security.${skill.securityStatus ?? "unknown"}`)}</dd></div>
               </dl>
               <div className="market-confirm-actions">
-                <button type="button" className="scheduled-button is-secondary" onClick={() => setConfirming(false)} disabled={busy}>
+                <button ref={cancelConfirmRef} type="button" className="scheduled-button is-secondary" onClick={() => setConfirming(false)} disabled={busy}>
                   {t("market.cancel")}
                 </button>
                 <button type="button" className="scheduled-button" onClick={() => void runInstall()} disabled={busy}>

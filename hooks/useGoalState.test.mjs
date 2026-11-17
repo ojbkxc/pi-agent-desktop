@@ -30,18 +30,23 @@ const GOAL = {
   updatedAt: 2000,
 };
 
-/** mount 一个 hook：返回读当前返回值 / flush effects 的句柄。 */
+/** mount 一个 hook：返回读当前返回值 / flush effects / 换参数重渲染的句柄。 */
 function mount(hook, ...args) {
   let latest;
+  let currentArgs = args;
+  // hook 以形参传入（不直接写 useXxx），避免 eslint react-hooks/rules-of-hooks
+  // 把测试辅助器误判为组件内直接调用。
   const render = () => {
     ReactFake.__beginRender();
-    latest = hook(...args);
+    latest = hook(...currentArgs);
   };
   ReactFake.__setNotify(() => render());
   ReactFake.__reset();
   render();
   return {
     get current() { return latest; },
+    /** 换参数重渲染（模拟父组件 prop 变化）。 */
+    setArgs(next) { currentArgs = next; render(); },
     flush: () => ReactFake.__flushEffects(),
   };
 }
@@ -160,4 +165,40 @@ test("页面不可见 → 不拉取；切回可见立即补拉", async (t) => {
   await flush();
   assert.equal(env.calls.length, 1, "补拉发生");
   assert.equal(h.current.goal.objective, GOAL.objective);
+});
+
+// ── state.md P2：refreshKey 变化即 setGoal(null)，/goal 条每条消息闪没 ─────────
+test("refreshKey（消息计数）变化只补拉，保留旧快照直到新响应落地", async (t) => {
+  const calls = [];
+  let resolveSecond;
+  const second = new Promise((resolve) => { resolveSecond = resolve; });
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    if (calls.length === 1) return { ok: true, status: 200, json: async () => ({ goal: GOAL }) };
+    return second;
+  };
+  globalThis.setTimeout = () => 1;
+  globalThis.clearTimeout = () => {};
+  t.after(restoreEnv);
+
+  // 与既有用例同一辅助器：mount 把 hook 作为形参调用，避免 lint 误判；
+  // setArgs 模拟父组件用新 refreshKey 重渲染。
+  const h = mount(useGoalState, "s1", 0);
+
+  h.flush();
+  await flush();
+  assert.equal(h.current.goal.objective, GOAL.objective, "初始快照落地");
+
+  // 发/收一条消息 → refreshKey 变化：补拉在途时旧快照必须保留（否则 /goal 条闪没）。
+  h.setArgs(["s1", 1]);
+  h.flush();
+  await flush();
+  assert.equal(calls.length, 2, "refreshKey 触发补拉");
+  assert.notEqual(h.current.goal, null, "补拉在途时不得清空旧快照");
+  assert.equal(h.current.goal.objective, GOAL.objective);
+
+  // 新响应落地后才替换快照。
+  resolveSecond({ ok: true, status: 200, json: async () => ({ goal: { ...GOAL, objective: "新目标" } }) });
+  await flush();
+  assert.equal(h.current.goal.objective, "新目标");
 });

@@ -565,6 +565,9 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
   const messageContentRef = useRef<HTMLDivElement | null>(null);
   const prevScrollDistanceRef = useRef<number | null>(null);
   const loadingOlderRef = useRef(false);
+  // 「加载更早消息」失败时露出可点重试。loadContext 在 hook 内吞掉失败（只 console.error），
+  // 但它成功时返回新一页 context、失败（或代次失效/卸载）时返回 undefined——以此判定失败。
+  const [olderLoadFailed, setOlderLoadFailed] = useState(false);
   const restoreStartedRef = useRef(false);
   const pendingScrollRestoreRef = useRef(pendingScrollRestore);
   pendingScrollRestoreRef.current = pendingScrollRestore;
@@ -587,6 +590,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
     setRestoreAnchorReady(false);
     restoreStartedRef.current = false;
     loadingOlderRef.current = false;
+    setOlderLoadFailed(false);
     prevScrollDistanceRef.current = null;
     setPendingSearchScroll(null);
   }
@@ -760,6 +764,26 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
     onSearchTargetHandled?.(pendingSearchScroll);
   }, [pendingSearchScroll, searchTarget, searchMessage, scrollContainerRef, scrollToMessage, onSearchTargetHandled]);
 
+  // 加载更早消息：sentinel 自动触发与失败后点重试共用同一条路径。
+  const loadOlderPage = useCallback(() => {
+    if (loadingOlderRef.current) return;
+    if (!hasEarlierMessages) return;
+    const oldestId = historyCursor;
+    if (!oldestId) return;
+    const sid = session?.id ?? sessionIdRef.current;
+    if (!sid) return;
+    loadingOlderRef.current = true;
+    setOlderLoadFailed(false);
+    const container = scrollContainerRef.current;
+    if (container) prevScrollDistanceRef.current = captureScrollDistance(container.scrollHeight, container.scrollTop);
+    void loadContext(sid, activeLeafId, oldestId).then((context) => {
+      // 成功返回新一页 context；失败/代次失效/卸载时返回 undefined。
+      if (!context) setOlderLoadFailed(true);
+    }, () => setOlderLoadFailed(true)).finally(() => {
+      loadingOlderRef.current = false;
+    });
+  }, [hasEarlierMessages, historyCursor, session, activeLeafId, loadContext, sessionIdRef, scrollContainerRef]);
+
   // IntersectionObserver on the sentinel div at the top of the message list.
   // When it becomes visible, load the next page of older messages.
   useEffect(() => {
@@ -772,23 +796,13 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
         // No older history loaded yet: fetch the previous page from the server
         // and prepend it (loadContext handles prepend + scroll anchoring).
         // Skip while a page is already loading or nothing older exists.
-        if (loadingOlderRef.current) return;
-        if (!hasEarlierMessages) return;
-        const oldestId = historyCursor;
-        if (!oldestId) return;
-        const sid = session?.id ?? sessionIdRef.current;
-        if (!sid) return;
-        loadingOlderRef.current = true;
-        prevScrollDistanceRef.current = captureScrollDistance(container.scrollHeight, container.scrollTop);
-        void loadContext(sid, activeLeafId, oldestId).finally(() => {
-          loadingOlderRef.current = false;
-        });
+        loadOlderPage();
       },
       { root: container, threshold: 0 }
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [historyCursor, hasEarlierMessages, session, activeLeafId, loadContext, sessionIdRef, scrollContainerRef]);
+  }, [loadOlderPage, scrollContainerRef]);
 
   // Keep the rendered window at least as large as what's loaded, so prepended
   // (older) pages stay visible instead of being sliced off the top.
@@ -1685,9 +1699,30 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
               return (
                 <>
                   {hasMore && (
-                     <div ref={sentinelRef} className="py-3 text-center text-xs text-text-muted">
-                       {t("chat.loadEarlier")}
-                    </div>
+                    <>
+                      {olderLoadFailed && (
+                        <button
+                          type="button"
+                          onClick={loadOlderPage}
+                          style={{
+                            display: "block",
+                            width: "100%",
+                            padding: "10px 0",
+                            background: "none",
+                            border: "none",
+                            color: "var(--danger)",
+                            fontSize: "var(--fs-caption)",
+                            textAlign: "center",
+                            cursor: "pointer",
+                          }}
+                        >
+                          {t("chat.loadEarlierFailed")}
+                        </button>
+                      )}
+                      <div ref={sentinelRef} className="py-3 text-center text-xs text-text-muted">
+                        {olderLoadFailed ? null : t("chat.loadEarlier")}
+                      </div>
+                    </>
                   )}
                   {rendered.slice(startIndex)}
                 </>
@@ -2473,6 +2508,7 @@ function ExtensionCustomPanel({
       ) : (
       <div
         role="dialog"
+        aria-label={t("chat.extensionPanel")}
         onClick={(event) => {
           if (!(event.target as HTMLElement).closest("button")) inputRef.current?.focus();
         }}

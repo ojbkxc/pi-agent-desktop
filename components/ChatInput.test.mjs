@@ -601,12 +601,42 @@ test("locks built-in command submission until it settles", async () => {
 
   const first = callback("/reload");
   assert.deepEqual(callback.pendingStates, [true]);
-  assert.equal(await callback("/reload"), true);
+  assert.equal(await callback("/reload"), "handled");
   assert.deepEqual(callback.pendingStates, [true]);
   callback.resolve({ handled: true });
-  assert.equal(await first, true);
+  assert.equal(await first, "handled");
   assert.deepEqual(callback.pendingStates, [true, false]);
   assert.match(sourceText, /<fieldset\s+disabled=\{builtinCommandPending\}\s+aria-busy=\{builtinCommandPending\}/);
+});
+
+test("runBuiltinCommand 超时返回 timeout（而不是 unhandled），且不清空输入", async () => {
+  const sourceText = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  const source = ts.createSourceFile("ChatInput.tsx", sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  function findCallback(node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === "runBuiltinCommand") {
+      return node.initializer.arguments[0];
+    }
+    return ts.forEachChild(node, findCallback);
+  }
+  const callback = new Script(ts.transpileModule(findCallback(source).getText(source), {
+    compilerOptions: { target: ts.ScriptTarget.ES2020 },
+  }).outputText).runInNewContext({
+    attachedImages: [],
+    attachedFilesRef: { current: [] }, composeMessageWithAttachedFiles,
+    attachedImagesRef: { current: [] },
+    builtinCommandPendingRef: { current: false },
+    canClearBuiltinCommandInput,
+    clearInput() { callback.cleared += 1; },
+    // 永不返回：只能靠超时竞速落地的 timeout 分支。
+    onBuiltinCommand: () => new Promise(() => {}),
+    setBuiltinCommandPending() {},
+    valueRef: { current: "/reload" },
+    setTimeout,
+    BUILTIN_COMMAND_TIMEOUT_MS: 5,
+  });
+  callback.cleared = 0;
+  assert.equal(await callback("/reload"), "timeout");
+  assert.equal(callback.cleared, 0, "超时不得清空输入");
 });
 
 test("keeps only read-only built-ins available while a run is active", () => {
@@ -677,6 +707,7 @@ test("while a run streams, a bare /mcp opens Settings or is queued as before", a
       // d5-9：发送基线快照读 valueRef（与 value 同值喂入，行为不变）。
       valueRef: { current: value },
       onAudioUnlock() {},
+      setBuiltinCommandTimeout() {},
       clearInput() { calls.cleared += 1; },
       // 单飞闸门桩：真实实现把「解析 + 附件定序 + 单飞」搬进 submitResolvedMessage（上游 c9867eae）；
       // 这里只装配它交给 submit 的等价物（本用例的解析是恒等映射）。
@@ -688,7 +719,7 @@ test("while a run streams, a bare /mcp opens Settings or is queued as before", a
       isBareMcpCommand,
       resolveSessionReferences: async (message) => message,
       sessionMentionTargetsRef: { current: new Map() },
-      runBuiltinCommand: async (message) => { calls.builtin.push(message); return handled; },
+      runBuiltinCommand: async (message) => { calls.builtin.push(message); return handled ? "handled" : "unhandled"; },
       onPromptWithStreamingBehavior: (message, behavior, attached) => calls.prompts.push([message, behavior, attached?.length ?? 0]),
       onSteer() { throw new Error("slash messages are prompts"); },
       onFollowUp: (message, attached) => calls.prompts.push([message, "followUp", attached?.length ?? 0]),
@@ -724,6 +755,7 @@ test("while a run streams, a streamable built-in the builtin layer rejects is qu
       // d5-9：发送基线快照读 valueRef（与 value 同值喂入，行为不变）。
       valueRef: { current: value },
       onAudioUnlock() {},
+      setBuiltinCommandTimeout() {},
       clearInput() { calls.cleared += 1; },
       // 单飞闸门桩：真实实现把「解析 + 附件定序 + 单飞」搬进 submitResolvedMessage（上游 c9867eae）；
       // 这里只装配它交给 submit 的等价物（本用例的解析是恒等映射）。
@@ -735,7 +767,7 @@ test("while a run streams, a streamable built-in the builtin layer rejects is qu
       isBareMcpCommand,
       resolveSessionReferences: async (message) => message,
       sessionMentionTargetsRef: { current: new Map() },
-      runBuiltinCommand: async (message) => { calls.builtin.push(message); return handled; },
+      runBuiltinCommand: async (message) => { calls.builtin.push(message); return handled ? "handled" : "unhandled"; },
       onPromptWithStreamingBehavior: (message, behavior, attached) => calls.prompts.push([message, behavior, attached?.length ?? 0]),
       onSteer() { throw new Error("slash messages are prompts"); },
       onFollowUp: (message, attached) => calls.prompts.push([message, "followUp", attached?.length ?? 0]),
@@ -753,8 +785,8 @@ test("while a run streams, a streamable built-in the builtin layer rejects is qu
 });
 
 test("handleSend lets a handled /mcp through while streaming and sends an unowned one when idle", async () => {
-  const run = async (value, { isStreaming, handled }) => {
-    const calls = { builtin: [], sent: [] };
+  const run = async (value, { isStreaming, handled, outcome }) => {
+    const calls = { builtin: [], sent: [], cleared: 0, timeoutNotice: false };
     const handleSend = chatInputCallback("handleSend", {
       value,
       attachedFilesRef: { current: [] }, composeMessageWithAttachedFiles,
@@ -766,13 +798,18 @@ test("handleSend lets a handled /mcp through while streaming and sends an unowne
       // d5-9：发送基线快照读 valueRef（与 value 同值喂入，行为不变）。
       valueRef: { current: value },
       onAudioUnlock() {},
+      setBuiltinCommandTimeout(next) { calls.timeoutNotice = next; },
       isStreaming,
       workspaceUnavailable: null,
       offersBuiltinSlashCommandWhileStreaming,
       resolveSessionReferences: async (message) => message,
       sessionMentionTargetsRef: { current: new Map() },
-      runBuiltinCommand: async (message) => { calls.builtin.push(message); return handled; },
-      clearInput() {},
+      // runBuiltinCommand 的三态：handled / unhandled / timeout。
+      runBuiltinCommand: async (message) => {
+        calls.builtin.push(message);
+        return outcome ?? (handled ? "handled" : "unhandled");
+      },
+      clearInput() { calls.cleared += 1; },
       // 单飞闸门桩（上游 c9867eae）：真实实现负责解析 + 附件定序 + 单飞，再交给 submit。
       async submitResolvedMessage(message, images, submit) {
         submit(message, images.length ? images : undefined);
@@ -787,11 +824,13 @@ test("handleSend lets a handled /mcp through while streaming and sends an unowne
     await handleSend();
     return calls;
   };
-  assert.deepEqual(await run("/mcp", { isStreaming: true, handled: true }), { builtin: ["/mcp"], sent: [] });
-  assert.deepEqual(await run("/mcp", { isStreaming: false, handled: true }), { builtin: ["/mcp"], sent: [] });
-  assert.deepEqual(await run("/mcp", { isStreaming: false, handled: false }), { builtin: ["/mcp"], sent: ["/mcp"] });
+  assert.deepEqual(await run("/mcp", { isStreaming: true, handled: true }), { builtin: ["/mcp"], sent: [], cleared: 0, timeoutNotice: false });
+  assert.deepEqual(await run("/mcp", { isStreaming: false, handled: true }), { builtin: ["/mcp"], sent: [], cleared: 0, timeoutNotice: false });
+  assert.deepEqual(await run("/mcp", { isStreaming: false, handled: false }), { builtin: ["/mcp"], sent: ["/mcp"], cleared: 1, timeoutNotice: false });
+  // 超时：终止本次发送——不 onSend、不清输入，只亮「命令超时」提示。
+  assert.deepEqual(await run("/mcp", { isStreaming: false, outcome: "timeout" }), { builtin: ["/mcp"], sent: [], cleared: 0, timeoutNotice: true });
   // Streaming without steer handlers keeps any other message in the composer, as before.
-  assert.deepEqual(await run("/mcp login", { isStreaming: true, handled: false }), { builtin: [], sent: [] });
+  assert.deepEqual(await run("/mcp login", { isStreaming: true, handled: false }), { builtin: [], sent: [], cleared: 0, timeoutNotice: false });
 });
 
 test("restores text and base64 images when editing a user message", () => {
@@ -1026,9 +1065,10 @@ test("handleSend sends exactly once and routes builtin commands through the pend
       // d5-9：发送基线快照读 valueRef（与 value 同值喂入，行为不变）。
       valueRef: { current: value },
       onAudioUnlock() {},
+      setBuiltinCommandTimeout() {},
       runBuiltinCommand: async () => {
         builtinCalls += 1;
-        return builtinHandled;
+        return builtinHandled ? "handled" : "unhandled";
       },
       resolveSessionReferences: async (msg) => resolved ?? msg,
       sessionMentionTargetsRef: { current: [] },
@@ -1379,19 +1419,31 @@ test("handleSend/sendQueued 接线：捕获基线 + clearInput 前比对恢复",
 });
 
 // ── d5-19：内置命令挂起不再永久冻结 composer ─────────────────────────────
-test("runBuiltinCommand 有超时上限：超时按未处理返回且不 clearInput", async () => {
+test("runBuiltinCommand 三态：超时返回 timeout，调用方终止发送且不清输入", async () => {
   const { readFileSync } = await import("node:fs");
   const source = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
-  const start = source.indexOf("const runBuiltinCommand = useCallback(async (msg: string): Promise<boolean> => {");
-  assert.ok(start !== -1, "runBuiltinCommand 存在");
+  const start = source.indexOf("const runBuiltinCommand = useCallback(async (msg: string): Promise<BuiltinCommandOutcome> => {");
+  assert.ok(start !== -1, "runBuiltinCommand 存在且返回三态");
   const body = source.slice(start, source.indexOf("const handleSend", start));
   assert.match(body, /Promise\.race\(\[\s*onBuiltinCommand\(msg\),/, "必须对 onBuiltinCommand 加超时竞速");
   assert.match(body, /BUILTIN_COMMAND_TIMEOUT_MS/);
   assert.match(source, /const BUILTIN_COMMAND_TIMEOUT_MS = 15_000;/, "超时常量 15s");
-  // 超时分支：race 返回 null → 与 {handled:false} 同走 return false，不触发 clearInput。
-  assert.match(body, /if \(!result \|\| !result\.handled\) return false;/);
-  const raceToClear = body.slice(body.indexOf("if (!result || !result.handled) return false;"), body.indexOf("if (!result || !result.handled) return false;") + 260);
+  // 超时单列一态（不是「未处理」）；未处理仍走 unhandled 供调用方按普通消息继续。
+  assert.match(body, /if \(result === timedOut\) return "timeout";/, "超时必须返回 timeout");
+  assert.match(body, /if \(!result \|\| !result\.handled\) return "unhandled";/, "未处理保持 unhandled");
+  const raceToClear = body.slice(body.indexOf('if (result === timedOut) return "timeout";'));
   assert.ok(!/clearInput\(\)/.test(raceToClear.slice(0, raceToClear.indexOf("if (!result.error"))), "超时路径不得清空输入");
+
+  // handleSend：timeout 必须在进入 submitResolvedMessage 之前返回——
+  // 否则 /命令 会被当普通消息发给模型（原请求仍可能完成 → 双执行）。
+  const handleStart = source.indexOf("const handleSend = useCallback(async () => {");
+  const handleBody = source.slice(handleStart, source.indexOf("const slashQuery", handleStart));
+  assert.match(handleBody, /const builtinOutcome = await runBuiltinCommand\(msg\);/, "调用方必须检查三态结果");
+  assert.doesNotMatch(handleBody, /if \(builtinAllowed && await runBuiltinCommand\(msg\)\) return;/, "旧的 fall-through 写法必须移除");
+  const timeoutBranch = handleBody.indexOf('builtinOutcome === "timeout"');
+  assert.ok(timeoutBranch !== -1, "调用方必须有 timeout 分支");
+  assert.ok(timeoutBranch < handleBody.indexOf("submitResolvedMessage(msg"), "timeout 必须在发送前终止");
+  assert.match(handleBody.slice(timeoutBranch, timeoutBranch + 160), /setBuiltinCommandTimeout\(true\);\s*return;/, "超时只提示并终止发送、不清输入");
 });
 
 

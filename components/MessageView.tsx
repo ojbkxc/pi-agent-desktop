@@ -5,7 +5,7 @@ import ReactMarkdown from "react-markdown";
 import { MarkdownBody } from "./MarkdownBody";
 import { ImagePreview } from "./ImagePreview";
 import { ThinkingIcon } from "./ThinkingIcon";
-import { copyText } from "@/lib/clipboard";
+import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import { useI18n } from "@/hooks/useI18n";
 import { useDiffViewMode } from "@/hooks/useDiffViewMode";
 import { parseCompactionSummary } from "@/lib/compaction-summary";
@@ -58,6 +58,8 @@ function estimateTokens(text: string): number {
   }
   return cjk + rest / 4;
 }
+
+
 
 interface TokenEstimateCacheEntry {
   text: string;
@@ -377,7 +379,7 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
   isEditing?: boolean;
 }) {
   const { t, locale } = useI18n();
-  const [copied, setCopied] = useState(false);
+  const { copied, failed, copy } = useCopyFeedback();
   const [expanded, setExpanded] = useState(false);
 
   // Session files can hold `\r\n` or lone `\r` line endings (#680). Chrome renders
@@ -452,10 +454,7 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
   const canCancelEdit = !!isEditing && !!onCancelEdit;
 
   const copyContent = () => {
-    copyText(copyTarget).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    void copy(copyTarget);
   };
 
   return (
@@ -567,14 +566,14 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
                 padding: "3px 8px", height: "var(--control-h-sm)",
                 background: "none", border: "none",
                 borderRadius: "var(--radius-sm)",
-                color: copied ? "var(--accent)" : "var(--text-dim)",
+                color: failed ? "var(--danger)" : copied ? "var(--accent)" : "var(--text-dim)",
                 cursor: "pointer",
                 fontSize: "var(--fs-micro)", fontWeight: "var(--fw-regular)",
                 whiteSpace: "nowrap",
                 transition: "color var(--dur-fast) var(--ease-native)",
               }}
-              onMouseEnter={(e) => { if (!copied) e.currentTarget.style.color = "var(--accent)"; }}
-              onMouseLeave={(e) => { if (!copied) e.currentTarget.style.color = "var(--text-dim)"; }}
+              onMouseEnter={(e) => { if (!copied && !failed) e.currentTarget.style.color = "var(--accent)"; }}
+              onMouseLeave={(e) => { if (!copied && !failed) e.currentTarget.style.color = "var(--text-dim)"; }}
             >
               {copied ? (
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
@@ -586,7 +585,7 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
                   <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
                 </svg>
               )}
-               {copied ? t("i18n.copied") : t("i18n.copy")}
+               {failed ? t("i18n.copyFailed") : copied ? t("i18n.copied") : t("i18n.copy")}
             </button>
           </div>
           {(canFork || canEdit || canCancelEdit) && (
@@ -728,7 +727,7 @@ function AssistantMessageView({
   const providerError = getAssistantErrorMessage(message, { isStreaming });
   const truncated = isAssistantTruncated(message, { isStreaming });
   const unansweredTruncation = truncated && !hasAssistantAnswer(message);
-  const [copied, setCopied] = useState(false);
+  const { copied, failed, copy } = useCopyFeedback();
   const streamStartRef = useRef<number | null>(null);
   const [tps, setTps] = useState<number | null>(null);
   const blockItemsRef = useRef(blockItems);
@@ -787,10 +786,7 @@ function AssistantMessageView({
     .join("\n");
 
   const copyContent = () => {
-    copyText(textContent).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    void copy(textContent);
   };
 
   useEffect(() => {
@@ -997,14 +993,14 @@ function AssistantMessageView({
               padding: "3px 8px", height: "var(--control-h-sm)",
               background: "none", border: "none",
               borderRadius: "var(--radius-sm)",
-              color: copied ? "var(--accent)" : "var(--text-dim)",
+              color: failed ? "var(--danger)" : copied ? "var(--accent)" : "var(--text-dim)",
               cursor: "pointer",
               fontSize: "var(--fs-micro)", fontWeight: "var(--fw-regular)",
               whiteSpace: "nowrap",
               transition: "opacity var(--dur-fast) var(--ease-native), color var(--dur-fast) var(--ease-native)",
             }}
-            onMouseEnter={(e) => { if (!copied) e.currentTarget.style.color = "var(--accent)"; }}
-            onMouseLeave={(e) => { if (!copied) e.currentTarget.style.color = "var(--text-dim)"; }}
+            onMouseEnter={(e) => { if (!copied && !failed) e.currentTarget.style.color = "var(--accent)"; }}
+            onMouseLeave={(e) => { if (!copied && !failed) e.currentTarget.style.color = "var(--text-dim)"; }}
           >
             {copied ? (
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
@@ -1016,7 +1012,7 @@ function AssistantMessageView({
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
               </svg>
             )}
-             {copied ? t("i18n.copied") : t("i18n.copy")}
+             {failed ? t("i18n.copyFailed") : copied ? t("i18n.copied") : t("i18n.copy")}
           </button>
         )}
         {time && !isStreaming && (
@@ -2051,7 +2047,7 @@ function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessag
   const isHiddenDisplay = message.display === false;
   const [contentExpanded, setContentExpanded] = useState(!isHiddenDisplay);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const { copied, failed, copy } = useCopyFeedback();
   const text = getMessageText(message.content);
   const images = getMessageImages(message.content);
   const hasDetails = message.details !== undefined;
@@ -2060,10 +2056,7 @@ function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessag
   const time = formatTime(message.timestamp, locale);
 
   const copyContent = () => {
-    copyText(text || detailsText).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    void copy(text || detailsText);
   };
 
   return (
@@ -2154,12 +2147,12 @@ function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessag
                 padding: "3px 7px",
                 border: "none",
                 background: "none",
-                color: copied ? "var(--accent)" : "var(--text-dim)",
+                color: failed ? "var(--danger)" : copied ? "var(--accent)" : "var(--text-dim)",
                 cursor: "pointer",
                 fontSize: "var(--fs-micro)",
               }}
             >
-               {copied ? t("i18n.copied") : t("i18n.copy")}
+               {failed ? t("i18n.copyFailed") : copied ? t("i18n.copied") : t("i18n.copy")}
             </button>
           ) : null}
           {(hasDetails || isHiddenDisplay) && (

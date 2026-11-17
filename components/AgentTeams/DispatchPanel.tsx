@@ -211,6 +211,9 @@ export function DispatchPanel({
       };
       if (response.status === 409) {
         // 代际过期/running/多主：不自动重发——给「刷新」重取代际，由用户重新确认。
+        // 同时收起确认区：留在展开态的「确认」按钮会以新的 clientRequestId 再 POST，
+        // 后端幂等拦不住（interaction.md P1）。
+        setConfirming((current) => (current === rowKey ? null : current));
         setRowResults((prev) => ({
           ...prev,
           [rowKey]: { phase: "conflict", text: payload.error ?? t("teams.dispatch.conflict") },
@@ -227,7 +230,9 @@ export function DispatchPanel({
       }
       const delivery = payload.delivery;
       if (delivery?.skipped) {
-        // 已投递过（幂等 sidecar 判定）——不重发，也不给重试按钮。
+        // 已投递过（幂等 sidecar 判定）——不重发，也不给重试按钮。确认区一并收起：
+        // 已投递的行不该再留一个可点的「确认」（再点就是重复派活）。
+        setConfirming((current) => (current === rowKey ? null : current));
         setRowResults((prev) => ({ ...prev, [rowKey]: { phase: "skipped", text: t("teams.dispatch.skipped") } }));
         return;
       }
@@ -241,7 +246,9 @@ export function DispatchPanel({
         return;
       }
       // injected/woken/revived/buffered：如实渲染 outcome 文案——woken 只是「已投递，
-      // 唤醒中」，绝不宣称「已执行」。
+      // 唤醒中」，绝不宣称「已执行」。确认区收起，避免同一行被二次确认再次派活
+      // （interaction.md P1：成功分支此前只写 rowResults，确认面板仍在）。
+      setConfirming((current) => (current === rowKey ? null : current));
       setRowResults((prev) => ({ ...prev, [rowKey]: { phase: "delivered", text } }));
     } catch (error) {
       // 网络层失败：票面变更（ended 不可逆）已发生后投递可能未达——按 failed 给

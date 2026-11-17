@@ -988,7 +988,10 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
       setUploadError(null);
     }
 
-    setLoading(cwdChanged);
+    // 保留 Retry 刚设置的 loading：Retry 不改 cwd，若这里直接用 cwdChanged 覆盖，
+    // 重试期间会关掉骨架、又在 error 清空后瞬间显示「No files」空态（interaction.md P2）。
+    // 后台刷新（refreshKey/treeRefreshKey 非 Retry 变化）仍不显示骨架。
+    setLoading((alreadyLoading) => alreadyLoading || cwdChanged);
     setError(null);
     let cancelled = false;
     fetchEntries(cwd)

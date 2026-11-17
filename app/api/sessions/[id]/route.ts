@@ -32,6 +32,7 @@ import { samePath } from "@/lib/paths";
 import { moveFolderToTrash } from "@/lib/trash";
 import { disposeComposerQueueState } from "@/lib/composer-queue";
 import { replaceFileAtomicStream } from "@/lib/atomic-file";
+import { normalizeSessionName } from "@/lib/session-names";
 
 export async function GET(
   req: Request,
@@ -203,7 +204,7 @@ export async function PATCH(
     // set_session_name command this accepts "", which clears the title.
     const live = getRpcSession(id);
     if (live?.isAlive()) {
-      live.inner.setSessionName(name.trim());
+      live.inner.setSessionName(normalizeSessionName(name));
       invalidateSessionListCache();
       return NextResponse.json({ ok: true });
     }
@@ -213,7 +214,7 @@ export async function PATCH(
 
     // PATCH writes via appendSessionInfo — open fresh, bypassing the cache.
     const sm = openSessionManager(filePath, { mutable: true });
-    sm.appendSessionInfo(name.trim());
+    sm.appendSessionInfo(normalizeSessionName(name));
     invalidateSessionManagerCache(filePath);
     invalidateSessionListCache();
     return NextResponse.json({ ok: true });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { useModelCatalog } from "@/hooks/useModelCatalog";
 import { AppSelect } from "@/components/AppSelect";
@@ -153,6 +153,45 @@ interface Props {
   onDirtyChange?: (dirty: boolean) => void;
 }
 
+/** 成员名册 / 任务分配两列布局：窄屏（<720）改单列，任务行也改上下排列。 */
+const WIDE_EDITOR_GRID = "minmax(220px, 280px) minmax(0, 1fr)";
+const NARROW_EDITOR_GRID = "minmax(0, 1fr)";
+const WIDE_TASK_ROW = "minmax(0,1fr) minmax(160px, 220px)";
+const NARROW_TASK_ROW = "minmax(0, 1fr)";
+
+/**
+ * `repeat(auto-fit, minmax(...))` 之外的选择：外列 220+1fr 在 400px 视口下
+ * 右列只剩约 60px（负责人下拉被挤到屏外、dialog 出横向滚动）。窄屏改单列
+ * 是最小改动且不需要 CSS 文件（本组只用行内样式）。
+ */
+export function planEditorColumns(narrow: boolean): { grid: string; taskRow: string } {
+  return narrow
+    ? { grid: NARROW_EDITOR_GRID, taskRow: NARROW_TASK_ROW }
+    : { grid: WIDE_EDITOR_GRID, taskRow: WIDE_TASK_ROW };
+}
+
+/** 编辑器网格断点（720）：两列在更窄的视口里一定放不下负责人下拉。 */
+const NARROW_EDITOR_QUERY = "(max-width: 720px)";
+
+/**
+ * 本地 matchMedia 订阅（与 hooks/useIsMobile 同款实现，但断点是 720 而不是
+ * 全局的 640——那是移动工具栏的断点，不是本编辑器两列能否放下的判据）。
+ * SSR 安全：服务端与首帧按宽屏渲染，hydration 后同步。
+ */
+function useNarrowEditorGrid(): boolean {
+  const subscribe = useCallback((cb: () => void) => {
+    if (typeof window === "undefined" || !window.matchMedia) return () => {};
+    const mql = window.matchMedia(NARROW_EDITOR_QUERY);
+    mql.addEventListener("change", cb);
+    return () => mql.removeEventListener("change", cb);
+  }, []);
+  return useSyncExternalStore(
+    subscribe,
+    () => (typeof window !== "undefined" && window.matchMedia ? window.matchMedia(NARROW_EDITOR_QUERY).matches : false),
+    () => false,
+  );
+}
+
 const S = {
   roster: { display: "flex", flexDirection: "column", gap: 4, minWidth: 0 },
   row: (active: boolean) => ({
@@ -168,6 +207,7 @@ const S = {
   label: { fontSize: "var(--fs-micro)", color: "var(--text-muted)" },
   batch: { marginTop: 12, padding: 10, borderRadius: 10, background: "var(--bg-subtle, var(--bg-panel))", display: "flex", flexDirection: "column", gap: 8 },
   taskRow: { display: "grid", gap: 8, gridTemplateColumns: "minmax(0,1fr) minmax(160px, 220px)", alignItems: "start", padding: "6px 0", borderTop: "1px solid var(--border)" },
+  taskRowNarrow: { display: "grid", gap: 6, gridTemplateColumns: "minmax(0, 1fr)", alignItems: "start", padding: "6px 0", borderTop: "1px solid var(--border)" },
   footer: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12, flexWrap: "wrap" },
   alert: { color: "var(--danger)", fontSize: "var(--fs-caption)", margin: "6px 0" },
   hint: { fontSize: "var(--fs-micro)", color: "var(--text-dim)", margin: "4px 0 0" },
@@ -175,6 +215,10 @@ const S = {
 
 export function PlanEditor({ plan, cwd = null, editable, saving = false, saveError = null, onSave, conflict = false, onReload, onDirtyChange }: Props) {
   const { t } = useI18n();
+  // 窄屏（≤720）改单列：固定两列在 400px 视口下把负责人下拉挤出视口，
+  // dialog 出现横向滚动（interaction.md P2 #4）。与 useIsMobile 的 640 不同——
+  // 这里是编辑器网格本身的断点，720 以下是「两列一定不够用」的宽度。
+  const columns = planEditorColumns(useNarrowEditorGrid());
   const catalog = useModelCatalog();
   const [draft, setDraft] = useState(() => draftFromPlan(plan));
   const [activeMemberId, setActiveMemberId] = useState<string | null>(plan.members[0]?.id ?? null);
@@ -312,7 +356,7 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
         </div>
       ) : null}
 
-      <div style={{ display: "grid", gap: 16, gridTemplateColumns: "minmax(220px, 280px) minmax(0, 1fr)", alignItems: "start" }}>
+      <div style={{ display: "grid", gap: 16, gridTemplateColumns: columns.grid, alignItems: "start" }}>
         {/* 左：成员名册（勾选 + 当前模型） */}
         <section aria-label={t("teams.plan.roster")} style={S.roster}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
@@ -461,7 +505,7 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
               <p style={S.hint}>{t("teams.plan.noTasks")}</p>
             ) : (
               plan.tasks.map((task) => (
-                <div key={task.id} style={S.taskRow} data-task-id={task.id}>
+                <div key={task.id} style={columns.taskRow === NARROW_TASK_ROW ? S.taskRowNarrow : S.taskRow} data-task-id={task.id}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: "var(--fs-caption)", color: "var(--text)" }}>{task.subject}</div>
                     {task.dependencies.length > 0 && (

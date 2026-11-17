@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createJiti } from "jiti";
 
@@ -11,7 +12,7 @@ import { createJiti } from "jiti";
  */
 
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
-const { splitModelRef, joinModelRef, diffPlanEdits, draftFromPlan, isDraftDirty } =
+const { splitModelRef, joinModelRef, diffPlanEdits, draftFromPlan, isDraftDirty, planEditorColumns } =
   await jiti.import("./PlanEditor.tsx");
 
 const member = (over = {}) => ({
@@ -148,4 +149,27 @@ test("diffPlanEdits：模型没变的成员不进 PATCH（避免无谓 revision+
   draft.members.m1 = { ...draft.members.m1 };
   draft.tasks.t1 = "m1";
   assert.deepEqual(diffPlanEdits(base, draft), { members: [], tasks: [] });
+});
+// ── interaction.md P2 #4：窄屏横向溢出 ────────────────────────────────────────
+// 外层固定 minmax(220,280) + minmax(0,1fr)、任务行再固定 minmax(160,220)：400px
+// 视口下右列只剩约 60px，负责人下拉被挤出视口，dialog 出现横向滚动。
+test("planEditorColumns：宽屏两列 / 窄屏单列（任务行同样改上下排列）", () => {
+  const wide = planEditorColumns(false);
+  assert.match(wide.grid, /minmax\(220px, 280px\)/, "宽屏保留名册列");
+  assert.match(wide.taskRow, /minmax\(160px, 220px\)/, "宽屏负责人列保留");
+
+  const narrow = planEditorColumns(true);
+  assert.doesNotMatch(narrow.grid, /minmax\(220px/, "窄屏不得再有固定 220px 列");
+  assert.match(narrow.grid, /minmax\(0, 1fr\)$/);
+  assert.equal(narrow.taskRow, "minmax(0, 1fr)", "任务行窄屏单列（上下排列）");
+});
+
+test("窄屏接线：PlanEditor 用 720px 断点喂几何，任务行按列配置切换", async () => {
+  const source = (await readFile(new URL("./PlanEditor.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+  assert.match(source, /max-width: 720px/, "断点 720（全局 640 是移动工具栏的，不是本网格的）");
+  assert.match(source, /planEditorColumns\(useNarrowEditorGrid\(\)\)/);
+  assert.match(source, /gridTemplateColumns: columns\.grid/, "外层网格必须用同一配置");
+  assert.match(source, /columns\.taskRow === NARROW_TASK_ROW \? S\.taskRowNarrow : S\.taskRow/, "任务行按配置切换");
+  // 旧的裸两列定义必须从 JSX 里消失（否则窄屏仍会溢出）。
+  assert.doesNotMatch(source, /gridTemplateColumns: "minmax\(220px, 280px\) minmax\(0, 1fr\)"/);
 });

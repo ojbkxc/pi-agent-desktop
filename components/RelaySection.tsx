@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import qrcode from "qrcode-generator";
 import { useI18n } from "@/hooks/useI18n";
-import { copyText } from "@/lib/clipboard";
+import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import { formatRelativeTime } from "@/lib/i18n/format";
 import type { PendingPairing, RelayStatus } from "@/lib/relay/connector";
 import type { PairedDevice } from "@/lib/relay/store";
@@ -58,7 +58,8 @@ export function RelaySection() {
   const [error, setError] = useState<string | null>(null);
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const [copied, setCopied] = useState(false);
+  // 共享复制反馈：失败有提示、连点不互踩、卸载清理定时器。
+  const { copied, failed: copyFailed, copy } = useCopyFeedback();
   const [deviceToRemove, setDeviceToRemove] = useState<PairedDevice | null>(null);
 
   const load = useCallback(async (initial = false) => {
@@ -218,10 +219,8 @@ export function RelaySection() {
           <div className="relay-pairing">
             <QrCode text={pairing.url} />
             <span className="settings-option-hint">{t("relay.pairExpires", { seconds: secondsLeft })}</span>
-            <ConfigButton variant="ghost" onClick={() => {
-              void copyText(pairing.url).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); });
-            }}>
-              {copied ? t("relay.copied") : t("relay.copyLink")}
+            <ConfigButton variant="ghost" onClick={() => { void copy(pairing.url); }}>
+              {copyFailed ? t("i18n.copyFailed") : copied ? t("relay.copied") : t("relay.copyLink")}
             </ConfigButton>
           </div>
         )}

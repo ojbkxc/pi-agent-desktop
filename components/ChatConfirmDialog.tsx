@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
-import { openStackedDialog } from "@/lib/stacked-dialog";
+import { useModalDismiss } from "@/hooks/useModalDismiss";
 
 /**
  * Shared confirmation for conversation deletion and access to the computer.
@@ -37,7 +37,6 @@ export function ChatConfirmDialog({
   onConfirm: (checked: boolean) => void;
 }) {
   const id = useId();
-  const dialogRef = useRef<HTMLDivElement>(null);
   const [checked, setChecked] = useState(checkboxDefault);
   const busyRef = useRef(busy);
   const onCancelRef = useRef(onCancel);
@@ -45,13 +44,15 @@ export function ChatConfirmDialog({
     busyRef.current = busy;
     onCancelRef.current = onCancel;
   }, [busy, onCancel]);
-  useEffect(() => openStackedDialog(document, dialogRef.current, () => {
+  // 共享模态基建（hooks/useModalDismiss）：Esc 只关最上层（capture + preventDefault，
+  // 不会冒泡到 window 停掉运行中的 agent）、Tab 圈禁、初始焦点与关闭归还。
+  const dialogRef = useModalDismiss<HTMLDivElement>(() => {
     if (!busyRef.current) onCancelRef.current();
-  }), []);
+  });
   useEffect(() => {
     // Disabling the focused submit button can otherwise drop focus behind the modal.
     if (busy) dialogRef.current?.focus({ preventScroll: true });
-  }, [busy]);
+  }, [busy, dialogRef]);
 
   return (
     <div
@@ -71,18 +72,6 @@ export function ChatConfirmDialog({
         tabIndex={-1}
         className="project-trust-dialog chat-confirm-dialog"
         onClick={(event) => event.stopPropagation()}
-        onKeyDown={(event) => {
-          if (event.key !== "Tab") return;
-          const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled)"));
-          const first = controls[0];
-          const last = controls.at(-1);
-          if (!first) { event.preventDefault(); event.currentTarget.focus(); }
-          else if (event.shiftKey && (document.activeElement === first || document.activeElement === event.currentTarget)) {
-            event.preventDefault(); last?.focus();
-          } else if (!event.shiftKey && document.activeElement === last) {
-            event.preventDefault(); first.focus();
-          }
-        }}
       >
         <div className="project-trust-body">
           <div className="project-trust-content">
@@ -99,7 +88,7 @@ export function ChatConfirmDialog({
         </div>
         {error && <div role="alert" className="project-trust-error">{error}</div>}
         <div className="project-trust-footer">
-          <button type="button" className="project-trust-button" onClick={onCancel} disabled={busy}>
+          <button type="button" className="project-trust-button" onClick={onCancel} disabled={busy} data-autofocus>
             {cancelLabel}
           </button>
           <button

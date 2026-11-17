@@ -59,7 +59,10 @@ function parseSearchOutput(raw: string): SkillSearchResult[] {
 
 async function searchSkillsApi(query: string, limit: number): Promise<SkillSearchResult[]> {
   const url = `${SEARCH_API_BASE}/api/search?q=${encodeURIComponent(query)}&limit=${limit}`;
-  const res = await fetch(url, { cache: "no-store" });
+  // 外部搜索必须有超时：skills.sh 不可达但不是立即 RST（DNS 黑洞/丢包）时，无 signal 的
+  // await 会一直挂起（undici headersTimeout 默认 300s），下面的 npx 兜底永远触发不到。
+  // 超时让 fetch 抛 AbortError，落进调用方的 npx 兜底分支。
+  const res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(15_000) });
   if (!res.ok) throw new Error(`skills.sh search failed: HTTP ${res.status}`);
 
   const data = (await res.json()) as SkillsApiResponse;

@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useId, useRef } from "react";
 import type { ButtonHTMLAttributes, ClipboardEvent, CSSProperties, HTMLAttributes, ReactNode, Ref } from "react";
+import { useModalDismiss } from "@/hooks/useModalDismiss";
 
 type ConfigButtonVariant = "primary" | "secondary" | "danger" | "ghost";
 type ConfigButtonSize = "small" | "default";
@@ -34,17 +35,28 @@ export function ConfigPanelShell({
         "--config-panel-height": height,
       } as CSSProperties);
 
+  // Standalone panels are real modals; embedded ones live inside Settings, which
+  // owns dismissal. The shared hook adds the missing Tab trap / initial focus /
+  // focus restore (a11y P1), and keeps Radix Select portals working.
+  const panelRef = useModalDismiss<HTMLDivElement>(onClose, !embedded);
+
   return (
     <div
-      role={embedded ? undefined : "dialog"}
-      aria-modal={embedded ? undefined : "true"}
-      aria-label={title}
+      role={embedded ? undefined : "presentation"}
       className={`config-panel-root ${embedded ? "is-embedded" : "is-modal"}`}
       onClick={(event) => {
         if (!embedded && event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="config-panel-surface" style={panelStyle}>
+      <div
+        ref={embedded ? undefined : panelRef}
+        role={embedded ? undefined : "dialog"}
+        aria-modal={embedded ? undefined : "true"}
+        aria-label={embedded ? undefined : title}
+        tabIndex={embedded ? undefined : -1}
+        className="config-panel-surface"
+        style={embedded ? panelStyle : { ...panelStyle, outline: "none" }}
+      >
         {!embedded && (
           <div className="config-panel-header">
             <strong className="config-panel-title">{title}</strong>

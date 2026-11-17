@@ -119,6 +119,26 @@ test("ReclaimConfirm carries the display name and member count", () => {
   assert.match(html, /team-lifecycle-confirm-danger/);
 });
 
+// a11y.md P2：内联确认块不是模态，不能挂 alertdialog（语义与行为不符）。
+test("ReclaimConfirm 语义与行为一致：role=group + aria-label，取消按钮初始聚焦，Esc 取消", async () => {
+  const html = render(React.createElement(ReclaimConfirm, {
+    displayName: "demo",
+    memberCount: 2,
+    busy: false,
+    onConfirm: () => {},
+    onCancel: () => {},
+  }));
+  assert.match(html, /role="group"/, "内联区块用 group");
+  assert.doesNotMatch(html, /role="alertdialog"/, "不得声称模态语义");
+  assert.match(html, /aria-label=/, "组要有可访问名");
+  // 焦点落在「取消」而不是危险按钮；Esc 取消并把事件拦在本地。
+  const source = (await import("node:fs/promises")).readFile(new URL("./TeamLifecycleActions.tsx", import.meta.url), "utf8");
+  const text = await source;
+  assert.match(text, /cancelRef\.current\?\.focus\(\{ preventScroll: true \}\)/, "出现即聚焦取消");
+  assert.match(text, /event\.key === "Escape"[\s\S]*event\.stopPropagation\(\)/, "Esc 取消且不冒泡");
+  assert.match(text, /onCancel\(\);\s*\n\s*\}\s*\n\s*\}\}/, "Esc 调 onCancel");
+});
+
 test("TeamLifecycleActions shows stop and reclaim, no confirm until requested", () => {
   const html = render(React.createElement(TeamLifecycleActions, {
     team: "demo",

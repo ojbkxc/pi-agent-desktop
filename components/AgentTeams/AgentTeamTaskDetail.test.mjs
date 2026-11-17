@@ -12,7 +12,13 @@ import { createJiti } from "jiti";
  */
 
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
-const { AgentTeamTaskDetail, AgentTeamTaskDetailBody } = await jiti.import("./AgentTeamTaskDetail.tsx");
+const {
+  AgentTeamTaskDetail,
+  AgentTeamTaskDetailBody,
+  taskDetailDrawerGeometry,
+  clampTaskDetailRight,
+  TASK_DETAIL_NARROW_BREAKPOINT,
+} = await jiti.import("./AgentTeamTaskDetail.tsx");
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
@@ -188,4 +194,62 @@ test("抽屉经 createPortal 挂到 document.body（脱离 #view 的层叠上下
   assert.match(source, /createPortal\(/, "必须门户化");
   assert.match(source, /document\.body/, "门户目标必须是 document.body");
   assert.match(source, /typeof document === "undefined"/, "SSR 首帧无 document，必须守卫");
+});
+
+// ── css.md P2 #7：窄屏溢出（偏移量不夹）─────────────────────────────────────
+test("几何：窄视口（< 640）改左右各 8 的全宽低位抽屉，不再把抽屉推出屏", () => {
+  assert.equal(TASK_DETAIL_NARROW_BREAKPOINT, 640);
+  for (const width of [320, 375, 480, 639]) {
+    const geo = taskDetailDrawerGeometry(true, true, width);
+    assert.equal(geo.left, 8, `left 夹到 8 @${width}`);
+    assert.equal(geo.right, 8, `right 夹到 8 @${width}`);
+    assert.equal(geo.bottom, 8);
+    assert.equal(geo.width, "auto", "全宽（由 left/right 决定）");
+    assert.equal(geo.maxWidth, "none");
+  }
+  // 375×667 的原缺陷：left = 375 − 68 − 359 ≈ −52。新几何下恒不小于 8。
+  const geo375 = taskDetailDrawerGeometry(true, false, 375);
+  assert.ok(geo375.left >= 8);
+  // 通信栏开着时旧实现 right:396 直接离屏；新几何下同样贴边。
+  assert.equal(taskDetailDrawerGeometry(true, true, 375).right, 8);
+});
+
+test("几何：宽视口维持右下角，但右偏移动量按视口夹取（左边缘 ≥ 8）", () => {
+  // 960 宽：原偏移 68 / 396 都放得下。
+  assert.equal(clampTaskDetailRight(false, 960), 68);
+  assert.equal(clampTaskDetailRight(true, 960), 396);
+  // 768 宽 + dockOpen：360 + 396 = 756 ≤ 768 − 8 ⇒ 396 原样保留。夹取从 764 起生效
+  // （right = vw − 368 的那个点）。
+  assert.equal(clampTaskDetailRight(true, 768), 396);
+  assert.equal(clampTaskDetailRight(true, 764), 396);
+  assert.equal(clampTaskDetailRight(true, 763), 395);
+  // 700 宽 + dockOpen：原 396 会让 left = 700 − 396 − 360 = −56（出屏）⇒ 夹到 332。
+  assert.equal(clampTaskDetailRight(true, 700), 332);
+  // 下限 8：视口再窄也不会把抽屉推成负 left。
+  assert.equal(clampTaskDetailRight(false, 400), 32);
+  const geo = taskDetailDrawerGeometry(false, true, 700);
+  assert.equal(geo.width, 360);
+  assert.equal(geo.left, "auto");
+  assert.equal(geo.right, 332);
+});
+
+test("窄屏分支接入：组件用 useIsMobile 喂几何，且不再有未夹取的裸偏移", async () => {
+  const source = await readFile(new URL("./AgentTeamTaskDetail.tsx", import.meta.url), "utf8");
+  assert.match(source, /useIsMobile\(\)/, "窄屏形态来自共享断点 hook");
+  assert.match(source, /taskDetailDrawerGeometry\(\s*narrow/, "几何由纯函数计算");
+  // 旧的裸偏移（dockOpen ? 396 : 68）必须消失——它正是溢出根因。
+  assert.doesNotMatch(source, /right:\s*dockOpen \? 396 : 68/, "偏移必须夹取，不能再裸写");
+});
+
+// ── a11y.md P2：非模态抽屉关闭后把焦点还给任务卡 ──────────────────────────────
+test("焦点归还：记录打开前的 activeElement，关闭时仅在焦点仍在抽屉内/落到 body 时归还", async () => {
+  const source = await readFile(new URL("./AgentTeamTaskDetail.tsx", import.meta.url), "utf8");
+  assert.match(source, /openerRef\.current = .*document\.activeElement/s, "打开前记录 opener");
+  assert.match(source, /asideRef\.current\?\.focus\(\{ preventScroll: true \}\)/, "打开时聚焦自身");
+  // 归还条件与 focusModalPanel 同口径：焦点仍在抽屉内 / 落到 body / 丢失才归还。
+  assert.match(source, /asideRef\.current\.contains\(active\)/, "焦点在抽屉内才归还");
+  assert.match(source, /active === document\.body/, "焦点落到 body 才归还");
+  assert.match(source, /opener\.isConnected/, "opener 已卸载就不抢焦点");
+  // 非模态：不得加焦点陷阱（不能引入 useModalDismiss）。
+  assert.doesNotMatch(source, /useModalDismiss/, "抽屉是非模态，不要焦点陷阱");
 });

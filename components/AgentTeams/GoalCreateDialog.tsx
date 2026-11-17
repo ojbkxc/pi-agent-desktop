@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { useModalDismiss } from "@/hooks/useModalDismiss";
 import {
   GOAL_MAX_REPEAT_MS,
   GOAL_REPEAT_PRESETS,
@@ -50,10 +51,24 @@ export function buildGoalCommand(input: { condition: string; repeat: string }): 
   return parts.join(" ");
 }
 
+/**
+ * Start 的可用性判据（**导出**给组件与单测共用）：条件栏有正文，或重复栏解析出
+ * 合法间隔。B-2 审计：此前测试把公式复写了一遍，组件判据改坏也不会红——抽成这里后
+ * 两侧共用同一实现（反向验证：把它改成恒 true，测试立即变红）。
+ */
+export function canStartGoal(condition: string, repeat: string): boolean {
+  return condition.trim().length > 0 || parseGoalRepeat(repeat).intervalMs > 0;
+}
+
 export function GoalCreateDialog({ open, onSubmit, onCancel }: GoalCreateDialogProps) {
   const { t } = useI18n();
   const [condition, setCondition] = useState("");
   const [repeat, setRepeat] = useState("");
+
+  // 共享模态 hook：Esc 只关本层（preventDefault + stopPropagation，不会冒泡到
+  // 全局 Esc 停掉运行中的 agent），Tab 圈在面板内，关闭后焦点归还 /goal 按钮
+  // （a11y.md P2）。enabled 只取决于 open。
+  const panelRef = useModalDismiss<HTMLDivElement>(onCancel, open);
 
   // 每次打开都从默认值开始：「按计划重复」预填「不停迭代该项目」（Alma 的默认文案）。
   useEffect(() => {
@@ -63,7 +78,7 @@ export function GoalCreateDialog({ open, onSubmit, onCancel }: GoalCreateDialogP
   }, [open, t]);
 
   const parsed = useMemo(() => parseGoalRepeat(repeat), [repeat]);
-  const canStart = condition.trim().length > 0 || parsed.intervalMs > 0;
+  const canStart = canStartGoal(condition, repeat);
 
   if (!open) return null;
 
@@ -78,11 +93,12 @@ export function GoalCreateDialog({ open, onSubmit, onCancel }: GoalCreateDialogP
       role="presentation"
       onClick={(event) => { if (event.target === event.currentTarget) onCancel(); }}
       onKeyDown={(event) => {
-        if (event.key === "Escape") { event.stopPropagation(); onCancel(); }
+        // Esc 交给共享 hook（capture/冒泡收口 + preventDefault），这里只留
+        // Ctrl/Cmd+Enter 提交。
         if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); submit(); }
       }}
     >
-      <div className="goal-dialog" role="dialog" aria-modal="true" aria-label={t("goal.dialog.title")}>
+      <div ref={panelRef} className="goal-dialog" role="dialog" aria-modal="true" aria-label={t("goal.dialog.title")}>
         <h3 className="goal-dialog-title">{t("goal.dialog.title")}</h3>
 
         <label className="goal-dialog-label" htmlFor="goal-dialog-condition">

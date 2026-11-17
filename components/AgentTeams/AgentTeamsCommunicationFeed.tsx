@@ -6,7 +6,8 @@ import { MarkdownBody } from "@/components/MarkdownBody";
 import { useProgressiveReveal } from "@/hooks/useProgressiveReveal";
 import { useTranscriptFind } from "@/hooks/useTranscriptFind";
 import type { TeamWorkbenchSnapshot, WorkbenchMember, WorkbenchMessage } from "@/lib/agent-teams-swimlane";
-import type { TranslationParams } from "@/lib/i18n/types";
+import { formatUpdatedTime } from "@/lib/i18n/format";
+import type { Locale, TranslationParams } from "@/lib/i18n/types";
 
 type TranslationFn = (key: string, params?: TranslationParams) => string;
 type FeedCategory = "assignment" | "peer" | "report" | "system";
@@ -249,21 +250,26 @@ function isCompactRow(body: MessageBody, category: FeedCategory): boolean {
 }
 
 /** 一行按屏上顺序展示的文本，供「未挂载行」的查找。 */
-function feedRowFindText({ message, body, category }: VisibleRow, t: TranslationFn): string {
+function feedRowFindText({ message, body, category }: VisibleRow, t: TranslationFn, locale: Locale): string {
   const text = rowDisplayText(message, body, category, t);
   const task = message.taskId ? `#${message.taskId}` : "";
-  const time = formatMessageTime(message.timestamp);
+  const time = formatMessageTime(message.timestamp, locale);
   if (isCompactRow(body, category)) return [categoryLabel(category, t), text, task, time].join("\n");
   const recipient = message.kind === "broadcast" ? t("teams.communication.everyone") : message.to;
   return [categoryLabel(category, t), task, time, message.from, recipient, text].join("\n");
 }
 
-/** 消息发送的墙钟时刻（本地 HH:MM）。 */
-function formatMessageTime(timestamp: string): string {
+/**
+ * 消息发送的墙钟时刻（HH:MM）。
+ *
+ * 必须跟随**应用语言**，不是 OS locale（A-9）：原实现把空数组传给
+ * `toLocaleTimeString`（= 跟随系统），与仓库「Dates follow the app language」规则相反。
+ * 现改走 `formatUpdatedTime`（`lib/i18n/format.ts`）：今天显示钟点，跨天降级为
+ * 相对时间，也不会出现「只有 14:05 却不知道是哪天」。
+ */
+function formatMessageTime(timestamp: string, locale: Locale): string {
   const time = new Date(timestamp);
-  return Number.isNaN(time.getTime())
-    ? ""
-    : time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return Number.isNaN(time.getTime()) ? "" : formatUpdatedTime(time.getTime(), locale);
 }
 
 /** 成员头像字：取名称首字符，拉丁首字母大写；空名回退 "?"。 */
@@ -379,7 +385,7 @@ interface Props {
  * - 空态文案。
  */
 export function AgentTeamsCommunicationFeed({ snapshot, fill = false, onFocusTask }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [filter, setFilter] = useState<FeedFilter>("all");
 
   const rows = useMemo(
@@ -437,7 +443,7 @@ export function AgentTeamsCommunicationFeed({ snapshot, fill = false, onFocusTas
   useTranscriptFind({
     rows: visibleRows,
     rowKey: (row) => row.message.id,
-    rowText: (row) => feedRowFindText(row, t),
+    rowText: (row) => feedRowFindText(row, t, locale),
     revealThrough: reveal.revealThrough,
     anchorRef: reveal.scrollRootRef,
   });
@@ -513,6 +519,7 @@ export function AgentTeamsCommunicationFeed({ snapshot, fill = false, onFocusTas
                 snapshot={snapshot}
                 onFocusTask={onFocusTask}
                 t={t}
+                locale={locale}
               />
             ))}
           </div>
@@ -550,6 +557,7 @@ const FeedRow = memo(function FeedRow({
   snapshot,
   onFocusTask,
   t,
+  locale,
 }: {
   message: WorkbenchMessage;
   body: MessageBody;
@@ -560,10 +568,12 @@ const FeedRow = memo(function FeedRow({
   snapshot: TeamWorkbenchSnapshot;
   onFocusTask?: (taskId: string | null) => void;
   t: TranslationFn;
+  /** 应用语言（不是 OS locale）：时间戳按它格式化（A-9）。 */
+  locale: Locale;
 }) {
   const [expanded, setExpanded] = useState(false);
   const focusedTaskId = (body.kind === "assignment" ? body.taskId : undefined) ?? message.taskId;
-  const time = formatMessageTime(message.timestamp);
+  const time = formatMessageTime(message.timestamp, locale);
   const text = rowDisplayText(message, body, category, t);
   const compact = isCompactRow(body, category);
   const rowProps = {

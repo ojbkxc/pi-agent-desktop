@@ -255,13 +255,14 @@ test("a chat's row menu can continue it in a project", () => {
   // sidebar drawer, whose transform made it the containing block of these
   // full-screen fixed layers (clipped down to the drawer), and the portal also
   // lifts them onto the dialog layer above the top bar.
-  const continueBlock = source.slice(source.indexOf("{continueChat && createPortal("), source.indexOf("{projectPickerOpen && createPortal("));
-  assert.match(source, /\{continueChat && createPortal\(/);
-  assert.match(source, /\{projectPickerOpen && createPortal\(/);
-  assert.match(continueBlock, /document\.body/);
-  // Both are real modals for assistive tech (the add-project one used to miss its name).
-  assert.match(continueBlock, /role="dialog" aria-modal="true" aria-label=\{t\("sidebar\.continueInProject"\)\}/);
-  assert.match(source, /\{projectPickerOpen && createPortal\([\s\S]*?aria-modal="true" aria-label=\{t\("sidebar\.addProject"\)\}/);
+  const continueBlock = source.slice(source.indexOf("{continueChat && ("), source.indexOf("{projectPickerOpen && ("));
+  assert.match(source, /\{continueChat && \(/);
+  assert.match(source, /\{projectPickerOpen && \(/);
+  // Both pickers live in ProjectPickerModal, which portals to <body>.
+  assert.match(source, /function ProjectPickerModal\([\s\S]*?createPortal\([\s\S]*?document\.body/);
+  assert.match(continueBlock, /label=\{t\("sidebar\.continueInProject"\)\}/);
+  // Both are real modals for assistive tech, each with its own name.
+  assert.match(source, /\{projectPickerOpen && \([\s\S]*?label=\{t\("sidebar\.addProject"\)\}/);
 });
 
 test("a chat cwd skips worktree lookup and stays out of project pickers", () => {
@@ -422,4 +423,32 @@ test("the favicon counts sessions that finished while the tab was hidden (#1484)
     source,
     /\}, \[awaitingInputSessionIds, unreadSessionIds, hiddenFinishedSessionIds\]\);/,
   );
+});
+
+// a11y P0：两个全屏项目选择器过去只有「点遮罩」一条退出路径——Esc 无效、没有
+// 关闭按钮、初始焦点不进浮层，纯键盘用户只能 Tab 到项目列表并选中一个项目才能
+// 脱身（从而改变当前项目）。哨兵钉住共享 hook、取消按钮与两条入口。
+test("project picker modals are keyboard-escapable", () => {
+  assert.match(source, /function ProjectPickerModal\(/);
+  assert.match(source, /const panelRef = useModalDismiss<HTMLDivElement>\(onClose\);/);
+  assert.match(source, /role="dialog"\n\s*aria-modal="true"\n\s*aria-label=\{label\}/);
+  assert.match(source, /<button type="button" data-autofocus className="project-trust-button" onClick=\{onClose\}>/);
+  assert.equal((source.match(/<ProjectPickerModal/g) ?? []).length, 2);
+  // The dialog role moved off the bare overlay.
+  assert.doesNotMatch(source, /className="project-picker-modal-overlay" role="dialog"/);
+});
+
+// A-7：粘贴 1 MB 文本会整段写进 session_info。前端复用服务端同一个常量
+// （lib/session-names.ts；服务端上限由 fix-shared-css 修复），避免两侧漂移。
+test("rename input caps its length with the shared server limit", () => {
+  const start = source.indexOf("ref={inputRef}");
+  assert.ok(start > 0);
+  assert.match(source, /import \{ SESSION_NAME_MAX_LENGTH \} from "@\/lib\/session-names";/);
+  assert.match(source.slice(start, start + 500), /maxLength=\{SESSION_NAME_MAX_LENGTH\}/);
+});
+
+// css P2 #4：门户到 body 的锚定菜单必须用 popover 层令牌（低于对话框 1000）。
+test("the session item menu uses the popover layer token", () => {
+  assert.match(source, /className="native-popover app-menu session-item-menu"[\s\S]*?zIndex: "var\(--z-popover\)"/);
+  assert.doesNotMatch(source, /zIndex: 800/);
 });

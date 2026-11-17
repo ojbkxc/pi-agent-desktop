@@ -6,6 +6,13 @@ import path from "node:path";
 import test from "node:test";
 import { createJiti } from "jiti";
 
+// CI 覆盖说明（数据/测试审计 B-10）：本文件有一条 Windows 专属用例（junction /
+// 重解析点的路径安全断言，见下方 `skip: process.platform !== "win32"`）。仓库的
+// `npm test` 只在 ubuntu-latest 跑，Windows CI job 只跑 cargo test/clippy，所以该分支
+// 在 CI 里永远被 skip。**改 isDiffPathAllowed / 路径安全逻辑时必须在本机 Windows 上
+// 手动跑 `node --experimental-strip-types --test app/api/git/diff/route.test.mjs`。**
+// （未改 CI 配置：那属共享基础设施，需要用户批准。）
+
 // Windows 的 TEMP 可以是 8.3 短路径（见 lib/builtin-extensions.test.mjs）。git
 // rev-parse --show-toplevel 返回长路径，findRepositoryRoot 的文本比较对不上，
 // 每个仓库路径都先解成真实（长）路径。

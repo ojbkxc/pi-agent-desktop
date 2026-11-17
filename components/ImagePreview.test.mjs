@@ -41,6 +41,15 @@ test("closes only when the backdrop itself is clicked", () => {
   assert.match(source, /event\.target === event\.currentTarget[\s\S]*?closePreview\(\)/);
 });
 
+test("body scroll lock captures the old overflow and restores it on cleanup (B-5)", () => {
+  // 三处滚动锁的还原路径此前零断言：cleanup 漏还原一条分支，关闭预览后整页永久
+  // 不可滚动，CI 不会发现。这里锁定「先记原值 → 设 hidden → cleanup 还原」的形状。
+  assert.match(
+    source,
+    /const previousOverflow = document\.body\.style\.overflow;\s*\n[\s\S]*?document\.body\.style\.overflow = "hidden";[\s\S]*?return \(\) => \{\s*\n\s*document\.body\.style\.overflow = previousOverflow;/,
+  );
+});
+
 test("keeps the preview and Pi-style close button inside mobile safe areas", () => {
   assert.match(
     cssSource,

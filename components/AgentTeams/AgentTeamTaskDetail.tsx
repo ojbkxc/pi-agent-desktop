@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { getTicketUrgency, type TicketUrgency } from "@/lib/agent-teams-task-layout";
 import type { TeamWorkbenchSnapshot } from "@/lib/agent-teams-swimlane";
 
@@ -13,6 +14,43 @@ function ticketStateLabelKey(urgency: TicketUrgency): string {
   if (urgency === "failed") return "teams.status.failed";
   if (urgency === "blocked") return "teams.stats.blocked";
   return "teams.stats.available";
+}
+
+/** 抽屉切换到「低位全宽」形态的视口宽度门槛（与 useIsMobile / globals.css 同值）。 */
+export const TASK_DETAIL_NARROW_BREAKPOINT = 640;
+/** 宽屏抽屉宽度。 */
+export const TASK_DETAIL_WIDTH = 360;
+
+/**
+ * 抽屉右偏移的夹取（纯函数，便于单测；css.md P2 #7）：
+ * 抽屉宽 360，左边缘至少留 8px ⇒ right ≤ 视口 − 368。原实现的偏移量完全不夹——
+ * 375×667 下 left ≈ −52px（标题与 ✕ 出屏），通信栏打开时 right:396 直接把抽屉
+ * 推到屏幕外；768 宽 + dockOpen 只剩 12px，700 宽已为负。
+ */
+export function clampTaskDetailRight(dockOpen: boolean, viewportWidth: number): number {
+  // 左边缘至少留 8px：right ≤ 视口 − (抽屉宽 + 8)。
+  return Math.max(8, Math.min(dockOpen ? 396 : 68, viewportWidth - TASK_DETAIL_WIDTH - 8));
+}
+
+/**
+ * 抽屉几何：窄视口走左右各 8、底部 8 的全宽低位抽屉（窄屏上不再让位于右侧通信栏，
+ * 抽屉本身是全宽浮层）；宽视口维持右下角形态，但右偏移按视口夹取。
+ */
+export function taskDetailDrawerGeometry(
+  narrow: boolean,
+  dockOpen: boolean,
+  viewportWidth: number,
+): { left: number | "auto"; right: number | "auto"; bottom: number; width: number | "auto"; maxWidth: string } {
+  if (narrow || viewportWidth <= TASK_DETAIL_NARROW_BREAKPOINT) {
+    return { left: 8, right: 8, bottom: 8, width: "auto", maxWidth: "none" };
+  }
+  return {
+    left: "auto",
+    right: clampTaskDetailRight(dockOpen, viewportWidth),
+    bottom: 16,
+    width: TASK_DETAIL_WIDTH,
+    maxWidth: "min(360px, calc(100vw - 16px))",
+  };
 }
 
 export interface AgentTeamTaskDetailProps {
@@ -41,10 +79,27 @@ export function AgentTeamTaskDetailBody({
 }: AgentTeamTaskDetailProps) {
   const { t } = useI18n();
   const asideRef = useRef<HTMLElement>(null);
+  // 窄屏形态由共享断点 hook 提供（SSR 首帧按宽屏渲染，portal 挂载后才出现）。
+  const narrow = useIsMobile();
+  // 非模态抽屉的焦点归还（a11y.md P2）：打开前谁有焦点（任务卡），关闭后若焦点
+  // 仍在抽屉内或已掉到 body 就还给它。与 focusModalPanel 的归还条件同一口径：
+  // 用户中途把焦点移到别处就不抢。
+  const openerRef = useRef<HTMLElement | null>(null);
 
   // 打开即聚焦（键盘可达）：抽屉非模态，只需把焦点落到本面板，Esc 即可关闭。
   useEffect(() => {
+    openerRef.current = (typeof document === "undefined"
+      ? null
+      : document.activeElement as HTMLElement | null);
     asideRef.current?.focus({ preventScroll: true });
+    return () => {
+      const opener = openerRef.current;
+      if (!opener || !opener.isConnected) return;
+      const active = typeof document === "undefined" ? null : document.activeElement;
+      const stillOurs = active === null || active === document.body
+        || Boolean(asideRef.current && asideRef.current.contains(active));
+      if (stillOurs) opener.focus({ preventScroll: true });
+    };
   }, []);
 
   const ticket = useMemo(
@@ -76,6 +131,12 @@ export function AgentTeamTaskDetailBody({
     </span>
   );
 
+  const geometry = taskDetailDrawerGeometry(
+    narrow,
+    dockOpen,
+    typeof window === "undefined" ? 1024 : window.innerWidth,
+  );
+
   return (
     <aside
       ref={asideRef}
@@ -95,11 +156,13 @@ export function AgentTeamTaskDetailBody({
         // `.scheduled-view`（absolute + z 30，overflow 由本视图内联成 hidden）的裁剪盒
         // 裁掉，且其层叠上下文把抽屉压到顶栏（--z-chrome=90）之下（裁切与封顶是两条
         // 独立机制，见组件注释）。fixed 以视口为包含块，门户后不再受祖先影响。
+        // 几何交给 taskDetailDrawerGeometry：窄屏全宽低位、宽屏偏移夹取（css.md P2 #7）。
         position: "fixed",
-        right: dockOpen ? 396 : 68,
-        bottom: 16,
-        width: 360,
-        maxWidth: "min(360px, calc(100vw - 16px))",
+        right: geometry.right,
+        left: geometry.left,
+        bottom: geometry.bottom,
+        width: geometry.width,
+        maxWidth: geometry.maxWidth,
         zIndex: "var(--z-popover)",
         border: "var(--hairline) solid var(--border)",
         borderRadius: "var(--radius-lg)",

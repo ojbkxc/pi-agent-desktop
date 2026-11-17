@@ -118,3 +118,22 @@ test("isActiveTeamPhase 仅活跃期", () => {
   assert.equal(isActiveTeamPhase("ended"), false);
   assert.equal(isActiveTeamPhase(undefined), false);
 });
+
+// ── state.md P2：refreshKey（消息计数）不能把已显示的团队条清空再挂回 ─────────
+// 无 DOM 渲染器，hook 的 effect 驱动不了；这里钉住接线形状：setSnapshot(null) 必须
+// 在只依赖 sessionId 的独立 effect 里，主轮询 effect 的开头不得再无条件清空。
+test("接线：setSnapshot(null) 只在 sessionId 变化时执行（refreshKey 只补拉，不清旧快照）", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const raw = await readFile(new URL("./useActiveTeamStrip.ts", import.meta.url), "utf8");
+  const source = raw.replace(/\r\n/g, "\n");
+
+  // 独立的清空 effect：依赖数组里只有 sessionId。
+  const resetEffect = source.indexOf("useEffect(() => {\n    setSnapshot(null);\n  }, [sessionId]);");
+  assert.ok(resetEffect > 0, "setSnapshot(null) 必须住在只依赖 sessionId 的 effect 里");
+  // 主轮询 effect 的依赖仍是 sessionId + refreshKey（refreshKey 继续触发补拉）。
+  assert.match(source, /\}, \[sessionId, refreshKey\]\);/);
+  // 主 effect 开头不得再无条件清空（旧缺陷：每发一条消息条就闪一次）。
+  const mainEffect = source.slice(source.indexOf("if (!sessionId) return;"));
+  const head = mainEffect.slice(0, mainEffect.indexOf("let stopped"));
+  assert.doesNotMatch(head, /setSnapshot\(null\)/, "主 effect 开头不得清空快照");
+});

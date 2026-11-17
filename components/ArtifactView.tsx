@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "@/hooks/useI18n";
-import { copyText } from "@/lib/clipboard";
+import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import { downloadUrlAsFile } from "@/lib/desktop-native";
 import { artifactFileName, artifactHasActiveContent, type ArtifactVersion } from "@/lib/artifacts";
 import { HTML_PREVIEW_SANDBOX, buildHtmlPreviewDocument, htmlPreviewFollowsTheme } from "@/lib/html-preview";
@@ -69,7 +69,8 @@ export function ArtifactView({ identifier, title, versions, versionRequest, onFi
   const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
   // null: the default for the version (source when held, else preview).
   const [showSource, setShowSource] = useState<boolean | null>(null);
-  const [copied, setCopied] = useState(false);
+  // 复制反馈走共享 hook：失败也有提示，且连点两次不会让上一次的定时器提前复位。
+  const { copied, copy: copyFeedback } = useCopyFeedback();
   const frameRef = useRef<HTMLIFrameElement>(null);
   const options = useHtmlPreviewOptions();
 
@@ -111,10 +112,7 @@ export function ArtifactView({ identifier, title, versions, versionRequest, onFi
   const selectVersion = (next: number) => setPinnedIndex(next >= latestIndex ? null : next);
 
   const copy = () => {
-    void copyText(version.content).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    void copyFeedback(version.content);
   };
 
   const download = () => {

@@ -118,6 +118,10 @@ function addNotice(input: AppNoticeInput): string {
   notices = next;
   emit();
   if (overflowing && exitingIds.length > 0) {
+    // 先清掉上一个已排定的到期定时器再赋值：否则它的句柄丢失，之后回调用
+    // scheduleExpiry() 时会 clear 掉这里新排定的移除定时器，退场通知永远停在
+    // exiting（不可见却占名额）。state.md 审计 P2。
+    clearExpiryTimer();
     expiryTimer = setTimeout(() => {
       notices = notices.filter((item) => !exitingIds.includes(item.id));
       emit();

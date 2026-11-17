@@ -25,3 +25,10 @@ test("the page still polls only while visible", () => {
   assert.match(view, /isVisible: \(\) => document\.visibilityState === "visible"/);
   assert.match(view, /document\.addEventListener\("visibilitychange", onVisible\)/);
 });
+
+test("Escape on the Tasks page never reaches the global shortcut (stops the running agent)", () => {
+  // interaction.md P1：整页视图盖在聊天列上，聊天与 AgentSession 并未卸载；根节点
+  // 把焦点抢走后按 Esc 会冒泡到 window 的全局 abort。与 ScheduledView / AutofixView
+  // 同款：在根节点吞掉 Escape。
+  assert.match(view, /className="scheduled-view tasks-view"[\s\S]{0,400}?onKeyDown=\{\(event\) => \{[\s\S]{0,200}?event\.key === "Escape"[\s\S]{0,80}?event\.preventDefault\(\)/);
+});

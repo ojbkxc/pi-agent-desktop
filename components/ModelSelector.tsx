@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { isImeComposing } from "@/lib/ime";
@@ -254,7 +255,13 @@ export function ModelSelector({
           ? { left: 8, right: 8, maxWidth: "calc(100vw - 16px)" }
           : { left: anchorRect.left, width: "max-content", minWidth: anchorRect.width, maxWidth: Math.max(anchorRect.width, viewportWidth - anchorRect.left - 8) };
 
-        return (
+        return createPortal(
+          // Portaled to <body>: the Settings surface keeps an identity transform
+          // from its entry animation (`animation ... both`), which makes every
+          // fixed descendant use the dialog as its containing block while this
+          // panel's coordinates come from getBoundingClientRect(). Without the
+          // portal it is offset by the dialog's corner and clipped by its
+          // overflow — and only for users who do not run reduced motion.
           <div
             ref={panelRef}
             className="native-popover app-menu"
@@ -345,7 +352,8 @@ export function ModelSelector({
                 </div>
               ))}
             </div>
-          </div>
+          </div>,
+          document.body,
         );
       })()}
     </div>

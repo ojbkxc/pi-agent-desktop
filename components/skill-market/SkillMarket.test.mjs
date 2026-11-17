@@ -527,3 +527,23 @@ test("整页骨架：SkillMarketView 首屏渲染不崩（SSR 无副作用，无
   assert.ok(html.includes('data-testid="market-disclaimer"'), "首屏免责声明");
   assert.ok(!text(html).includes("market."), "不得渲染裸 i18n 键");
 });
+
+test("安装确认是内联 group，出现时把焦点移到取消（不是假模态 alertdialog）", async () => {
+  // a11y.md P2：安装确认是普通内联区块，却标成 role="alertdialog" 且无焦点管理，
+  // 语义与实际行为不符。改成 group + aria-label，并在出现时聚焦「取消」。
+  const { readFile } = await import("node:fs/promises");
+  const source = (await readFile(new URL("./SkillMarketDetail.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+  assert.match(source, /<div className="market-confirm" role="group" aria-label=\{t\("market\.confirmTitle"\)\}>/);
+  assert.doesNotMatch(source, /className="market-confirm" role="alertdialog"/);
+  assert.match(source, /const cancelConfirmRef = useRef<HTMLButtonElement>\(null\)/);
+  assert.match(source, /if \(selectedId && confirming && !installedCandidate\) cancelConfirmRef\.current\?\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(source, /<button ref=\{cancelConfirmRef\} type="button" className="scheduled-button is-secondary"/);
+  // hook 必须无条件调用：focus effect 必须声明在 selectedId 的 early return 之前，
+  // 否则首次渲染（selectedId=null）0 个额外 hook、点开技能后 +1，React 抛
+  // "Rendered more hooks than during the previous render"，市场页点开详情即崩。
+  const focusEffect = source.indexOf("if (selectedId && confirming && !installedCandidate)");
+  const earlyReturn = source.indexOf("if (!selectedId) return null;");
+  assert.notEqual(focusEffect, -1, "确认区 focus effect 缺失");
+  assert.notEqual(earlyReturn, -1, "selectedId early return 缺失");
+  assert.ok(focusEffect < earlyReturn, "focus effect 必须在 selectedId early return 之前（hook 不能条件调用）");
+});

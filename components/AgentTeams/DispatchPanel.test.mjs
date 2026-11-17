@@ -150,6 +150,31 @@ test("源码钉法：在途禁双击、仅 failed 有重试、conflict 只有刷
   assert.match(source, /phase: "skipped", text: t\("teams\.dispatch\.skipped"\)/);
 });
 
+// interaction.md P1：派活成功（delivered/skipped/conflict）后必须收起确认区，否则
+// 再点一次「确认」会以新的 clientRequestId 再 POST（后端幂等拦不住 → 成员收到两条）。
+// 三个分支的分支体不可达（renderToStaticMarkup 不驱动请求），用源码哨兵钉住。
+test("源码钉法：成功 / skipped / 冲突分支都收起确认区（setConfirming(null)）", () => {
+  const MARK = "setConfirming((current) => (current === rowKey ? null : current))";
+  const start = source.indexOf("// injected/woken/revived/buffered");
+  assert.ok(start > 0, "delivered 分支存在");
+  // 从「injected/woken」注释起，截到该分支结束（execute 的下一个 finally）。
+  const deliveredBlock = source.slice(start, source.indexOf("} finally {", start));
+  assert.ok(deliveredBlock.includes(MARK), "delivered 分支必须 setConfirming(null)");
+  assert.match(deliveredBlock, /phase: "delivered"/);
+
+  const skippedBlock = source.slice(source.indexOf("delivery?.skipped"), start);
+  assert.ok(skippedBlock.includes(MARK), "skipped 分支必须 setConfirming(null)");
+
+  const conflictStart = source.indexOf("response.status === 409");
+  const conflictBlock = source.slice(conflictStart, source.indexOf("if (!response.ok || payload.error)", conflictStart));
+  assert.ok(conflictBlock.includes(MARK), "409 冲突分支必须 setConfirming(null)");
+
+  // 渲染条件本身也保证「已完成行不再渲染确认区」：!result 才显示展开按钮，确认区只在
+  // confirming === rowKey 时渲染——配合上面的收起，重复派活没有入口。
+  assert.match(source, /\{confirming === rowKey && !isAddMember && \(/);
+  assert.match(source, /\{!result && confirming !== rowKey && \(/);
+});
+
 test("源码钉法：边界三件套——无定时器、workload 失败降级不抛出、outcome 不凭 ok 猜", () => {
   // 无自动轮询定时器（刷新只随快照节奏 + 手动按钮）。
   assert.doesNotMatch(source, /setInterval/);

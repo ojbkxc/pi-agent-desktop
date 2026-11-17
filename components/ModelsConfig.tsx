@@ -5,6 +5,7 @@ import { AppSelect } from "./AppSelect";
 import { useState, useEffect, useCallback, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
+import { useModalDismiss } from "@/hooks/useModalDismiss";
 import type { ModelCatalogPreset, ModelCatalogRecommendation } from "@/lib/model-catalog";
 import type { DiscoveredModel } from "@/lib/model-discovery";
 import {
@@ -1470,11 +1471,27 @@ function OAuthDetail({ provider, onRefresh, enabledModels }: {
     };
   }, [provider.id, onRefresh]);
 
+  // 断开连接是不可重入的服务端动作：双击会发两个 POST，失败时旧实现照样把
+  // 界面切成「未连接」，用户以为已经断开。busy + res.ok 一起修。
+  const [logoutBusy, setLogoutBusy] = useState(false);
   const handleLogout = useCallback(async () => {
-    await fetch(`/api/auth/logout/${encodeURIComponent(provider.id)}`, { method: "POST" });
-    setLoginState({ phase: "idle" });
-    onRefresh();
-  }, [provider.id, onRefresh]);
+    if (logoutBusy) return;
+    setLogoutBusy(true);
+    try {
+      const res = await fetch(`/api/auth/logout/${encodeURIComponent(provider.id)}`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        setLoginState({ phase: "error", message: data.error ?? `Server error ${res.status}` });
+        return;
+      }
+      setLoginState({ phase: "idle" });
+      onRefresh();
+    } catch (e) {
+      setLoginState({ phase: "error", message: e instanceof Error ? e.message : "Network error" });
+    } finally {
+      setLogoutBusy(false);
+    }
+  }, [logoutBusy, provider.id, onRefresh]);
 
   const submitCode = useCallback(async (token: string, code: string) => {
     if (!code.trim()) return;
@@ -1552,6 +1569,7 @@ function OAuthDetail({ provider, onRefresh, enabledModels }: {
                   variant="danger"
                   size="small"
                   onClick={handleLogout}
+                  disabled={logoutBusy}
                 >
                    {t("i18n.disconnect")}
                 </ConfigButton>
@@ -1667,7 +1685,9 @@ function ApiKeyDetail({ provider, onRefresh, enabledModels }: {
   }, [provider.id]);
 
   const handleSave = useCallback(async () => {
-    if (!apiKey.trim()) return;
+    // The Save button is disabled while saving, but the Enter path bypassed it:
+    // two quick Enters produced two POSTs.
+    if (!apiKey.trim() || saving) return;
     setSaving(true);
     setError(null);
     setSavedOk(false);
@@ -1691,7 +1711,7 @@ function ApiKeyDetail({ provider, onRefresh, enabledModels }: {
     } finally {
       setSaving(false);
     }
-  }, [apiKey, provider.id, onRefresh]);
+  }, [apiKey, provider.id, onRefresh, saving]);
 
   const handleRemove = useCallback(async () => {
     setRemoving(true);
@@ -1744,7 +1764,7 @@ function ApiKeyDetail({ provider, onRefresh, enabledModels }: {
         <SecretTextInput
           value={apiKey}
           onChange={setApiKey}
-          onKeyDown={(e) => { if (e.key === "Enter" && apiKey.trim()) handleSave(); }}
+          onKeyDown={(e) => { if (e.key === "Enter" && apiKey.trim() && !saving && !savedOk) handleSave(); }}
           placeholder={provider.configured ? "Enter new key to replace…" : "sk-…"}
           style={{ flex: 1 }}
           autoComplete="off"
@@ -1799,9 +1819,11 @@ function AddProviderPicker({
 }: AddProviderPickerProps) {
   const [search, setSearch] = useState("");
   const { t } = useI18n();
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 30); }, []);
+  // 这个弹窗叠在 Settings 上。Esc 过去绑在根节点的 onKeyDown 上：Tab 一旦离开
+  // 弹窗、焦点落到后面的 Settings，Esc 就没有任何反应（键盘用户既不在模态里、
+  // 也关不掉模态），而且关闭后不归还焦点。共享 hook 在 document 上接管 Esc，
+  // 并用模态栈让一次 Esc 只关这一层；初始焦点仍落在搜索框（第一个可聚焦元素）。
+  const panelRef = useModalDismiss<HTMLDivElement>(onClose);
 
   const q = search.trim().toLowerCase();
 
@@ -1829,17 +1851,9 @@ function AddProviderPicker({
 
   return (
     <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={t("i18n.addProvider")}
+      role="presentation"
       style={{ position: "fixed", inset: 0, zIndex: "var(--z-modal-nested, 1100)", background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center" }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-      onKeyDown={(e) => {
-        if (e.key !== "Escape") return;
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-      }}
     >
       {/* Portaled to <body>: Settings keeps a transform from its entry
           animation, which made the dialog the containing block of this fixed
@@ -1847,14 +1861,20 @@ function AddProviderPicker({
           reduced-motion users. Against the viewport, inset:0 and the
           max-height below are stable; --z-modal-nested is the dialog-above-a-
           dialog tier (--z-modal is the settings dialog, --z-toast toasts). */}
-      <div style={{ width: 820, maxWidth: "calc(100% - 48px)", maxHeight: "calc(100% - 48px)", minHeight: 0, background: "var(--bg)", border: "var(--hairline) solid var(--border)", borderRadius: "var(--radius-lg)", display: "flex", flexDirection: "column", boxShadow: "var(--shadow-dialog)", overflow: "hidden" }}>
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("i18n.addProvider")}
+        tabIndex={-1}
+        style={{ width: 820, maxWidth: "calc(100% - 48px)", maxHeight: "calc(100% - 48px)", minHeight: 0, background: "var(--bg)", border: "var(--hairline) solid var(--border)", borderRadius: "var(--radius-lg)", display: "flex", flexDirection: "column", boxShadow: "var(--shadow-dialog)", overflow: "hidden", outline: "none" }}
+      >
         {/* Search */}
         <div style={{ padding: "10px 14px", borderBottom: "var(--hairline) solid var(--border)", flexShrink: 0, display: "flex", alignItems: "center", gap: 8 }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--text-dim)", flexShrink: 0 }}>
             <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
           <input
-            ref={inputRef}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
              placeholder={t("i18n.searchProviders")}

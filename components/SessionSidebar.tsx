@@ -7,6 +7,7 @@ import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
 import { skillExpansionToCommand } from "@/lib/slash-display";
 import { workspaceKeyOf } from "@/lib/workspace-memory";
 import { useI18n } from "@/hooks/useI18n";
+import { useModalDismiss } from "@/hooks/useModalDismiss";
 import { formatCompactRelativeTime, formatRelativeTime } from "@/lib/i18n/format";
 import { createPortal } from "react-dom";
 import { ProjectPicker, selectProjectDirectoryNative } from "./ProjectPicker";
@@ -23,6 +24,7 @@ import {
 } from "./ProjectContextMenu";
 import { useProjectWorktreeActions } from "@/hooks/useProjectWorktreeActions";
 import { getRecentProjects } from "./path-ui";
+import { SESSION_NAME_MAX_LENGTH } from "@/lib/session-names";
 import { APP_PREF_KEYS, getPref, getPrefJson, removePref, setPref, setPrefJson } from "@/lib/app-prefs";
 import { groupByProject } from "@/lib/project-group";
 import { getProjectDisplayName, getProjectDisplayNames } from "@/lib/project-display";
@@ -2592,40 +2594,84 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           transform, which becomes the containing block of fixed descendants and
           clipped this full-screen modal down to the drawer; the portal also puts
           it on the dialog layer (--z-modal) above the topbar. */}
-      {continueChat && createPortal(
-        <div className="project-picker-modal-overlay" role="dialog" aria-modal="true" aria-label={t("sidebar.continueInProject")} onClick={() => setContinueChat(null)}>
-          <div className="project-picker-modal-shell" onClick={(e) => e.stopPropagation()}>
-            <ProjectPicker
-              recentProjects={recentProjects}
-              selectedCwd={null}
-              selectedProject={null}
-              homeDir={homeDir}
-              onSelectCwd={(cwd) => void continueChatInProject(continueChat, cwd)}
-              variant="block"
-            />
-          </div>
-        </div>,
-        document.body,
+      {continueChat && (
+        <ProjectPickerModal
+          label={t("sidebar.continueInProject")}
+          onClose={() => setContinueChat(null)}
+        >
+          <ProjectPicker
+            recentProjects={recentProjects}
+            selectedCwd={null}
+            selectedProject={null}
+            homeDir={homeDir}
+            onSelectCwd={(cwd) => void continueChatInProject(continueChat, cwd)}
+            variant="block"
+          />
+        </ProjectPickerModal>
       )}
-      {projectPickerOpen && createPortal(
-        <div className="project-picker-modal-overlay" role="dialog" aria-modal="true" aria-label={t("sidebar.addProject")} onClick={() => setProjectPickerOpen(false)}>
-          <div className="project-picker-modal-shell" onClick={(e) => e.stopPropagation()}>
-            <ProjectPicker
-              recentProjects={recentProjects}
-              selectedCwd={selectedCwdProp && !isChatCwd(selectedCwdProp) ? selectedCwdProp : null}
-              selectedProject={selectedProjectRoot}
-              homeDir={homeDir}
-              onSelectCwd={(cwd) => {
-                activateProject(cwd);
-                setProjectPickerOpen(false);
-              }}
-              variant="block"
-            />
-          </div>
-        </div>,
-        document.body,
+      {projectPickerOpen && (
+        <ProjectPickerModal
+          label={t("sidebar.addProject")}
+          onClose={() => setProjectPickerOpen(false)}
+        >
+          <ProjectPicker
+            recentProjects={recentProjects}
+            selectedCwd={selectedCwdProp && !isChatCwd(selectedCwdProp) ? selectedCwdProp : null}
+            selectedProject={selectedProjectRoot}
+            homeDir={homeDir}
+            onSelectCwd={(cwd) => {
+              activateProject(cwd);
+              setProjectPickerOpen(false);
+            }}
+            variant="block"
+          />
+        </ProjectPickerModal>
       )}
     </div>
+  );
+}
+
+/**
+ * 「继续到项目 / 添加项目」的全屏选择器。
+ *
+ * 两个入口过去只有「点遮罩」一条退出路径：Esc 无效、没有关闭按钮、初始焦点
+ * 留在打开它的触发项上，Tab 会在被遮罩的背景控件里走——纯键盘用户只能一路
+ * Tab 到项目列表并选中一个项目（从而改变当前项目）才能脱身（a11y P0）。
+ * 共享 hook 负责 Esc、Tab 圈禁与焦点归还；底部补一个「取消」并让初始焦点落在
+ * 它上面，避免回车即选中第一个项目。
+ */
+function ProjectPickerModal({ label, onClose, children }: {
+  label: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const { t } = useI18n();
+  const panelRef = useModalDismiss<HTMLDivElement>(onClose);
+  return createPortal(
+    <div
+      className="project-picker-modal-overlay"
+      role="presentation"
+      onClick={onClose}
+    >
+      <div
+        ref={panelRef}
+        className="project-picker-modal-shell"
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+        tabIndex={-1}
+        style={{ outline: "none", position: "relative" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {children}
+        <div style={{ display: "flex", justifyContent: "flex-end", padding: "8px 12px", borderTop: "var(--hairline) solid var(--border)" }}>
+          <button type="button" data-autofocus className="project-trust-button" onClick={onClose}>
+            {t("i18n.cancel")}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -3183,6 +3229,9 @@ function SessionItem({
           ref={inputRef}
           value={renameValue}
           onChange={(e) => setRenameValue(e.target.value)}
+          // 与服务端 PATCH /api/sessions/[id] 共用同一个上限（A-7）。没有它时
+          // 粘贴 1 MB 文本会整段写进 session_info，拖慢之后每一次侧栏读取。
+          maxLength={SESSION_NAME_MAX_LENGTH}
           onBlur={commitRename}
           onKeyDown={(e) => {
             if (isImeComposing(e)) return;
@@ -3340,7 +3389,7 @@ function SessionItem({
                 position: "fixed",
                 top: (placedMenuPos ?? menuPos).top,
                 left: (placedMenuPos ?? menuPos).left,
-                width: MENU_WIDTH, zIndex: 800, padding: 5,
+                width: MENU_WIDTH, zIndex: "var(--z-popover)", padding: 5,
                 display: "flex", flexDirection: "column", gap: 1,
               }}
             >

@@ -3,6 +3,7 @@
 import { type CSSProperties, type FormEvent, useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
+import { useModalDismiss } from "@/hooks/useModalDismiss";
 import { isImeComposing } from "@/lib/ime";
 
 interface DirectoryEntry {
@@ -192,23 +193,36 @@ export function DirectoryPicker({ onCancel, onSelect, initialPath, busy = false,
   const canCreate = canSelect && !loading;
   const canNavigateUp = Boolean(parentDirectory) || isWindowsDriveRoot(currentPath);
 
+  // Esc / Tab 圈禁 / 初始焦点 / 关闭归还都走共享模态栈：Esc 在 capture 阶段被
+  // preventDefault + stopPropagation，不会冒泡到 window 的全局快捷键把运行中的
+  // agent 停掉（a11y.md P1）。busy 时仍占据栈顶但不关闭。
+  const requestCancel = useCallback(() => {
+    if (!busy) onCancel();
+  }, [busy, onCancel]);
+  const panelRef = useModalDismiss<HTMLDivElement>(requestCancel);
+  // 「新建目录」是叠在目录选择器之上的第二层模态：只在 createOpen 期间入栈，
+  // 一次 Esc 只关这一层（closeCreateDialog 自己会忽略 creating 中的关闭）。
+  const createPanelRef = useModalDismiss<HTMLFormElement>(closeCreateDialog, createOpen);
+
   if (!portalTarget) return null;
 
   return createPortal(
     <div
       className="directory-picker-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-label={t("directoryPicker.selectDirectory")}
+      role="presentation"
       onClick={(event) => {
         if (event.target === event.currentTarget && !busy) onCancel();
       }}
-      onKeyDown={(event) => {
-        if (event.key === "Escape" && !busy && !isImeComposing(event)) onCancel();
-      }}
       style={{ position: "fixed", inset: 0, zIndex: "var(--z-modal)", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.35)" }}
     >
-      <div className="directory-picker-panel" style={{ ...panelSurfaceStyle, position: "relative", width: 520, maxWidth: "calc(100vw - 16px)", height: "min(620px, calc(100dvh - 16px))", maxHeight: "calc(100dvh - 16px)", display: "flex", flexDirection: "column" }}>
+      <div
+        ref={panelRef}
+        className="directory-picker-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("directoryPicker.selectDirectory")}
+        style={{ ...panelSurfaceStyle, position: "relative", width: 520, maxWidth: "calc(100vw - 16px)", height: "min(620px, calc(100dvh - 16px))", maxHeight: "calc(100dvh - 16px)", display: "flex", flexDirection: "column" }}
+      >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0, padding: "12px 18px", borderBottom: "var(--hairline) solid var(--border)" }}>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ color: "var(--text)", fontWeight: "var(--fw-bold)", fontSize: "var(--fs-title)" }}>{t("directoryPicker.selectDirectory")}</div>
@@ -246,6 +260,11 @@ export function DirectoryPicker({ onCancel, onSelect, initialPath, busy = false,
             onChange={(event) => {
               setPathInput(event.target.value);
               setLoadError(null);
+            }}
+            onKeyDown={(event) => {
+              // 中文/日文输入法里 Enter 用来确认候选词，不能当作「跳转到该路径」的
+              // 表单提交（lib/ime.test.mjs 的 IME 哨兵要求）。
+              if (event.key === "Enter" && isImeComposing(event)) event.preventDefault();
             }}
             style={{ ...textInputStyle, minWidth: 0, flex: 1 }}
           />
@@ -335,12 +354,9 @@ export function DirectoryPicker({ onCancel, onSelect, initialPath, busy = false,
             onClick={(event) => {
               if (event.target === event.currentTarget) closeCreateDialog();
             }}
-            onKeyDown={(event) => {
-              event.stopPropagation();
-              if (event.key === "Escape") closeCreateDialog();
-            }}
           >
             <form
+              ref={createPanelRef}
               role="dialog"
               aria-modal="true"
               aria-label={t("directoryPicker.createDirectory")}

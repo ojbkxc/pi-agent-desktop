@@ -121,7 +121,18 @@ export function TasksView({ sessions, runningSessionIds, onOpenSession }: Props)
   );
 
   return (
-    <main ref={rootRef} tabIndex={-1} className="scheduled-view tasks-view" aria-label={t("tasks.title")}>
+    <main
+      ref={rootRef}
+      tabIndex={-1}
+      className="scheduled-view tasks-view"
+      aria-label={t("tasks.title")}
+      onKeyDown={(event) => {
+        // 整页视图盖在聊天列上，聊天与 AgentSession 并未卸载：Esc 不拦会冒泡到
+        // window 的全局快捷键，把后台仍在运行的 agent 停掉。与 ScheduledView /
+        // AutofixView 一致，只吞掉 Escape。
+        if (event.key === "Escape") event.preventDefault();
+      }}
+    >
       <div className="scheduled-shell">
         <header className="scheduled-header">
           <div>
