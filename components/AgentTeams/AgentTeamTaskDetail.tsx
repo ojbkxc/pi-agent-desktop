@@ -91,9 +91,10 @@ export function AgentTeamTaskDetailBody({
         }
       }}
       style={{
-        // 门户到 document.body 后必须用 fixed 定位：absolute 会被祖先
-        // `.scheduled-view`（position:absolute + overflow:hidden）的裁切盒裁掉，
-        // 且其 z-index:30 层叠上下文会把抽屉压到顶栏（--z-chrome=90）之下。
+        // 门户到 document.body 后用 fixed 定位：原实现是 absolute，被祖先
+        // `.scheduled-view`（position:absolute + overflow:hidden）的裁剪盒裁掉，且其
+        // z-index:30 层叠上下文把抽屉压到顶栏（--z-chrome=90）之下（裁切与封顶是两条
+        // 独立机制，见组件注释）。fixed 以视口为包含块，门户后不再受祖先影响。
         position: "fixed",
         right: dockOpen ? 396 : 68,
         bottom: 16,
@@ -187,9 +188,15 @@ export function AgentTeamTaskDetailBody({
  * 任务详情抽屉（C8）：点任务卡 → 右下角浮层显示负责人 / 依赖（本票依赖谁）/ 解锁（谁依赖本票）。
  *
  * **门户到 `document.body`**：工作台 `AgentTeamsView` 挂在 `.scheduled-view`
- * （position:absolute + z-index:var(--z-sticky) + overflow:hidden）里，固定/绝对后代
- * 会被祖先的层叠上下文封顶（压不过顶栏 --z-chrome=90）并被裁切盒裁掉（实测确认）。
- * 抬高 `.scheduled-view` 的 z-index 会让整页盖住顶栏，不可取，唯一正确解法是脱离该子树。
+ * （position:absolute + z-index:var(--z-sticky) + overflow:hidden）里。准确的机制有两条
+ * （实测：把竞争侧栏降到 z-index:1、低于 #view 的 30 后探针定位）：
+ *   1. `absolute` 后代（本组件的原实现）：**同时**被祖先的层叠上下文封顶（压不过顶栏
+ *      --z-chrome=90）**和**被祖先的 overflow 裁剪盒裁切——越界的 absolute 探针命中侧栏。
+ *   2. `fixed` 后代：**不被**祖先 overflow 裁切（包含块是视口，除非某祖先建立了包含块
+ *      transform/filter/will-change/contain），但**仍被**祖先层叠上下文封顶——越界的
+ *      fixed 探针命中它自己，可证明裁切与封顶是两件独立的事。
+ * 所以门户解决的是「封顶 + 裁剪」两颗钉子：脱离该子树后，`fixed` 定位才真正以视口为
+ * 包含块。只抬高 `.scheduled-view` 的 z-index 会让整页盖住顶栏，不可取。
  *
  * SSR/首帧：服务端没有 `document`，挂载前渲染空（客户端组件；AppShell 以 ssr:false
  * 动态加载本视图，首帧空白不可见）。内容本身在 `AgentTeamTaskDetailBody`，便于 SSR 测试。

@@ -113,9 +113,10 @@ const S: Record<string, CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     padding: 16,
-    // 层叠令牌，不用 literal：60 会掉到顶栏（--z-chrome=90）之下，backdrop 与
-    // 对话框顶带被顶栏盖住，aria-modal 期间顶栏仍可点。卡片挂在聊天列（不在
-    // .scheduled-view 的 30 上下文里），无需门户，改令牌即可。
+    // 层叠令牌，不用 literal 60：60 < 顶栏 --z-chrome=90，于是 backdrop 与对话框
+    // 顶带被顶栏盖住，aria-modal 期间顶栏仍可点。卡片挂在聊天列（不在 .scheduled-view
+    // 的 z 30 上下文里，也未被任何祖先 overflow 裁切——overlay 是 inset:0 的 fixed），
+    // 所以无需门户，换成 --z-modal 令牌即与全局对话框同层。
     zIndex: "var(--z-modal)",
   },
   dialog: {
