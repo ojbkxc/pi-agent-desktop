@@ -159,15 +159,44 @@ export function pruneJobs(agentDir = getAgentDir(), maxKept = BACKGROUND_JOB_MAX
 
 // ───────────────────── 输出文件 ─────────────────────
 
-/** 输出文件的上限追踪：同进程内按 id 记住已写字节数，避免每次 stat。 */
-const outputBytes = new Map<string, number>();
+/**
+ * 输出文件的上限追踪：同进程内按 id 记住已写字节数，避免每次 data 事件都 stat。
+ *
+ * 挂 globalThis 而不是模块级 Map：Next.js 热重载会重建模块作用域，模块级 Map 会丢，
+ * 计数归零后同一个 job 还能再写满 8 MB，越过上限（且 tail/outputTruncated 已定格，
+ * 与实际文件不一致）。与 runtime.ts 的 `__piBackgroundJobs` 同法。
+ */
+declare global {
+  var __piBackgroundJobOutputBytes: Map<string, number> | undefined;
+}
+
+function outputBytes(): Map<string, number> {
+  if (!globalThis.__piBackgroundJobOutputBytes) globalThis.__piBackgroundJobOutputBytes = new Map();
+  return globalThis.__piBackgroundJobOutputBytes;
+}
+
+function outputBytesFor(id: string, agentDir: string): number {
+  return outputBytes().get(outputStorageKey(id, agentDir)) ?? 0;
+}
+
+function setOutputBytes(id: string, agentDir: string, value: number): void {
+  outputBytes().set(outputStorageKey(id, agentDir), value);
+}
+
+/**
+ * 计数按「输出文件」而不是「job id」记：同 id 在不同 agent dir 下是两个不同的文件
+ * （测试与 dev/桌面端共用同一进程时都能出现），只按 id 记会让两边的上限互相污染。
+ */
+function outputStorageKey(id: string, agentDir: string): string {
+  return `${agentDir}\u0000${id}`;
+}
 
 /** 建一个空输出文件（O_EXCL，0600），返回实际写入的路径。 */
 export function createOutputFile(id: string, agentDir = getAgentDir()): string {
   mkdirSync(jobsDir(agentDir), { recursive: true });
   const path = jobOutputPath(id, agentDir);
   closeSync(openSync(path, "wx", 0o600));
-  outputBytes.set(id, 0);
+  setOutputBytes(id, agentDir, 0);
   return path;
 }
 
@@ -177,20 +206,46 @@ export function createOutputFile(id: string, agentDir = getAgentDir()): string {
  */
 export function appendOutput(id: string, chunk: string, agentDir = getAgentDir()): boolean {
   if (!chunk) return false;
-  const already = outputBytes.get(id) ?? 0;
+  // 热重载或另一个进程已写过这个文件时，内存计数可能是 0 而文件其实很大。
+  // 首次见到这个文件（计数缺失）就以磁盘实际大小为准，之后走内存计数。
+  if (!outputBytes().has(outputStorageKey(id, agentDir))) {
+    try {
+      setOutputBytes(id, agentDir, statSync(jobOutputPath(id, agentDir)).size);
+    } catch {
+      setOutputBytes(id, agentDir, 0);
+    }
+  }
+  const already = outputBytesFor(id, agentDir);
   if (already >= BACKGROUND_JOB_MAX_OUTPUT_BYTES) return true;
   const bytes = Buffer.byteLength(chunk, "utf8");
   const remaining = BACKGROUND_JOB_MAX_OUTPUT_BYTES - already;
+  // 写盘失败绝不能把异常抛出去：这个函数由子进程 stdout/stderr 的 'data' 监听器调用，
+  // 监听器里抛异常 = uncaughtException，会带走整个服务进程。日志被外部删除、
+  // 目录被清理（测试/用户手动清理）、磁盘满都属于这一类。按「截断」处理并记一次日志。
   if (bytes <= remaining) {
-    appendFileSync(jobOutputPath(id, agentDir), chunk, { encoding: "utf8", mode: 0o600 });
-    outputBytes.set(id, already + bytes);
+    if (!tryAppend(id, agentDir, chunk)) return true;
+    setOutputBytes(id, agentDir, already + bytes);
     return false;
   }
   // 只写能放下的部分，宁可截在字符中间也不能越过上限。
   const head = Buffer.from(chunk, "utf8").subarray(0, remaining).toString("utf8");
-  appendFileSync(jobOutputPath(id, agentDir), head, { encoding: "utf8", mode: 0o600 });
-  outputBytes.set(id, BACKGROUND_JOB_MAX_OUTPUT_BYTES);
+  tryAppend(id, agentDir, head);
+  setOutputBytes(id, agentDir, BACKGROUND_JOB_MAX_OUTPUT_BYTES);
   return true;
+}
+
+/** 追加写；失败只记日志并返回 false（调用方视为截断）。 */
+function tryAppend(id: string, agentDir: string, text: string): boolean {
+  try {
+    appendFileSync(jobOutputPath(id, agentDir), text, { encoding: "utf8", mode: 0o600 });
+    return true;
+  } catch (error) {
+    console.error(
+      `[pi-web] 后台 job ${id} 的输出写入失败（按截断处理）:`,
+      error instanceof Error ? error.message : error,
+    );
+    return false;
+  }
 }
 
 /** 读输出文件；可选只读尾部（注入摘要用，避免把 8 MB 读进内存）。 */
@@ -210,16 +265,52 @@ export function readOutput(id: string, agentDir = getAgentDir(), tailBytes?: num
   }
 }
 
-/** 进程退出/重启时清掉内存里的字节计数。 */
+/** 进程退出/重启时清掉内存里的字节计数（同 id 在所有 agent dir 下的都要清）。 */
 export function forgetOutputBytes(id: string): void {
-  outputBytes.delete(id);
+  const suffix = `\u0000${id}`;
+  for (const key of [...outputBytes().keys()]) {
+    if (key.endsWith(suffix)) outputBytes().delete(key);
+  }
 }
 
-/** 遗留结算：把落盘仍是 `running` 的记录改成 `interrupted`。 */
+/**
+ * pid 是否还活着。`process.kill(pid, 0)` 不发信号、只做存在性探测：
+ * - 正常返回 → 进程存在；
+ * - `ESRCH` → 不存在；
+ * - `EPERM` → 存在但没权限（同样算活着）。
+ *
+ * 已知局限：pid 可能被系统复用，探到的未必是当初那个进程。所以这只用来**避免误判死亡**
+ * （把活着的进程谎称 interrupted 会导致它永久孤儿），而不是用来证明「还是那条命令」。
+ */
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * 遗留结算：把落盘仍是 `running`、且**进程确实已经不在了**的记录改成 `interrupted`。
+ *
+ * 不能见到 running 就一律结算：Unix 下 `detached: true` 的子进程在服务重启后仍可能
+ * 存活（dev 与桌面端两个服务进程共用同一 agent dir 时也会发生）。把活着的进程标成
+ * interrupted 之后，新进程的 activeJobs 是空的，stop 只能拿 409 —— 进程永久孤儿。
+ */
 export function settleOrphanedJobs(agentDir = getAgentDir()): BackgroundJob[] {
   const settled: BackgroundJob[] = [];
   const now = new Date().toISOString();
   for (const job of listJobs(agentDir)) {
+    if (job.status === "running" && job.pid !== undefined && isProcessAlive(job.pid)) {
+      // 进程还活着：保持 running，交给用户/工具去 stop（本进程没有它的句柄，
+      // 所以 stop 只能靠路由层的进程树终止；至少不会谎报已中断）。
+      console.warn(
+        `[pi-web] 后台 job ${job.id} 的进程 ${job.pid} 仍在运行，保留其 running 状态`,
+      );
+      continue;
+    }
     const next = settleOrphanedJob(job, now);
     if (!next) continue;
     writeJob(next, agentDir);

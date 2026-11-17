@@ -47,6 +47,12 @@ interface ActiveJob {
   outputTruncated: boolean;
   /** 结束时用于通知的会话 id（构造时固定，避免记录被改写后发错人）。 */
   sessionId: string;
+  /**
+   * 子进程 pid 的内存副本。**不能只依赖落盘记录里的 pid**：`finish()` 里如果
+   * `readJob()` 失败（记录损坏/被并发清理），落盘那份读不到，而停止/超时仍必须
+   * 能杀进程——否则进程变孤儿，且句柄已被删除，之后 stop 永远返回 null。
+   */
+  pid?: number;
 }
 
 // globalThis：Next.js 热重载会重建模块作用域，模块级 Map 会丢句柄——
@@ -86,9 +92,18 @@ export class BackgroundJobError extends Error {
 export function killProcessTree(pid: number): void {
   if (process.platform === "win32") {
     try {
-      spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      // 必须监听 error：taskkill 不存在（ENOENT）或参数异常时，spawn 会发异步
+      // 'error' 事件；没有监听器就是一个 unhandled 'error'，Node 下直接崩掉整个服务。
+      killer.on("error", (error) => {
+        console.error(
+          `[pi-web] taskkill 启动失败，无法结束进程树 ${pid}:`,
+          error instanceof Error ? error.message : error,
+        );
+      });
     } catch {
-      // taskkill 本身起不来也没别的办法；进程可能已退出。
+      // spawn 同步抛（极少见）；此时确实没有别的办法，记录一条便于排查。
+      console.error(`[pi-web] 无法启动 taskkill，进程树 ${pid} 可能仍在运行`);
     }
     return;
   }
@@ -149,6 +164,7 @@ export function startBackgroundJob(request: StartJobRequest): StartJobResult {
     settled: false,
     outputTruncated: false,
     sessionId: request.sessionId,
+    ...(child.pid === undefined ? {} : { pid: child.pid }),
   };
   activeJobs().set(id, entry);
 
@@ -192,6 +208,17 @@ function finish(id: string, status: BackgroundJob["status"], details: FinishDeta
   if (entry.timer) clearTimeout(entry.timer);
   activeJobs().delete(id);
 
+  // 超时与 stop 要真的把进程杀掉，不能只改状态。
+  //
+  // 这件事必须发生在读盘**之前**：读盘可能失败（记录损坏、被并发清理），
+  // 失败就 return 的话进程会继续跑，而 settled 已置位、句柄已删，
+  // 之后 stopBackgroundJob 永远返回 null —— 进程永久孤儿。
+  // pid 优先取内存副本（entry.pid），不依赖落盘记录。
+  const pid = entry.pid;
+  if ((status === "timedout" || status === "stopped") && pid !== undefined) {
+    killProcessTree(pid);
+  }
+
   let current: BackgroundJob;
   try {
     current = readJob(id) ?? (() => { throw new Error(`job ${id} record missing`); })();
@@ -199,11 +226,6 @@ function finish(id: string, status: BackgroundJob["status"], details: FinishDeta
     console.error("[pi-web] 后台 job 记录读取失败:", error instanceof Error ? error.message : error);
     forgetOutputBytes(id);
     return;
-  }
-
-  // 超时与 stop 要真的把进程杀掉，不能只改状态。
-  if (status === "timedout" || status === "stopped") {
-    if (current.pid !== undefined) killProcessTree(current.pid);
   }
 
   const finishedAt = new Date().toISOString();
