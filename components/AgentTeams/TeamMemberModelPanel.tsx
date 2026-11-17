@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { useModelCatalog, type ModelCatalogEntry } from "@/hooks/useModelCatalog";
 import { ModelPicker } from "./ModelPicker";
@@ -117,11 +117,21 @@ export function TeamMemberModelPanel({
 }: TeamMemberModelPanelProps) {
   const { t } = useI18n();
   const { catalog, loading, error } = useModelCatalog();
+  const panelRef = useRef<HTMLDivElement>(null);
   const [ids, setIds] = useState<string[]>(memberIds);
   const [modelRef, setModelRef] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<MemberModelResult[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+
+  // 面板是成员列表之后的普通文档流块，常在折叠线以下——打开即滚到可见并把焦点
+  // 落到面板（键盘可达）。否则「点了换模型却看不到面板」= 够不着。
+  useEffect(() => {
+    const node = panelRef.current;
+    if (!node) return;
+    node.scrollIntoView({ block: "nearest" });
+    node.focus({ preventScroll: true });
+  }, []);
 
   const model = resolveModelRef(catalog.entries, modelRef);
   const nameById = useMemo(() => new Map(members.map((member) => [member.id, member.name])), [members]);
@@ -162,7 +172,21 @@ export function TeamMemberModelPanel({
     : t("teams.memberModel.batchTitle", { count: ids.length });
 
   return (
-    <div className="team-member-model-panel" role="group" aria-label={title} data-mode={mode}>
+    <div
+      ref={panelRef}
+      className="team-member-model-panel"
+      role="group"
+      aria-label={title}
+      data-mode={mode}
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        // 焦点落在面板内时 Esc 关闭（不抢全局 Esc：只有面板内部按键才触发）。
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          onClose();
+        }
+      }}
+    >
       <h4 className="team-member-model-title">{title}</h4>
 
       {mode === "batch" ? (

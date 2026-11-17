@@ -12,7 +12,7 @@ import { createJiti } from "jiti";
  */
 
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
-const { AgentTeamTaskDetail } = await jiti.import("./AgentTeamTaskDetail.tsx");
+const { AgentTeamTaskDetail, AgentTeamTaskDetailBody } = await jiti.import("./AgentTeamTaskDetail.tsx");
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
@@ -50,10 +50,11 @@ function snapshot({ tickets = [], members = [] } = {}) {
 }
 
 function render(props) {
+  // 门户包装依赖 document，SSR 渲不出内容；内容本体单独导出，测试直接渲染它。
   return renderToStaticMarkup(React.createElement(
     I18nProvider,
     { initialLocale: "en" },
-    React.createElement(AgentTeamTaskDetail, props),
+    React.createElement(AgentTeamTaskDetailBody, props),
   ));
 }
 
@@ -161,4 +162,30 @@ test("未传 onSelectMember 时负责人按钮禁用", () => {
 test("「点负责人 → 打开成员」以 owner.id 调用 onSelectMember", async () => {
   const source = await readFile(new URL("./AgentTeamTaskDetail.tsx", import.meta.url), "utf8");
   assert.match(source, /onSelectMember\?\.\(owner\.id\)/, "必须把负责人的 id 交给 onSelectMember");
+});
+
+// ── 覆盖层修复（工作台层叠封顶/裁切的真缺陷）───────────────────────────────
+// 实测：`.scheduled-view` 是 position:absolute + z-index:30 + overflow:hidden 的层叠
+// 上下文兼裁切盒，抽屉留在树内时既被裁又永远压在顶栏（--z-chrome=90）之下。
+// 修法 = 门户到 body（脱离裁剪盒与层叠上下文）+ fixed 定位 + 层叠令牌。
+test("抽屉内容：fixed 定位 + --z-popover 令牌 + 视口夹取宽度，无未定义 --z-drawer", () => {
+  const html = render({
+    snapshot: snapshot({ members: [member("impl", "impl")], tickets: [ticket("t1", { ownerId: "impl" })] }),
+    ticketId: "t1",
+    onClose: () => {},
+    onSelectMember: () => {},
+  });
+  assert.match(html, /position:fixed/, "门户后必须 fixed（absolute 会被祖先裁切盒裁掉）");
+  assert.match(html, /z-index:var\(--z-popover\)/, "层级只用令牌，且需高于顶栏 90");
+  assert.match(html, /max-width:min\(360px/, "窄视口要有夹取，不能溢出到侧栏");
+  assert.doesNotMatch(html, /--z-drawer/, "全仓未定义 --z-drawer，不得留下未定义变量");
+  assert.doesNotMatch(html, /z-index:40\b/, "literal z-index 40 在门户后会被顶栏盖住");
+});
+
+test("抽屉经 createPortal 挂到 document.body（脱离 #view 的层叠上下文与 overflow 裁剪）", async () => {
+  assert.equal(typeof AgentTeamTaskDetail, "function", "门户包装必须导出");
+  const source = await readFile(new URL("./AgentTeamTaskDetail.tsx", import.meta.url), "utf8");
+  assert.match(source, /createPortal\(/, "必须门户化");
+  assert.match(source, /document\.body/, "门户目标必须是 document.body");
+  assert.match(source, /typeof document === "undefined"/, "SSR 首帧无 document，必须守卫");
 });

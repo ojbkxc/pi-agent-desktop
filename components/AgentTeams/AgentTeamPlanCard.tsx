@@ -113,7 +113,10 @@ const S: Record<string, CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     padding: 16,
-    zIndex: 60,
+    // 层叠令牌，不用 literal：60 会掉到顶栏（--z-chrome=90）之下，backdrop 与
+    // 对话框顶带被顶栏盖住，aria-modal 期间顶栏仍可点。卡片挂在聊天列（不在
+    // .scheduled-view 的 30 上下文里），无需门户，改令牌即可。
+    zIndex: "var(--z-modal)",
   },
   dialog: {
     width: "min(920px, 100%)",

@@ -726,7 +726,8 @@ export function AgentTeamsView({
               data-testid="agent-teams-communication-pane"
               aria-label={t("teams.communication.title")}
               style={{
-                width: 380,
+                // 右列固定 380 会在窄视口把左栏压到 ~200px；40vw 上限让它随视口收缩。
+                width: "min(380px, 40vw)",
                 flex: "none",
                 minHeight: 0,
                 height: "100%",

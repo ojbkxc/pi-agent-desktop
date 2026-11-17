@@ -99,6 +99,17 @@ test("#58：DispatchPanel 已挂载并传快照票标题映射（建议只展示
   assert.match(panel, /action: "add", members: \[member\]/);
 });
 
+// 覆盖层/布局修复：右列固定 380 在窄视口把左栏压到 ~200px；用 min(380px, 40vw)
+// 让右列随视口收缩。真实几何由 task #6 浏览器实测覆盖，此处钉住两个挂点。
+test("右列宽度随视口收缩（min(380px, 40vw)），不再死钉 380", async () => {
+  const view = await read("./AgentTeamsView.tsx");
+  const inspector = await read("./AgentTeamsMemberInspector.tsx");
+  assert.match(view, /width: "min\(380px, 40vw\)"/, "通信列随视口收缩");
+  assert.match(inspector, /width: "min\(380px, 40vw\)"/, "成员检查器随视口收缩");
+  assert.doesNotMatch(view, /^\s*width: 380,\s*$/m, "不得再死钉 380");
+  assert.doesNotMatch(inspector, /^\s*width: 380,\s*$/m, "不得再死钉 380");
+});
+
 // #63 占用行（v8 平铺契约 @ 9b7c083）：字段缺失不渲染不编造——bytes:null 不显示
 // 大小（失败原因由 usageError 行如实带出）、usageError 不存在不出空文案、
 // ended 严格 true 且 idleDays>=7 才提示（仅提示，无自动清理动作）。

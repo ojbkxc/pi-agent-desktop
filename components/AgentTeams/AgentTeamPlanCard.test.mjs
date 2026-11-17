@@ -236,6 +236,17 @@ test("停止按钮 stopping 态：文案切换 + 禁用 + 点击不触发", () =
   assert.deepEqual(calls, [], "stopping 态点击被拒");
 });
 
+// 覆盖层修复：overlay 的 z-index 必须是令牌而非 literal 60。卡片挂在聊天列，不在
+// `.scheduled-view` 的 z 30 上下文里；60 < 顶栏 --z-chrome=90，会让 backdrop 与对话框
+// 顶带被顶栏盖住，aria-modal 期间顶栏仍可点。改 --z-modal 即与全局对话框同层。
+test("overlay 用 --z-modal 令牌（不是 literal 60，不得掉到顶栏 90 之下）", () => {
+  const html = renderToStaticMarkup(planModalView(tFake, view()));
+  assert.match(html, /data-testid="team-plan-overlay"/);
+  assert.match(html, /z-index:var\(--z-modal\)/, "必须用层叠令牌");
+  assert.doesNotMatch(html, /z-index:60\b/, "literal 60 会掉到顶栏之下");
+  assert.match(html, /aria-modal="true"/, "模态语义保留");
+});
+
 test("状态标签键与徽标色覆盖四态（纯函数输出）", () => {
   assert.equal(planStateLabelKey("review_pending"), "teams.plan.state.review_pending");
   assert.equal(planStateToneColor("review_pending"), "var(--accent)");

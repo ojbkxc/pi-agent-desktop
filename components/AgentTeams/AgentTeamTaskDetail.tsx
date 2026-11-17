@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
 import { getTicketUrgency, type TicketUrgency } from "@/lib/agent-teams-task-layout";
 import type { TeamWorkbenchSnapshot } from "@/lib/agent-teams-swimlane";
@@ -27,10 +28,11 @@ export interface AgentTeamTaskDetailProps {
 }
 
 /**
- * 任务详情抽屉（C8）：点任务卡 → 右下角浮层显示负责人 / 依赖（本票依赖谁）/ 解锁（谁依赖本票）。
- * 纯展示，数据全部来自当前快照；关闭由上层把 selectedTicketId 置空。
+ * 任务详情抽屉的**内容**（非门户）：纯展示，数据全部来自当前快照；关闭由上层把
+ * selectedTicketId 置空。抽出来是为了能在无 DOM 的 SSR 测试里直接渲染并断言
+ * 内容与几何（门户包装 `AgentTeamTaskDetail` 依赖 `document`，SSR 渲不出任何东西）。
  */
-export function AgentTeamTaskDetail({
+export function AgentTeamTaskDetailBody({
   snapshot,
   ticketId,
   onClose,
@@ -38,6 +40,12 @@ export function AgentTeamTaskDetail({
   dockOpen = false,
 }: AgentTeamTaskDetailProps) {
   const { t } = useI18n();
+  const asideRef = useRef<HTMLElement>(null);
+
+  // 打开即聚焦（键盘可达）：抽屉非模态，只需把焦点落到本面板，Esc 即可关闭。
+  useEffect(() => {
+    asideRef.current?.focus({ preventScroll: true });
+  }, []);
 
   const ticket = useMemo(
     () => snapshot.tickets.find((candidate) => candidate.id === ticketId) ?? null,
@@ -70,21 +78,34 @@ export function AgentTeamTaskDetail({
 
   return (
     <aside
+      ref={asideRef}
       className="agent-teams-task-detail"
       data-testid="agent-teams-task-detail"
       data-task-id={ticket.id}
       aria-label={t("teams.task.heading")}
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          onClose();
+        }
+      }}
       style={{
-        position: "absolute",
+        // 门户到 document.body 后必须用 fixed 定位：absolute 会被祖先
+        // `.scheduled-view`（position:absolute + overflow:hidden）的裁切盒裁掉，
+        // 且其 z-index:30 层叠上下文会把抽屉压到顶栏（--z-chrome=90）之下。
+        position: "fixed",
         right: dockOpen ? 396 : 68,
         bottom: 16,
         width: 360,
-        zIndex: "var(--z-drawer, 40)",
+        maxWidth: "min(360px, calc(100vw - 16px))",
+        zIndex: "var(--z-popover)",
         border: "var(--hairline) solid var(--border)",
         borderRadius: "var(--radius-lg)",
         background: "var(--bg-panel)",
         boxShadow: "0 8px 24px rgba(0, 0, 0, 0.18)",
         padding: 14,
+        outline: "none",
       }}
       role="dialog"
     >
@@ -160,4 +181,22 @@ export function AgentTeamTaskDetail({
       </div>
     </aside>
   );
+}
+
+/**
+ * 任务详情抽屉（C8）：点任务卡 → 右下角浮层显示负责人 / 依赖（本票依赖谁）/ 解锁（谁依赖本票）。
+ *
+ * **门户到 `document.body`**：工作台 `AgentTeamsView` 挂在 `.scheduled-view`
+ * （position:absolute + z-index:var(--z-sticky) + overflow:hidden）里，固定/绝对后代
+ * 会被祖先的层叠上下文封顶（压不过顶栏 --z-chrome=90）并被裁切盒裁掉（实测确认）。
+ * 抬高 `.scheduled-view` 的 z-index 会让整页盖住顶栏，不可取，唯一正确解法是脱离该子树。
+ *
+ * SSR/首帧：服务端没有 `document`，挂载前渲染空（客户端组件；AppShell 以 ssr:false
+ * 动态加载本视图，首帧空白不可见）。内容本身在 `AgentTeamTaskDetailBody`，便于 SSR 测试。
+ */
+export function AgentTeamTaskDetail(props: AgentTeamTaskDetailProps) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted || typeof document === "undefined") return null;
+  return createPortal(<AgentTeamTaskDetailBody {...props} />, document.body);
 }
