@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { desktopTargetTriple } from "./desktop-platform.mjs";
+import { assertPayloadClean, pruneLocalConfig } from "./packaged-payload.mjs";
 import { piPackageDirNames } from "./pi-packages.mjs";
 import { dedupeNestedPackages, externalPackageSpecifiers, findNestedPiScopePackages, stageCompletePackage, stageResolvedClosure } from "./stage-package.mjs";
 
@@ -14,6 +15,71 @@ const standaloneDir = join(desktopBuildDir, "standalone");
 const serverResourcesDir = join(rootDir, "src-tauri", "resources", "server");
 const serverHelperDir = join(rootDir, "src-tauri", "resources", "Pi Agent Server.app");
 const nodeResourcesDir = join(rootDir, "src-tauri", "resources", "node");
+const tauriTargetDir = join(rootDir, "src-tauri", "target");
+
+/**
+ * 打包前清掉上一次构建留下的 payload 副本。
+ *
+ * 这是**不依赖 tracer 行为**的那一道闸：`outputFileTracingExcludes` 在 Windows 上不可信
+ * （Next 把每条 exclude 当 `path.join(dir, exclude)` 交给 picomatch，盘符反斜杠被读成转义，
+ * 于是每条都不匹配任何东西），所以直接用「先删、再断言」。
+ *
+ * cargo 缓存保留：只删放 payload 副本（或由它打出来的安装包）的目录。
+ * `target/<profile>/resources` 是 `tauri build` 逐文件拷 `src-tauri/resources` 的目标，
+ * 从不清理旧文件 —— 上一次构建的陈旧 chunk 会一路堆进安装包，所以必须从空目录开始。
+ */
+async function clearTracedBuildOutput() {
+  const removed = [];
+  const remove = async (path) => {
+    await rm(path, { recursive: true, force: true });
+    removed.push(relative(rootDir, path));
+  };
+
+  await remove(serverResourcesDir);
+  await remove(serverHelperDir);
+  await remove(nodeResourcesDir);
+
+  const profiles = new Set(["debug", "release"]);
+  const removeProfileOutput = async (dir) => {
+    for (const name of ["resources", "bundle"]) {
+      await remove(join(dir, name));
+    }
+  };
+
+  let targetEntries = [];
+  try {
+    targetEntries = await readdir(tauriTargetDir, { withFileTypes: true });
+  } catch {
+    // 这个 checkout 还没跑过 `tauri build`。
+  }
+  for (const entry of targetEntries) {
+    if (!entry.isDirectory()) continue;
+    const full = join(tauriTargetDir, entry.name);
+    if (profiles.has(entry.name)) {
+      await removeProfileOutput(full);
+      continue;
+    }
+    if (entry.name === "nsis") {
+      // 安装包暂存目录内嵌整个 payload。
+      await remove(full);
+      continue;
+    }
+    // 交叉编译三元组：`target/<triple>/<profile>/…`。
+    let tripleEntries = [];
+    try {
+      tripleEntries = await readdir(full, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const inner of tripleEntries) {
+      if (inner.isDirectory() && profiles.has(inner.name)) {
+        await removeProfileOutput(join(full, inner.name));
+      }
+    }
+  }
+
+  console.log(`Cleared previous build output: ${removed.length} path(s)`);
+}
 
 async function runNextBuild() {
   const require = createRequire(import.meta.url);
@@ -294,7 +360,19 @@ async function bundleNodeRuntime() {
   return { binaryPath, triple };
 }
 
+await clearTracedBuildOutput();
 await runNextBuild();
+
+// tracer 不可信（DEFECT-000089）：pi SDK 以 `join(cwd, ".pi", "mcp.json")` 解析项目配置，
+// 而 nft 按构建目录求值这个默认值，于是每个 import SDK 的路由都会把本 checkout 的
+// `.pi/mcp.json`（含真实 Bearer key）trace 进来。Windows 上没法用 exclude 排除，只能
+// 追踪后删除，再断言——这样任何**其它**方式混进 payload 的东西仍然会让构建失败。
+const pruned = await pruneLocalConfig(standaloneDir);
+if (pruned.length > 0) {
+  console.log(`Dropped ${pruned.length} traced local-config director${pruned.length === 1 ? "y" : "ies"}: ${pruned.join(", ")}`);
+}
+await assertPayloadClean(standaloneDir, { label: ".next-desktop/standalone" });
+
 await assembleServer();
 
 const deduped = await dedupeNestedPackages(serverResourcesDir);
@@ -328,6 +406,9 @@ if (overlong.length > 0) {
 }
 
 const { binaryPath: nodeBinary, triple } = await bundleNodeRuntime();
+
+// `tauri build` 之前的最后一道闸：staged payload 里不能带本 checkout 自己的配置或凭据。
+await assertPayloadClean(join(rootDir, "src-tauri", "resources"), { label: "src-tauri/resources" });
 
 console.log(`Desktop server staged at ${serverResourcesDir}`);
 console.log(`Node runtime staged at ${nodeBinary} (${triple})`);

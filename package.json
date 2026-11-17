@@ -44,6 +44,7 @@
     "start:lan": "node scripts/lan-server.mjs start",
     "desktop:dev": "node scripts/desktop-dev.mjs --config src-tauri/tauri.dev.conf.json",
     "desktop:prepare": "node scripts/prepare-desktop.mjs",
+    "desktop:check-payload": "node scripts/check-packaged-payload.mjs",
     "desktop:build": "npm run desktop:prepare && tauri build",
     "release:manifest": "node scripts/write-component-versions.mjs",
     "release:verify": "node scripts/verify-release-components.mjs",
