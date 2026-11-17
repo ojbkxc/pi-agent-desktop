@@ -720,13 +720,36 @@ export class AgentSessionWrapper {
         // Provider 中断自愈：只写一条挂起记录，重活交给 scheduler 异步做。挂在这里而不是
         // agent_end —— 后者在 SDK 每次自动重试前都会发，会把短抖动误判成挂起。
         // 绝不 await、绝不让它影响会话收尾（钩子内部也全 try/catch）。
-        void onAgentRunSettled({
-          sessionId: this.sessionId,
-          outcome: this.lastRunOutcome,
-          aborted: event.aborted === true,
-          sessionFile: this.sessionFile || null,
-          cwd: this.cwd,
-        }).catch((error) => {
+        //
+        // **团队成员先试自动换模型**：成员模型挂了而团队里还有别的可用模型时，换过去
+        // 续跑比挂起等待更快。换成功会摘掉该会话的 outage 记录，所以不能再跑 outage
+        // 钩子（否则两套驱动同时往一个会话灌消息、重复烧 token）。
+        void (async () => {
+          try {
+            if (this.lastRunOutcome.status === "failed" && event.aborted !== true) {
+              const { maybeSwitchTeamMemberModel, buildDefaultTeamModelFallbackDeps } =
+                await import("./agent-teams-model-fallback-runtime");
+              const result = await maybeSwitchTeamMemberModel(
+                await buildDefaultTeamModelFallbackDeps(),
+                { sessionId: this.sessionId, errorText: this.lastRunOutcome.error ?? "" },
+              );
+              if (result.switched) return;
+            }
+          } catch (error) {
+            // 换模型任何失败都不能影响下面的 outage 兜底。
+            console.error(
+              "[pi-web] team model fallback failed:",
+              error instanceof Error ? error.message : error,
+            );
+          }
+          await onAgentRunSettled({
+            sessionId: this.sessionId,
+            outcome: this.lastRunOutcome,
+            aborted: event.aborted === true,
+            sessionFile: this.sessionFile || null,
+            cwd: this.cwd,
+          });
+        })().catch((error) => {
           console.error("[pi-web] outage settle hook failed:", error instanceof Error ? error.message : error);
         });
       }
