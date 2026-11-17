@@ -251,7 +251,17 @@ test("a chat's row menu can continue it in a project", () => {
   assert.match(source, /t\("sidebar\.continueInProject"\)/);
   assert.match(source, /\/continue-in-project`/);
   // The picker reuses the project picker and never offers the chat workspace itself.
-  assert.match(source, /\{continueChat && \(/);
+  // Both picker modals are <body> portals: inline they sat inside the mobile
+  // sidebar drawer, whose transform made it the containing block of these
+  // full-screen fixed layers (clipped down to the drawer), and the portal also
+  // lifts them onto the dialog layer above the top bar.
+  const continueBlock = source.slice(source.indexOf("{continueChat && createPortal("), source.indexOf("{projectPickerOpen && createPortal("));
+  assert.match(source, /\{continueChat && createPortal\(/);
+  assert.match(source, /\{projectPickerOpen && createPortal\(/);
+  assert.match(continueBlock, /document\.body/);
+  // Both are real modals for assistive tech (the add-project one used to miss its name).
+  assert.match(continueBlock, /role="dialog" aria-modal="true" aria-label=\{t\("sidebar\.continueInProject"\)\}/);
+  assert.match(source, /\{projectPickerOpen && createPortal\([\s\S]*?aria-modal="true" aria-label=\{t\("sidebar\.addProject"\)\}/);
 });
 
 test("a chat cwd skips worktree lookup and stays out of project pickers", () => {

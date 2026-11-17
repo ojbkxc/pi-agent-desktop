@@ -2588,7 +2588,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           onCreateWorktree={() => void worktreeActions.create(projectMenu.root)}
         />
       )}
-      {continueChat && (
+      {/* Portaled to <body>: on mobile the sidebar is a fixed drawer with a
+          transform, which becomes the containing block of fixed descendants and
+          clipped this full-screen modal down to the drawer; the portal also puts
+          it on the dialog layer (--z-modal) above the topbar. */}
+      {continueChat && createPortal(
         <div className="project-picker-modal-overlay" role="dialog" aria-modal="true" aria-label={t("sidebar.continueInProject")} onClick={() => setContinueChat(null)}>
           <div className="project-picker-modal-shell" onClick={(e) => e.stopPropagation()}>
             <ProjectPicker
@@ -2600,10 +2604,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               variant="block"
             />
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
-      {projectPickerOpen && (
-        <div className="project-picker-modal-overlay" role="dialog" aria-modal="true" onClick={() => setProjectPickerOpen(false)}>
+      {projectPickerOpen && createPortal(
+        <div className="project-picker-modal-overlay" role="dialog" aria-modal="true" aria-label={t("sidebar.addProject")} onClick={() => setProjectPickerOpen(false)}>
           <div className="project-picker-modal-shell" onClick={(e) => e.stopPropagation()}>
             <ProjectPicker
               recentProjects={recentProjects}
@@ -2617,7 +2622,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               variant="block"
             />
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

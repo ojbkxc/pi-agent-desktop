@@ -3,6 +3,7 @@
 import { AppSelect } from "./AppSelect";
 
 import { useState, useEffect, useCallback, useId, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
 import type { ModelCatalogPreset, ModelCatalogRecommendation } from "@/lib/model-catalog";
 import type { DiscoveredModel } from "@/lib/model-discovery";
@@ -1828,7 +1829,10 @@ function AddProviderPicker({
 
   return (
     <div
-      style={{ position: "fixed", inset: 0, zIndex: 1100, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center" }}
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("i18n.addProvider")}
+      style={{ position: "fixed", inset: 0, zIndex: "var(--z-modal-nested, 1100)", background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center" }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
       onKeyDown={(e) => {
         if (e.key !== "Escape") return;
@@ -1837,9 +1841,12 @@ function AddProviderPicker({
         onClose();
       }}
     >
-      {/* Sized against its containing block, not the viewport: inside Settings the
-          dialog keeps a transform from its entry animation, so this fixed layer
-          spans the dialog only, and a 72vh card overflowed it and was clipped. */}
+      {/* Portaled to <body>: Settings keeps a transform from its entry
+          animation, which made the dialog the containing block of this fixed
+          layer (and clipped it), so behaviour differed between normal and
+          reduced-motion users. Against the viewport, inset:0 and the
+          max-height below are stable; --z-modal-nested is the dialog-above-a-
+          dialog tier (--z-modal is the settings dialog, --z-toast toasts). */}
       <div style={{ width: 820, maxWidth: "calc(100% - 48px)", maxHeight: "calc(100% - 48px)", minHeight: 0, background: "var(--bg)", border: "var(--hairline) solid var(--border)", borderRadius: "var(--radius-lg)", display: "flex", flexDirection: "column", boxShadow: "var(--shadow-dialog)", overflow: "hidden" }}>
         {/* Search */}
         <div style={{ padding: "10px 14px", borderBottom: "var(--hairline) solid var(--border)", flexShrink: 0, display: "flex", alignItems: "center", gap: 8 }}>
@@ -2392,7 +2399,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
           </ConfigButton>
         </ConfigFooter>
     </ConfigPanelShell>
-    {pickerOpen && (
+    {pickerOpen && createPortal(
       <AddProviderPicker
         oauthProviders={oauthProviders}
         apiKeyProviders={apiKeyProviders}
@@ -2400,7 +2407,8 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
         onSelectApiKey={(id) => setSelection({ type: "apikey", providerId: id })}
         onAddCustom={addCustomProvider}
         onClose={() => setPickerOpen(false)}
-      />
+      />,
+      document.body,
     )}
     </>
   );

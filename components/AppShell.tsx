@@ -485,6 +485,7 @@ export function AppShell() {
   const chatInputRef = useRef<ChatInputHandle | null>(null);
   const [pendingQuotePrompt, setPendingQuotePrompt] = useState<{ sessionId: string; text: string } | null>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
+  const topPanelRef = useRef<HTMLDivElement>(null);
   // Branch navigator state — populated by ChatWindow via onBranchDataChange
   const [branchTree, setBranchTree] = useState<SessionTreeNode[]>([]);
   const [branchActiveLeafId, setBranchActiveLeafId] = useState<string | null>(null);
@@ -703,7 +704,11 @@ export function AppShell() {
     const handlePointerDown = (event: MouseEvent) => {
       // Panel DOM lives under topBarRef (fixed-position child); treat the whole
       // top bar — including toggle buttons — as inside so toggles stay reliable.
-      if (!topBarRef.current?.contains(event.target as Node)) setActiveTopPanel(null);
+      // The panel itself is portaled to <body>, so clicks inside it need this
+      // second containment check (same as the More menu below).
+      const inside = topBarRef.current?.contains(event.target as Node)
+        || topPanelRef.current?.contains(event.target as Node);
+      if (!inside) setActiveTopPanel(null);
     };
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !isImeComposing(event)) setActiveTopPanel(null);
@@ -2759,15 +2764,20 @@ export function AppShell() {
           {!isMobile && renderProjectTrustWarning(false)}
           {!isMobile && showFilePanelToggle && renderMainFileToggle()}
           {/* Top panel dropdown — shared, only one active at a time */}
-          {activeTopPanel && topPanelPos && (
-            <div style={{
+          {activeTopPanel && topPanelPos && createPortal(
+            <div ref={topPanelRef} style={{
               position: "fixed",
               top: topPanelPos.top,
               left: topPanelPos.left,
               width: topPanelPos.width,
               maxHeight: `calc(100dvh - ${topPanelPos.top}px)`,
               overflowY: "auto",
-              zIndex: 500,
+              /* Portaled to <body>, like the More menu: inline under
+                 .app-topbar (z --z-chrome 90) this panel is capped by the
+                 topbar's stacking context, and the page notice shelf (z 650,
+                 pointer-events on its cards) covered its top-right corner.
+                 700 clears the shelf and the open file panel (100). */
+              zIndex: 700,
             }}>
               {activeTopPanel === "agents" && activeSessionFamily && selectedSession && (
                 <AgentSessionPanel
@@ -2997,7 +3007,8 @@ export function AppShell() {
                   )}
                 </div>
               )}
-            </div>
+            </div>,
+            document.body,
           )}
 
           {/* Windows/Linux controls stay in the chat topbar while the floating

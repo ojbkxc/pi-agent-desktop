@@ -350,3 +350,26 @@ test("a late Test response cannot stamp its badge onto edited config (d5-16)", a
   assert.match(source, /const token = guard\?\.next\(\) \?\? -1;/);
   assert.match(source, /if \(!guard\?\.isCurrent\(token\)\) return;/);
 });
+
+test("the add-provider picker is portaled to the body and sized against the viewport", () => {
+  // Why a portal: Settings' entry animation keeps a transform on
+  // .settings-dialog-surface, which becomes the containing block of a fixed
+  // descendant. This layer then spanned the dialog only (and was clipped),
+  // while reduced-motion users got a viewport-sized modal — two behaviours
+  // from one rule. Portaled to <body>, inset:0 and the max-height below are
+  // always the viewport.
+  const mountStart = source.indexOf("{pickerOpen && createPortal(");
+  assert.ok(mountStart > 0, "the picker is mounted through createPortal");
+  const mountBlock = source.slice(mountStart, source.indexOf("</>", mountStart));
+  assert.match(mountBlock, /document\.body/);
+
+  const pickerStart = source.indexOf("function AddProviderPicker");
+  const picker = source.slice(pickerStart, source.indexOf("export function ModelsConfig", pickerStart));
+  assert.match(picker, /role="dialog"/);
+  assert.match(picker, /aria-modal="true"/);
+  assert.match(picker, /aria-label=\{t\("i18n\.addProvider"\)\}/);
+  // --z-modal-nested is the dialog-above-a-dialog tier (above the settings
+  // dialog's --z-modal, below --z-toast); the 1100 fallback keeps the picker
+  // on that tier even if the token is not defined yet.
+  assert.match(picker, /zIndex: "var\(--z-modal-nested, 1100\)"/);
+});
