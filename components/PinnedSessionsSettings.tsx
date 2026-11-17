@@ -35,6 +35,7 @@ export function PinnedSessionsSettings() {
   const { t } = useI18n();
   const [entries, setEntries] = useState<PinnedEntry[]>([]);
   const [sessions, setSessions] = useState<SessionOption[]>([]);
+  const [registryError, setRegistryError] = useState<string | null>(null);
   const [pickedId, setPickedId] = useState("");
   const [pickedRole, setPickedRole] = useState<"router" | "worker">("router");
   const [busy, setBusy] = useState(false);
@@ -47,8 +48,9 @@ export function PinnedSessionsSettings() {
         fetch("/api/sessions", { headers: { Accept: "application/json" } }),
       ]);
       if (pinnedResponse.ok) {
-        const data = (await pinnedResponse.json()) as { sessions?: PinnedEntry[] };
+        const data = (await pinnedResponse.json()) as { sessions?: PinnedEntry[]; registryError?: string | null };
         setEntries(Array.isArray(data.sessions) ? data.sessions : []);
+        setRegistryError(typeof data.registryError === "string" && data.registryError ? data.registryError : null);
       }
       if (sessionsResponse.ok) {
         const data = (await sessionsResponse.json()) as { sessions?: Array<{ id?: string; name?: string; firstMessage?: string }> };
@@ -145,6 +147,15 @@ export function PinnedSessionsSettings() {
             </ConfigButton>
           </span>
         </div>
+
+        {registryError && (
+          <div className="settings-option">
+            <span className="settings-option-text">
+              <span className="settings-option-title">{t("resident.registryError")}</span>
+              <span className="settings-option-hint" title={registryError}>{registryError}</span>
+            </span>
+          </div>
+        )}
 
         {entries.length === 0 && (
           <div className="settings-option">

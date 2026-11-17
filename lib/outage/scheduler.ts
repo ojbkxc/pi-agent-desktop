@@ -120,9 +120,11 @@ async function handleRecord(
   const sessionId = record.sessionId;
   // autofix 自己驱动（每轮还要跑验证命令），通用调度器只读不动。
   if (record.scope === "autofix") return { sessionId, outcome: "skipped-autofix" };
-  if (!isOutageDue(record, now)) return { sessionId, outcome: "skipped-not-due" };
 
   // 归属判定：别的活进程拥有 ⇒ 不抢；本进程重启后旧 pid 已死 ⇒ 接续。
+  //
+  // **必须在「到期」判定之前**：别的活进程的记录由它自己推进（包括清过期），
+  // 本进程替它清会产生两个进程同写一份记录的竞态。
   const disposition = classifyOutageRecord(record, { now });
   if (disposition === "owned" && record.pid !== process.pid) {
     return { sessionId, outcome: "skipped-other-process" };
@@ -132,10 +134,15 @@ async function handleRecord(
   }
 
   // 双闸（次数/死线）：即使没到 nextAttemptAt，也要在 tick 里清掉过期的记录。
+  //
+  // **必须排在 `isOutageDue` 之前**：退避档会一路推到 30 分钟，而 deadline 可能更早到；
+  // 先判 due 的话，过期记录要等退避到点才转 expired，这段时间它会一直显示「等待中」。
   if (isOutageExpired(record, now)) {
     finishOutageRecord(sessionId, "expired", now, {}, deps.agentDir);
     return { sessionId, outcome: "expired" };
   }
+
+  if (!isOutageDue(record, now)) return { sessionId, outcome: "skipped-not-due" };
 
   // 防抢跑：用户中途发了新消息 ⇒ 记录作废。
   const lastUser = await deps.lastUserMessageId(sessionId);

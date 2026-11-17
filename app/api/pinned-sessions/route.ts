@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { isSessionRole } from "@/lib/pinned-sessions/types";
 import {
+  getPinnedRegistryHealth,
   isPinnedSessionRegistered,
   pinSession,
   readPinnedSessions,
@@ -25,10 +26,16 @@ export async function GET() {
         ...session,
         registered: isPinnedSessionRegistered(session.sessionId),
       })),
+      // 名单读不出来时 pin 全部未生效；这个字段让设置页能明确说出来，
+      // 而不是只显示一个空列表让人以为「pin 自己没了」。
+      registryError: getPinnedRegistryHealth().error,
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : String(error) },
+      {
+        error: error instanceof Error ? error.message : String(error),
+        registryError: getPinnedRegistryHealth().error,
+      },
       { status: 500, headers: { "Cache-Control": "no-store" } },
     );
   }

@@ -77,6 +77,23 @@ function releases(): Map<string, () => void> {
 }
 
 /**
+ * 名单读取失败的原因（null = 健康）。放 globalThis：instrumentation 与扩展可能
+ * 落在不同的模块实例上，模块级变量会让两边看到不同的状态。
+ */
+declare global {
+  var __piPinnedRegistryError: string | null | undefined;
+}
+
+function noteRegistryError(message: string | null): void {
+  globalThis.__piPinnedRegistryError = message;
+}
+
+/** 本进程最近一次对齐 pin 注册表的结果；`error` 非空表示名单读不出来、pin 未生效。 */
+export function getPinnedRegistryHealth(): { error: string | null } {
+  return { error: globalThis.__piPinnedRegistryError ?? null };
+}
+
+/**
  * 按磁盘上的名单，把本进程的 provider 注册表对齐到一致状态：
  * 名单里有的注册（已注册则跳过），名单里没有的释放。
  *
@@ -88,9 +105,17 @@ export function ensurePinnedRegistrations(agentDir = getAgentDir()): { pinned: s
     file = readPinnedSessions(agentDir);
   } catch (error) {
     // 读不出来就不动注册表：宁可留着已注册的（会话多活一会儿），也不要误释放。
-    console.error("[pi-web] 读取常驻会话名单失败:", error instanceof Error ? error.message : error);
+    //
+    // 但**不能只是静默**：名单坏掉 + 进程重启 = 一个 provider 都注册不上，
+    // pin 会完全失效（不是「少个提示」，是常驻真的没了）。这里记一条健康状态，
+    // 让 `GET /api/pinned-sessions` 与设置页能把它显示出来，而不是让用户
+    // 发现「明明 pin 了却还是被卸载」时无从排查。
+    const message = error instanceof Error ? error.message : String(error);
+    noteRegistryError(message);
+    console.error("[pi-web] 读取常驻会话名单失败（pin 可能未生效）:", message);
     return { pinned: [], released: [] };
   }
+  noteRegistryError(null);
   const wanted = new Set(file.sessions.map((session) => session.sessionId));
   const released: string[] = [];
   for (const [sessionId, release] of [...releases()]) {

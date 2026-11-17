@@ -130,6 +130,17 @@ async function handleSettled(input: AgentRunSettledInput): Promise<AgentRunSettl
   if (input.outcome.status !== "failed") {
     // 恢复后跑成功了：清空 post-resume 计数（记录可能在等待中被续跑过）。
     clearPostResumeFailures(input.sessionId, agentDir);
+    // **必须结案**。否则记录一直停在 waiting，调度器会按退避档继续给它发续跑提示，
+    // 每发一次就触发一轮新 turn（重复烧 token），直到 deadline 耗尽。
+    //
+    // 本来有一道自愈：续跑提示本身是新的 user 消息，`isOutageSuperseded` 会发现
+    // guard.lastUserMessageId 变了而把记录作废。但那道防线在 `lastUserMessageId`
+    // 为 null 时恒不成立（挂起时读盘失败就会这样），于是永远不会自愈。
+    // 成功是比「猜它被新消息取代」更直接的证据，这里直接收尾。
+    const waiting = getOutageRecord(input.sessionId, agentDir);
+    if (waiting?.status === "waiting") {
+      finishOutageRecord(input.sessionId, "resumed", now, {}, agentDir);
+    }
     return { suspended: false };
   }
 
