@@ -2090,6 +2090,8 @@ export function AppShell() {
         tasksOpen={tasksOpen}
         onOpenMarket={handleOpenMarket}
         marketOpen={marketOpen}
+        onOpenTeams={() => handleOpenTeamWorkbench(null)}
+        teamsOpen={teamsOpen}
         onOpenScheduled={handleOpenScheduled}
         scheduledOpen={scheduledOpen}
         onOpenAutofix={handleOpenAutofix}
@@ -2299,7 +2301,9 @@ export function AppShell() {
         ref={sidebarResizer.panelRef}
         id="session-sidebar"
         className={`app-sidebar sidebar-container${sidebarOpen ? " sidebar-open" : " sidebar-closed"}${mobileSidebarReady ? "" : " sidebar-mobile-pending"}${sidebarResizer.isResizing ? " sidebar-resizing" : ""}`}
-        inert={rightPanelFullWidth}
+        // 关闭的侧栏只是滑出画布（手机）或压到 0px（桌面）：不加 inert 时它的行仍在
+        // Tab 序里并被读屏念出。手机在 mobile-pending 期间同样隐藏。
+        inert={rightPanelFullWidth || !sidebarOpen || (isMobile && !mobileSidebarReady)}
         style={{
           "--sidebar-width": `${sidebarResizer.width}px`,
           background: "var(--bg-panel)",
@@ -3249,6 +3253,8 @@ export function AppShell() {
         ref={rightPanelResizer.panelRef}
         id="file-panel"
         className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}${rightPanelFullWidth ? " right-panel-full-width" : ""}${rightPanelResizer.isResizing ? " right-panel-resizing" : ""}`}
+        // 关闭时面板宽 0 或滑出画布：和侧栏一样移出 Tab 序与无障碍树。
+        inert={!rightPanelOpen}
         style={{
           "--right-panel-width": `${rightPanelResizer.width}px`,
           display: "flex",

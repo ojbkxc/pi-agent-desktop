@@ -603,7 +603,7 @@ export function SkillsConfig({
     } catch (e) {
       // 过代际的失败同样不能盖掉新一轮加载的错误/列表状态。
       if (generation !== loadSkillsSeqRef.current) return [];
-      setError(String(e));
+      setError(e instanceof Error ? e.message : String(e));
       return [];
     } finally {
       if (generation === loadSkillsSeqRef.current) setLoading(false);

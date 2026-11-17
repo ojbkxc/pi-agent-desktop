@@ -678,6 +678,11 @@ test("while a run streams, a bare /mcp opens Settings or is queued as before", a
       valueRef: { current: value },
       onAudioUnlock() {},
       clearInput() { calls.cleared += 1; },
+      // 单飞闸门桩：真实实现把「解析 + 附件定序 + 单飞」搬进 submitResolvedMessage（上游 c9867eae）；
+      // 这里只装配它交给 submit 的等价物（本用例的解析是恒等映射）。
+      async submitResolvedMessage(message, images, submit) {
+        submit(message, images.length ? images : undefined);
+      },
       onBuiltinCommand: async () => ({ handled }),
       canRunBuiltinSlashCommandWhileStreaming,
       isBareMcpCommand,
@@ -720,6 +725,11 @@ test("while a run streams, a streamable built-in the builtin layer rejects is qu
       valueRef: { current: value },
       onAudioUnlock() {},
       clearInput() { calls.cleared += 1; },
+      // 单飞闸门桩：真实实现把「解析 + 附件定序 + 单飞」搬进 submitResolvedMessage（上游 c9867eae）；
+      // 这里只装配它交给 submit 的等价物（本用例的解析是恒等映射）。
+      async submitResolvedMessage(message, images, submit) {
+        submit(message, images.length ? images : undefined);
+      },
       onBuiltinCommand: async () => ({ handled }),
       canRunBuiltinSlashCommandWhileStreaming,
       isBareMcpCommand,
@@ -763,6 +773,10 @@ test("handleSend lets a handled /mcp through while streaming and sends an unowne
       sessionMentionTargetsRef: { current: new Map() },
       runBuiltinCommand: async (message) => { calls.builtin.push(message); return handled; },
       clearInput() {},
+      // 单飞闸门桩（上游 c9867eae）：真实实现负责解析 + 附件定序 + 单飞，再交给 submit。
+      async submitResolvedMessage(message, images, submit) {
+        submit(message, images.length ? images : undefined);
+      },
       onSend: (message) => calls.sent.push(message),
       // 本用例只关心 /mcp 的路由，Agent Team armed 显式关掉，让发送的就是原文。
       agentTeamsEnabled: false,
@@ -1020,6 +1034,10 @@ test("handleSend sends exactly once and routes builtin commands through the pend
       sessionMentionTargetsRef: { current: [] },
       onSend(message, images) { sends += 1; handler.sent = { message, images }; },
       clearInput() { cleared += 1; },
+      // 单飞闸门桩（上游 c9867eae）：真实实现解析 + 附件定序后交给 submit；本用例解析到闭包里的 resolved。
+      async submitResolvedMessage(message, images, submit) {
+        submit(resolved ?? message, images.length ? images : undefined);
+      },
       agentTeamsEnabled,
       // handleSend 复位的是「当前会话」的 armed（`disarmAgentTeam(teamScope)`），所以这层
       // 上下文必须提供 teamScope —— 与组件里 `agentTeamScope ?? draftKey` 同一个值。
@@ -1387,4 +1405,104 @@ test("the composer stays editable while compacting and says messages queue", () 
 
   assert.doesNotMatch(html, /<textarea[^>]*(?:^|[^-a-zA-Z])disabled/);
   assert.match(html, /placeholder="Compacting… messages queue until it finishes"/);
+});
+
+// ── 上游 c9867eae 移植：异步引用提交的单飞闸门 ───────────────────────────────
+// resolveSessionReferences 要 await 网络；闸门保证同一时刻只有一次提交在途，
+// 且老请求（代次失效 / 草稿切走 / 被清空）完成时既不发送、也不清掉新草稿。
+// 真实实现把「清空 + 窗口增量恢复」留在调用方的 submit 里（见 handleSend/sendQueued 接线用例）。
+test("submitResolvedMessage：单飞、保留提交快照、陈旧完成不解锁新提交", async () => {
+  function fixture() {
+    let release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    const files = [{ id: "old", name: "old.txt" }];
+    const images = [];
+    const state = {
+      draftKey: "a",
+      draftKeyRef: { current: "a" },
+      submissionPendingRef: { current: false },
+      submissionGenerationRef: { current: 0 },
+      attachmentClearVersionRef: { current: 0 },
+      attachedFilesRef: { current: files },
+      sessionMentionTargetsRef: { current: new Map([["target", "original-id"]]) },
+      async resolveSessionReferences(text, selected) { await pending; return `${text}:${selected.get("target")}`; },
+      composeMessageWithAttachedFiles: (text, attachments) => `${text}:${attachments[0]?.id ?? ""}`,
+    };
+    const submitResolvedMessage = chatInputCallback("submitResolvedMessage", state);
+    const sent = [];
+    const run = () => submitResolvedMessage("original", images, (message) => sent.push(message));
+    return { state, images, release, sent, run, submitResolvedMessage };
+  }
+
+  // ① 单飞：在途时第二次提交被忽略；完成后 pending 复位，只发出一条。
+  const concurrent = fixture();
+  const first = concurrent.run();
+  await concurrent.run();
+  concurrent.release();
+  await first;
+  assert.deepEqual(concurrent.sent, ["original:original-id:old"]);
+  assert.equal(concurrent.state.submissionPendingRef.current, false);
+
+  // ② 提交快照：await 窗口内改了 files / targets，发送用的仍是提交那一刻的快照。
+  const snapshot = fixture();
+  const snapshotWork = snapshot.run();
+  snapshot.state.attachedFilesRef.current = [{ id: "new", name: "new.txt" }];
+  snapshot.state.sessionMentionTargetsRef.current.set("target", "new-id");
+  snapshot.release();
+  await snapshotWork;
+  assert.deepEqual(snapshot.sent, ["original:original-id:old"], "提交保留附件/引用快照");
+  assert.equal(snapshot.state.submissionPendingRef.current, false);
+
+  // ③ 草稿切走（draftKeyRef 与调用时的 draftKey 不一致）：不发送，pending 复位。
+  const switched = fixture();
+  const switchedWork = switched.run();
+  switched.state.draftKeyRef.current = "b";
+  switched.release();
+  await switchedWork;
+  assert.equal(switched.sent.length, 0);
+  assert.equal(switched.state.submissionPendingRef.current, false);
+
+  // ④ 在途被显式清空（attachmentClearVersionRef 变）：不发送。
+  const cleared = fixture();
+  const clearedWork = cleared.run();
+  cleared.state.attachmentClearVersionRef.current += 1;
+  cleared.release();
+  await clearedWork;
+  assert.equal(cleared.sent.length, 0);
+  assert.equal(cleared.state.submissionPendingRef.current, false);
+
+  // ⑤ 老完成的代次已过期：不发，也不得把「新一代已开始的提交」误解锁。
+  const stale = fixture();
+  const staleWork = stale.run();
+  stale.state.submissionGenerationRef.current += 1;
+  stale.state.submissionPendingRef.current = true;
+  stale.release();
+  await staleWork;
+  assert.equal(stale.sent.length, 0);
+  assert.equal(stale.state.submissionPendingRef.current, true, "老完成不得解锁新提交");
+
+  // ⑥ 入口即失配（draftKeyRef 已非本次 draftKey）：直接返回。
+  const entryMismatch = fixture();
+  entryMismatch.state.draftKeyRef.current = "b";
+  await entryMismatch.run();
+  assert.equal(entryMismatch.sent.length, 0);
+  assert.equal(entryMismatch.state.submissionPendingRef.current, false);
+
+  // ⑦ 解析抛错：pending 复位且错误向上传播；随后重试可成功。
+  const failed = fixture();
+  failed.state.resolveSessionReferences = async () => { throw new Error("network"); };
+  await assert.rejects(failed.submitResolvedMessage("x", failed.images, () => {}), /network/);
+  assert.equal(failed.state.submissionPendingRef.current, false);
+  failed.state.resolveSessionReferences = async () => "ok";
+  await failed.submitResolvedMessage("x", failed.images, (message) => failed.sent.push(message));
+  assert.equal(failed.sent.length, 1);
+
+  // 接线断言：handleSend/sendQueued 都经由同一把闸门（不是各自一把锁）。
+  const source = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  const handleStart = source.indexOf("const handleSend = useCallback(async () => {");
+  const handleBody = source.slice(handleStart, source.indexOf("const slashQuery", handleStart));
+  assert.match(handleBody, /await submitResolvedMessage\(/, "handleSend 必须经单飞闸门");
+  const queuedStart = source.indexOf("const sendQueued = useCallback(async (mode: \"steer\" | \"followup\") => {");
+  const queuedBody = source.slice(queuedStart, queuedStart + 2400);
+  assert.match(queuedBody, /submitResolvedMessage\(/, "sendQueued 必须经同一把闸门");
 });

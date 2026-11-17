@@ -50,6 +50,7 @@ import { ArtifactsSidebarRow } from "./artifacts/ArtifactsSidebarRow";
 import { TasksSidebarRow } from "./tasks/TasksSidebarRow";
 import { AutofixSidebarRow } from "./AutofixSidebarRow";
 import { MarketSidebarRow } from "./skill-market/MarketSidebarRow";
+import { AgentTeamsSidebarRow } from "./AgentTeams/AgentTeamsSidebarRow";
 import { isScheduledRunSession } from "@/hooks/useScheduledTasks";
 import { prefetchSessionData } from "@/lib/session-data-cache";
 import { isImeComposing } from "@/lib/ime";
@@ -114,6 +115,8 @@ interface Props {
   /** Opens the skill market page; the row under Tasks is absent without it. */
   onOpenMarket?: () => void;
   marketOpen?: boolean;
+  onOpenTeams?: () => void;
+  teamsOpen?: boolean;
 }
 
 interface WorktreeState {
@@ -355,7 +358,7 @@ function readIdSetPref(key: Parameters<typeof getPrefJson>[0]): Set<string> {
     : new Set();
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onChatWorkspaceCwdChange, onProjectsChange, onBackgroundTaskDone, hiddenFinishedSessionIds, onRunningSessionIdsChange, onSessionsChange, headerControls, onOpenTerminal, onOpenScheduled, scheduledOpen = false, onOpenAutofix, autofixOpen = false, onOpenArtifacts, artifactsOpen = false, onOpenTasks, tasksOpen = false, onOpenMarket, marketOpen = false }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onChatWorkspaceCwdChange, onProjectsChange, onBackgroundTaskDone, hiddenFinishedSessionIds, onRunningSessionIdsChange, onSessionsChange, headerControls, onOpenTerminal, onOpenScheduled, scheduledOpen = false, onOpenAutofix, autofixOpen = false, onOpenArtifacts, artifactsOpen = false, onOpenTasks, tasksOpen = false, onOpenMarket, marketOpen = false, onOpenTeams, teamsOpen = false }: Props) {
   const { t } = useI18n();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [chatWorkspaceCwd, setChatWorkspaceCwd] = useState<string | null>(null);
@@ -2135,6 +2138,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
         {onOpenTasks && <TasksSidebarRow active={tasksOpen} runningCount={runningSessionIds.size} onOpen={onOpenTasks} />}
         {onOpenMarket && <MarketSidebarRow active={marketOpen} onOpen={onOpenMarket} />}
+        {onOpenTeams && <AgentTeamsSidebarRow active={teamsOpen} onOpen={onOpenTeams} />}
         {onOpenScheduled && <ScheduledSidebarRow active={scheduledOpen} onOpen={onOpenScheduled} />}
         {onOpenAutofix && <AutofixSidebarRow active={autofixOpen} onOpen={onOpenAutofix} />}
         {onOpenArtifacts && <ArtifactsSidebarRow active={artifactsOpen} onOpen={onOpenArtifacts} />}
@@ -3277,11 +3281,27 @@ function SessionItem({
               touch devices, which have no hover, and while its menu is open,
               since the pointer then sits on the portal). Transient runtime
               rows expose no disk-backed actions and have no reliable time.
-              The slot keeps one fixed width so the title never reflows. */}
+              The time and the button share one grid cell and the time stays
+              laid out (hidden) under the button, so the slot is as wide as the
+              wider of the two: a long label ("19小时") never spills over the
+              title, and the title never reflows on hover. */}
           {!session.transient && (
             <div
               className="session-item-trailing"
             >
+              <span
+                className="session-item-time"
+                title={formatRelativeTime(session.modified, locale)}
+                aria-hidden={hovered || treeFocused || touchMode || menuOpen ? true : undefined}
+                style={{
+                  fontSize: "var(--fs-micro)", lineHeight: 1, color: "var(--text-dim)",
+                  whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums",
+                  paddingRight: 2,
+                  visibility: hovered || treeFocused || touchMode || menuOpen ? "hidden" : undefined,
+                }}
+              >
+                {formatCompactRelativeTime(session.modified, locale)}
+              </span>
               {hovered || treeFocused || touchMode || menuOpen ? (
                 <button
                   ref={menuButtonRef}
@@ -3300,19 +3320,7 @@ function SessionItem({
                     </svg>
                   </span>
                 </button>
-              ) : (
-                <span
-                  className="session-item-time"
-                  title={formatRelativeTime(session.modified, locale)}
-                  style={{
-                    fontSize: "var(--fs-micro)", lineHeight: 1, color: "var(--text-dim)",
-                    whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums",
-                    paddingRight: 2,
-                  }}
-                >
-                  {formatCompactRelativeTime(session.modified, locale)}
-                </span>
-              )}
+              ) : null}
             </div>
           )}
 

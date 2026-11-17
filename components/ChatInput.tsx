@@ -1574,6 +1574,40 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     }
   }, [attachedImages.length, clearInput, onBuiltinCommand]);
 
+  // 单飞闸门（上游 c9867eae 移植）：#提及解析/引用展开要 await 网络。同一时刻只允许一次
+  // 提交在途，发送/插话/追问共用同一把闸；老请求（代次失效、草稿切走、被清空）完成时
+  // 既不能发送，也不能清掉期间产生的新草稿。
+  const submissionPendingRef = useRef(false);
+  const submissionGenerationRef = useRef(0);
+  useEffect(() => () => {
+    submissionGenerationRef.current += 1;
+    submissionPendingRef.current = false;
+  }, [draftKey]);
+
+  // 只做闸门 + 解析 + 陈旧校验，然后把「已解析、已定序的附件快照」交给 submit。
+  // 清空与窗口增量恢复按本仓既有语义（d5-9/d5-10）留在调用方的 submit 里完成。
+  const submitResolvedMessage = useCallback(async (
+    msg: string,
+    images: AttachedImage[],
+    submit: (resolvedMessage: string, images: AttachedImage[] | undefined) => void,
+  ) => {
+    if (submissionPendingRef.current || draftKeyRef.current !== draftKey) return;
+    submissionPendingRef.current = true;
+    const generation = submissionGenerationRef.current;
+    const clearVersion = attachmentClearVersionRef.current;
+    const files = attachedFilesRef.current;
+    const targets = new Map(sessionMentionTargetsRef.current);
+    try {
+      const resolved = await resolveSessionReferences(msg, targets);
+      if (generation !== submissionGenerationRef.current
+        || draftKeyRef.current !== draftKey
+        || clearVersion !== attachmentClearVersionRef.current) return;
+      submit(composeMessageWithAttachedFiles(resolved, files), images.length ? images : undefined);
+    } finally {
+      if (generation === submissionGenerationRef.current) submissionPendingRef.current = false;
+    }
+  }, [draftKey, sessionMentionTargetsRef]);
+
   const handleSend = useCallback(async () => {
     const msg = value.trim();
     // d5-9：发送基线快照——await 窗口（#提及解析）内新增键入靠它找回。
@@ -1587,32 +1621,31 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     if (isStreaming) return;
     // A run cannot start in a cwd that is gone; keep the draft until it is back or another project is picked.
     if (workspaceUnavailable) return;
-    const resolvedMessage = composeMessageWithAttachedFiles(
-      await resolveSessionReferences(msg, sessionMentionTargetsRef.current),
-      attachedFilesRef.current,
-    );
-    // Agent Team armed（默认开，一次性）：团队指令只对模型可见，落盘的消息体因此带着包装块，
-    // 界面渲染时用 stripAgentTeamRequest 剥掉（见 lib/agent-team-request.ts）。
-    const messageForModel = agentTeamsEnabled ? withAgentTeamRequest(resolvedMessage) : resolvedMessage;
-    onSend(messageForModel, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
-    // 发出去即复位（对齐 cc-haha 发送调用之后的 `disarmAgentTeam()`）：团队只作用于这一条，
-    // 后续闲聊不再累积建团指令。命令类消息不被包装，也就不消耗这次勾选。
-    if (shouldDisarmAgentTeam(agentTeamsEnabled, messageForModel)) disarmAgentTeam(teamScope);
-    // d5-9：clearInput 前捕获 await 窗口内的新增键入——#提及解析期间用户继续
-    // 打字的文字不能随发送一起蒸发（仅尾部追加可安全归位，中间删改保守丢弃）。
-    const typedDuringSend = pendingTypedSuffix(sendBaseline, valueRef.current);
-    clearInput();
-    if (typedDuringSend) {
-      valueRef.current = typedDuringSend;
-      setValue(typedDuringSend);
-      const ta = textareaRef.current;
-      if (ta) requestAnimationFrame(() => {
-        ta.style.height = "auto";
-        ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
-        ta.setSelectionRange(typedDuringSend.length, typedDuringSend.length);
-      });
-    }
-  }, [value, workspaceUnavailable, isStreaming, runBuiltinCommand, onSend, clearInput, onAudioUnlock, sessionMentionTargetsRef, agentTeamsEnabled, teamScope]);
+    // 附件按「已落地」的 ref 在提交那一刻定序（d5-10）：resolve 完成前新加的图/文件不算这一次。
+    await submitResolvedMessage(msg, attachedImagesRef.current, (resolvedMessage, images) => {
+      // Agent Team armed（默认开，一次性）：团队指令只对模型可见，落盘的消息体因此带着包装块，
+      // 界面渲染时用 stripAgentTeamRequest 剥掉（见 lib/agent-team-request.ts）。
+      const messageForModel = agentTeamsEnabled ? withAgentTeamRequest(resolvedMessage) : resolvedMessage;
+      onSend(messageForModel, images);
+      // 发出去即复位（对齐 cc-haha 发送调用之后的 `disarmAgentTeam()`）：团队只作用于这一条，
+      // 后续闲聊不再累积建团指令。命令类消息不被包装，也就不消耗这次勾选。
+      if (shouldDisarmAgentTeam(agentTeamsEnabled, messageForModel)) disarmAgentTeam(teamScope);
+      // d5-9：clearInput 前捕获 await 窗口内的新增键入——#提及解析期间用户继续
+      // 打字的文字不能随发送一起蒸发（仅尾部追加可安全归位，中间删改保守丢弃）。
+      const typedDuringSend = pendingTypedSuffix(sendBaseline, valueRef.current);
+      clearInput();
+      if (typedDuringSend) {
+        valueRef.current = typedDuringSend;
+        setValue(typedDuringSend);
+        const ta = textareaRef.current;
+        if (ta) requestAnimationFrame(() => {
+          ta.style.height = "auto";
+          ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+          ta.setSelectionRange(typedDuringSend.length, typedDuringSend.length);
+        });
+      }
+    });
+  }, [value, workspaceUnavailable, isStreaming, runBuiltinCommand, onSend, clearInput, onAudioUnlock, agentTeamsEnabled, teamScope, submitResolvedMessage]);
 
   const slashQuery = !compact && value.startsWith("/") && !/\s/.test(value.slice(1))
     ? value.slice(1).toLowerCase()
@@ -1852,12 +1885,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     // d5-10：与 handleSend 同规——按「已落地」的附件为准（ref），不读渲染闭包。
     if (!msg && !attachedImagesRef.current.length && !attachedFilesRef.current.length) return;
     onAudioUnlock?.();
-    const images = attachedImagesRef.current.length ? attachedImagesRef.current : undefined;
-    const queue = async () => {
-      const resolvedMessage = composeMessageWithAttachedFiles(
-        await resolveSessionReferences(msg, sessionMentionTargetsRef.current),
-        attachedFilesRef.current,
-      );
+    // 附件在提交那一刻定序（d5-10）：用 ref 快照，不读渲染闭包；/命令 的路由判断也用同一快照。
+    const hasFiles = attachedFilesRef.current.length > 0;
+    const queue = () => submitResolvedMessage(msg, attachedImagesRef.current, (resolvedMessage, submittedImages) => {
       // d5-9：与 handleSend 同规——clearInput 前捕获窗口内新增键入并恢复。
       const typedDuringSend = pendingTypedSuffix(sendBaseline, valueRef.current);
       const restoreTypedDuringSend = () => {
@@ -1872,20 +1902,20 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         });
       };
       const streamingBehavior = mode === "steer" ? "steer" : "followUp";
-      if (mode === "steer" && msg.startsWith("/") && !attachedFilesRef.current.length && onPromptWithStreamingBehavior) {
+      if (mode === "steer" && msg.startsWith("/") && !hasFiles && onPromptWithStreamingBehavior) {
         clearInput();
         restoreTypedDuringSend();
-        onPromptWithStreamingBehavior(resolvedMessage, streamingBehavior, images);
+        onPromptWithStreamingBehavior(resolvedMessage, streamingBehavior, submittedImages);
         return;
       }
       clearInput();
       restoreTypedDuringSend();
       if (mode === "steer" && onSteer) {
-        onSteer(resolvedMessage, images);
+        onSteer(resolvedMessage, submittedImages);
       } else if (mode === "followup" && onFollowUp) {
-        onFollowUp(resolvedMessage, images);
+        onFollowUp(resolvedMessage, submittedImages);
       }
-    };
+    });
     if (!attachedImagesRef.current.length && !attachedFilesRef.current.length && onBuiltinCommand && canRunBuiltinSlashCommandWhileStreaming(msg)) {
       // The builtin layer may not know the command (handled:false); like the
       // bare /mcp branch below, fall through to queueing instead of dropping it.
@@ -1903,7 +1933,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       return;
     }
     void queue();
-  }, [value, onBuiltinCommand, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, runBuiltinCommand, sessionMentionTargetsRef]);
+  }, [value, onBuiltinCommand, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, runBuiltinCommand, submitResolvedMessage]);
 
   const getNextSlashIndex = useCallback((direction: "up" | "down" | "left" | "right") => {
     const lastIndex = displayedSlashCommands.length - 1;
