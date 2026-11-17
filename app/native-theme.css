@@ -331,7 +331,11 @@
 }
 .sidebar-project-context-menu {
   position: fixed;
-  z-index: var(--z-modal);
+  /* Anchor menu, not a dialog: sits above right panel (250) and topbar (90)
+     but must stay below the real dialog layer so an open Settings (1000)
+     still wins. Was --z-modal (1000), which let a portal-in-body menu float
+     over Settings whenever it opened while the menu was up. */
+  z-index: var(--z-popover);
   width: 168px;
   padding: 4px;
   border: var(--hairline) solid var(--border);
@@ -735,7 +739,10 @@
 .shortcut-help-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 750;
+  /* Real dialog: must sit on the dialog layer so opening it while Settings
+     (--z-modal) is up still shows it (portal-in-body nodes win by DOM order
+     at the same layer). Was literal 750, under Settings 1000. */
+  z-index: var(--z-modal);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2452,7 +2459,9 @@ html.dark .sidebar-view-switcher-thumb {
 
 .project-view-menu {
   position: fixed;
-  z-index: var(--z-modal);
+  /* Anchor menu (portal-in-body), not a dialog: 650 clears right panel (250)
+     and topbar (90) without floating over an open Settings dialog. */
+  z-index: var(--z-popover);
   display: flex;
   width: 216px;
   padding: 5px;
@@ -2769,7 +2778,10 @@ html.dark .sidebar-view-switcher-thumb {
 .project-picker-modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: var(--z-chrome);
+  /* True modal (add / continue project). Portaled to body by SessionSidebar,
+     so it needs the dialog layer; --z-chrome (90) would only tie with the
+     topbar. */
+  z-index: var(--z-modal);
   background: color-mix(in srgb, var(--bg) 55%, transparent);
   backdrop-filter: blur(6px);
   display: flex;
