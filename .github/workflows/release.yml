@@ -159,6 +159,8 @@ jobs:
             - **Command approval.** Before a shell command runs, it is matched against a dangerous-command rule set and can require your confirmation (`off` by default, fail-open when no one can answer). Settings › General › Command approval.
             - **"Needs you" inbox.** Sessions parked on a question or approval are pinned at the top of the sidebar, and the phone home screen shows who is waiting on you and who finished. Completing runs can also push a notification, with a stop-push option.
             - **Web login is password-only.** The username field is gone (including the browser's Basic-auth prompt), and `/login` doubles as the first-time password setup page when no password is configured yet.
+            - **Team members switch models when theirs dies.** If a member's provider starts failing (upstream 5xx, dropped connections, exhausted quota) while the team has other usable models, the member is moved to another model and told to continue where it stopped. A different provider is preferred, since one provider's failure usually takes its sibling models with it; models already tried in that failure are not retried; a model must both exist and have credentials; and after two switches the team lead is notified instead. Code errors, auth failures and missing models never trigger a switch.
+            - **A `/goal` button next to the team toggle.** One click inserts `/goal ` at the cursor; type the objective and the agent keeps working toward it across turns.
 
             ### UI
 
@@ -222,6 +224,8 @@ jobs:
             - **命令审批。** shell 命令执行前按危险命令规则匹配，可要求你确认（默认关闭；无人可确认时放行）。设置 › 通用 › 命令审批。
             - **「需要你」收件箱。** 停在提问或审批上的会话置顶在侧栏；手机端首页显示谁在等你、谁已完成。完成时还可推送通知，并提供停止推送。
             - **网页登录只要密码。** 用户名已移除（连同浏览器的 Basic 认证弹框），`/login` 在尚未设密码时兼作首次设置页。
+            - **团队成员模型挂了会自动换。** 成员的上游开始失败（5xx、连接中断、额度耗尽）而团队里还有别的可用模型时，把成员切到另一个模型并让它接着干没干完的活。优先换**另一个 provider** —— 同一 provider 的故障通常连带其下所有模型；本次故障里已经试过又失败的模型不再重试；候选必须**模型存在且有凭据**；换满两次就改为提醒 team lead，不再硬换。代码错误、鉴权失败、模型不存在一律不触发切换。
+            - **团队按钮左边的 `/goal` 按钮。** 点一下把 `/goal ` 插到光标处；写下目标，模型会跨轮次持续推进直到完成。
 
             ### 界面
 
