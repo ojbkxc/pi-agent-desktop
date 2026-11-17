@@ -9182,17 +9182,20 @@ html.native-desktop :is(
 
 /* Small controls in the sidebar and topbar whose hover used to be set from JS. */
 .session-item-trailing {
-  display: flex;
+  /* Time and "…" button stack in one cell; the slot is as wide as the wider
+     of the two (CJK labels such as "19小时" exceed the row height). */
+  display: grid;
   align-items: center;
-  justify-content: flex-end;
-  width: var(--session-row-height);
+  justify-items: end;
+  min-width: var(--session-row-height);
   height: 100%;
   flex-shrink: 0;
 }
+.session-item-trailing > * { grid-area: 1 / 1; }
 .session-item-more {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
   width: 100%;
   height: 100%;
   padding: 0;
@@ -9231,6 +9234,7 @@ html.native-desktop :is(
 .session-item-trailing .session-item-time {
   padding-inline-end: var(--session-action-inset) !important;
 }
+.session-item-more-icon { margin-inline-end: var(--session-action-inset); }
 
 .worktree-remove-button {
   display: flex;
@@ -13607,3 +13611,209 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   display: block;
   margin-top: 8px;
 }
+
+/* ── 公网访问：错误提示 / 端口说明 / 连接诊断 / 配置自检（fork，独占 public-access-*） ── */
+
+.public-access-error-hint {
+  margin: 0;
+  padding: 8px 10px;
+  border: var(--hairline) solid color-mix(in srgb, var(--warning) 35%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+  color: var(--text);
+  font-size: var(--fs-caption);
+  line-height: 1.55;
+}
+
+.public-access-port-hint {
+  display: block;
+}
+
+.public-access-diag {
+  padding: 6px 10px;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.public-access-diag-summary {
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-muted);
+  font-size: var(--fs-caption);
+}
+
+.public-access-diag-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+}
+
+.public-access-diag-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  color: var(--text-muted);
+}
+
+.public-access-diag-row.is-failed {
+  color: var(--danger);
+}
+
+.public-access-diag-outcome,
+.public-access-diag-duration,
+.public-access-diag-reason {
+  color: var(--text-dim);
+}
+
+.public-access-diag-row.is-failed .public-access-diag-outcome {
+  color: var(--danger);
+}
+
+.public-access-diag-reason {
+  overflow-wrap: anywhere;
+}
+
+.public-access-check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-caption);
+}
+
+.public-access-check-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  padding: 4px 8px;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.public-access-check-row.is-failed {
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+}
+
+.public-access-check-status {
+  color: var(--text-muted);
+}
+
+.public-access-check-row.is-ok .public-access-check-status {
+  color: var(--success);
+}
+
+.public-access-check-row.is-failed .public-access-check-status {
+  color: var(--danger);
+}
+
+.public-access-check-info {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.public-access-check-duration {
+  margin-left: auto;
+  color: var(--text-dim);
+}
+
+/* A finger needs about 44px (Apple HIG, WCAG 2.5.5). The sidebar's rows and
+   icon buttons are sized for a pointer (24-30px), so on a touch screen they
+   grow to 44px; the "…" in a session row follows --session-row-height. */
+/* Scoped under .app-sidebar so they outrank the base rules further up. */
+@media (pointer: coarse) {
+  .app-sidebar .session-item { --session-row-height: 44px; }
+  .app-sidebar .sidebar-header-row { height: 44px; }
+  .app-sidebar .sidebar-project-tree-row,
+  .app-sidebar .sidebar-project-tree-row-main,
+  .app-sidebar .sidebar-project-tree-show-more { min-height: 44px; }
+  .app-sidebar .sidebar-project-tree-action,
+  .app-sidebar .sidebar-project-tree-add,
+  .app-sidebar .sidebar-project-tree-menu,
+  .app-sidebar .sidebar-chrome-button {
+    width: 44px;
+    height: 44px;
+  }
+  /* Room for the two 44px project actions that stay visible without hover. */
+  .app-sidebar .sidebar-project-tree-row .sidebar-project-tree-row-main { padding-right: 92px; }
+  .app-topbar .native-toolbar-button { min-width: 44px; min-height: 44px; }
+  /* Fixed over the 48px topbar: 44px tall, still centred on it. */
+  .right-panel-toggle-button {
+    top: 2px;
+    right: 6px;
+    width: 44px !important;
+    min-width: 44px !important;
+    max-width: 44px !important;
+    height: 44px;
+    min-height: 44px;
+  }
+}
+
+/* ==========================================================================
+   Public access · phone pairing (components/ServerSection.tsx, app/pair).
+   The QR block reuses .relay-qr (dark modules on a white plate); only the
+   surrounding layout and the phone page's status copy are new.
+   ========================================================================== */
+.public-access-mobile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.public-access-pairing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+}
+
+.public-access-device-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.public-access-device-empty {
+  padding: 0 14px 6px;
+}
+
+.public-access-device-pending {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+}
+
+.public-access-pair-status {
+  margin: 0;
+  padding: 18px 4px 6px;
+  color: var(--text);
+  font-size: var(--fs-title);
+  line-height: 1.6;
+  text-align: center;
+}
+
+.public-access-pair-hint {
+  margin: 0;
+  padding: 0 4px;
+  color: var(--text-muted);
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  text-align: center;
+}
+

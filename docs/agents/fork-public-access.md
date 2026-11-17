@@ -5,11 +5,12 @@ the port this server listens on, and a Cloudflare tunnel that publishes it on th
 internet. Both are reachable only from this computer (any write route is local-only),
 and the tunnel is refused outright without a web password.
 
-The feature is a port of cc-haha's tunnel management, minus the parts that do not
-apply here: **no pairing, no QR code, no device list, no second listener, no proxy
-bridge.** Authentication is the existing `PI_WEB_PASSWORD`; the Next server that
-serves the browser is itself the thing the tunnel points at, so there is no gateway
-process to manage.
+The feature is a port of cc-haha's tunnel management. What the first cut left out —
+**the proxy bridge, phone pairing / QR / device list, connection diagnostics** — is
+now implemented (see the sections below); it still has **no second listener**: the Next
+server that serves the browser is itself the thing the tunnel points at, so there is no
+gateway process to manage. Authentication is the existing `PI_WEB_PASSWORD`, plus a
+paired phone's device token as a second, password-free path.
 
 ## Config layer (`lib/public-access/settings.ts`, `lib/server-port.ts`)
 
@@ -62,22 +63,83 @@ with `redirect: "manual"` and confirms the `gatewayId` is this process's own. A 
 hostname that answers with someone else's id is not trusted. Keep this route free of
 anything else.
 
-The probe fetches with the **undici package's own `fetch` plus an explicit direct
-`Agent` dispatcher**, deliberately bypassing both `globalThis.fetch` (which
-`applyGlobalFetchForProxy` swaps for the proxy-routed version in manual proxy mode)
-and the process-wide dispatcher (`undici.setGlobalDispatcher(EnvHttpProxyAgent)`). The
-connector strips `*_proxy` from its environment and always egresses directly, so a
-probe that honoured the proxy would fail — and be read as "the hostname does not reach
-this gateway" — exactly when the proxy is down while the tunnel is fine. This is an
-intentional divergence from cc-haha, whose probe *does* go through the proxy because
-its connector uses the proxy bridge.
+The probe fetches with the **undici package's own `fetch`**. In direct mode it uses an
+explicit direct `Agent` dispatcher, deliberately bypassing both `globalThis.fetch`
+(which `applyGlobalFetchForProxy` swaps for the proxy-routed version in manual proxy
+mode) and the process-wide dispatcher (`undici.setGlobalDispatcher(EnvHttpProxyAgent)`).
+When the manager runs a **proxy bridge**, the probe is handed the same proxy URL
+(`options.proxyUrl`, from `resolveOutboundProxyUrl()` in `lib/network-proxy.ts`) and
+builds a `ProxyAgent` from it, so probe and connector take the same egress path. The
+earlier rule — "the connector egresses directly, so the probe must too" — has been
+replaced by "both follow the bridge", because the connector now goes through the bridge
+whenever a proxy is configured.
+
+## Proxy bridge (`lib/public-access/cloudflare-proxy.ts`)
+
+cloudflared 2026.x ignores `HTTPS_PROXY` on both egress paths — the edge TCP dial to
+`regionN.v2.argotunnel.com:7844` and Quick Tunnel provisioning to `api.trycloudflare.com`.
+In a proxy-only network the connector either never starts or is dropped right after
+registering, which the manager reads as `network` and tears down forever.
+
+`startCloudflareProxy()` binds local loopback listeners and hands their addresses to
+cloudflared, which then dials the local bridge instead of the internet:
+
+- **edge bridge** — four TCP listeners (one per edge connection cloudflared opens); each
+  tunnelled through a proxy `CONNECT` to `regionN.v2.argotunnel.com:7844`, TLS stays
+  inside cloudflared.
+- **quick-service bridge** — one local `http.Server` with a `randomBytes(24)` path
+  prefix, forwarding provisioning over proxy `CONNECT` + TLS to `api.trycloudflare.com:443`.
+
+`tunnel.ts` passes `--no-prechecks` (cloudflared's built-in prechecks probe direct
+connectivity and always fail here), one `--edge` per bridge address, and `--quick-service`
+in quick mode. Proxy credentials only ever reach the `Proxy-Authorization` handshake —
+never argv, never the child env, never diagnostic text. `http:` and `https:` proxies are
+supported; `socks:`/PAC are rejected with `unsupported_proxy_protocol`. A `proxy`-class
+error is **not retried** (unlike `network`), because repeating it just burns time.
+
+## Diagnostics (`lib/public-access/diagnostics.ts`)
+
+Every start attempt writes `{attemptId, stage, outcome, durationMs, reason, details}`
+events into a 40-entry ring buffer (`preparing / binary / proxy_transport / spawning /
+registering / routes / binding / verifying / online / stopping`). Strings are sanitized
+before they land: the tunnel token (raw and base64), proxy `user:pass` (plain and base64)
+and credential-bearing URLs are scrubbed, 2 KB cap. `status.diagnostics` surfaces them
+to the settings UI's collapsible panel, keyed by attempt.
+
+`POST /api/public-access/diagnose` runs five read-only checks from this computer (no
+tunnel manager, no cloudflared spawn): `binary` (locate), `proxy` (TCP connect proof),
+`token` (decode to `tunnelId`), `dns` (resolve the public hostname), `origin` (public
+`/health` round-trip, same proxy path as the connector). It is local-only, returns
+`info` (safe machine values) separately from `error` (raw, UI uses it as `title`).
+
+## Phone pairing (`lib/public-access/pairing.ts`, `lib/public-access/devices.ts`)
+
+Mirrors cc-haha's flow. `POST /api/public-access/pair/qr` (local-only) mints a one-time
+secret (5 min TTL, only `sha256` kept in memory) and encodes `<origin>/pair?secret=…` as
+the QR payload. The phone `POST`s the secret to `POST /api/public-access/pair`; the
+server immediately voids it, records a pending request and returns a one-time
+`claimSecret`. The user approves/rejects on the computer (`POST /api/public-access/pair/[id]`).
+`POST /api/public-access/pair/claim` then exchanges the `claimSecret` for a long-lived
+device token, written into the `__Host-pi-remote` cookie.
+
+The device table (`~/.pi/agent/pi-web/public-access-devices.json`, 0600, atomic, max 32
+devices, 30-day TTL) stores only `sha256(token)`; plaintext exists once in the claim
+response. `DELETE /api/public-access/devices/[id]` revokes (local-only). Pairing state
+itself lives on `globalThis` (route handlers are separate bundles); a restart drops
+unfinished pairings, never issued tokens. `proxy.ts` lets a device-authenticated request
+through the password gate, and lets the two pairing paths through when the request Host
+is the tunnel's own — the one-time secret/claimSecret is the credential there.
+`lib/request-security.ts` accepts a device token as the second credential alongside the
+web password for the public-host/origin checks. The web password is unchanged and
+non-revocable-by-device: revoking a device never touches it.
 
 ## State machine (`lib/public-access/manager.ts`, `runtime.ts`)
 
 `unconfigured | disabled | connecting | online | reconnecting | failed`, each with a
 `phase` and a classified `error` (network / configuration / token / route / runtime /
-stop). Starts are single-flight per generation; only network-class errors retry, with
-backoff `min(30s, 1s·2^n)`. `restore()` runs at server start through
+proxy / stop). Starts are single-flight per generation; only network-class errors retry,
+with backoff `min(30s, 1s·2^n)`; a `proxy`-class error fails without retrying (repeating
+it only burns time). `restore()` runs at server start through
 `instrumentation-node.ts` and requires autoStart, the consent version, a saved config
 **and a web password**. The manager is a `globalThis` singleton (`lib/public-access/runtime.ts`)
 so dev hot-reload cannot spawn a second tunnel.
@@ -159,8 +221,8 @@ port takes effect on restart; the UI says so.
 
 ## Not implemented (on purpose)
 
-Pairing / QR / device management, cc-haha's separate second listener and its
-phone-visible path allow-list, the `cloudflareProxy.ts` network-proxy bridge, bundling
-cloudflared into the Tauri resources (no tier reads the packaged resources at all — it is
-downloaded on demand into the user directory, `~/.pi/agent/bin/cloudflared/`, or pinned
-via `PI_WEB_CLOUDFLARED`), and telling a phone when a quick-tunnel address changes.
+cc-haha's separate second listener and its phone-visible path allow-list (the tunnel
+points at the one Next server), bundling cloudflared into the Tauri resources (no tier
+reads the packaged resources at all — it is downloaded on demand into the user
+directory, `~/.pi/agent/bin/cloudflared/`, or pinned via `PI_WEB_CLOUDFLARED`), and
+pushing a notification to a paired phone when a quick-tunnel address changes.
