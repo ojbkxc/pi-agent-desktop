@@ -284,6 +284,29 @@ export function resolveProxyEnv(
 /** 环境变量里我们接管的键（大写是我们写的，小写是外部可能带的）。 */
 const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"] as const;
 
+/**
+ * 「出网该用哪个代理 URL」的**唯一真源**（带凭据，供需要握手的调用方用）。
+ *
+ * 与 `resolveProxyEnv` 的区别：后者产出的值要写进环境变量，会剥掉 userinfo
+ * （子进程会继承环境变量，凭据不能外流）；这里的返回值只交给 `ProxyAgent` 与
+ * 代理桥握手，凭据必须留着才能认证。
+ *
+ * - `manual` → 设置里那条 URL 原样（`readNetworkProxySettings` 已归一化）；
+ * - `direct` → null；
+ * - `system` → `applyNetworkProxy()` 已把生效 URL 写进进程环境变量，从这里取，
+ *   不重复探测（探测是异步的，而本函数同步）。
+ */
+export function resolveOutboundProxyUrl(
+  settings: NetworkProxySettings = readNetworkProxySettings(),
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  if (settings.mode === "direct") return null;
+  if (settings.mode === "manual") return settings.url || null;
+  return normalizeProxyUrl(
+    env.HTTPS_PROXY ?? env.https_proxy ?? env.HTTP_PROXY ?? env.http_proxy ?? env.ALL_PROXY ?? env.all_proxy ?? "",
+  ) || null;
+}
+
 export interface ApplyNetworkProxyOptions {
   settings?: NetworkProxySettings;
   settingsPath?: string;

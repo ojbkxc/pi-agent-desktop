@@ -16,10 +16,12 @@ import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveCloudflaredBinary } from "./binary.ts";
+import type { PublicAccessDiagnosticWriter } from "./diagnostics.ts";
 import { isCloudflareTunnelToken } from "./settings.ts";
+import type { CloudflareProxyTransport } from "./cloudflare-proxy.ts";
 
 export type CloudflareTunnelPhase = "starting" | "registering" | "ready";
-export type CloudflareTunnelErrorCode = "runtime" | "network" | "configuration" | "token" | "route";
+export type CloudflareTunnelErrorCode = "runtime" | "network" | "configuration" | "token" | "route" | "proxy";
 
 export class CloudflareTunnelError extends Error {
   readonly code: CloudflareTunnelErrorCode;
@@ -40,6 +42,15 @@ export type CloudflareTunnelOptions = {
   token?: string;
   signal?: AbortSignal;
   onPhase?: (phase: CloudflareTunnelPhase) => void;
+  /**
+   * 已起好的代理桥（由 manager 持有生命周期）。有桥时连接器不再直连边缘：
+   * 用 `--edge` 指向桥的本地入口、quick 时再用 `--quick-service` 指向桥的本地 provisioning
+   * 入口，并加 `--no-prechecks`（内置预检探的是直连网络，在代理-only 网络里必失败）。
+   * 只读它的地址，**不**负责 stop —— 桥的关闭归 manager。
+   */
+  proxyBridge?: Pick<CloudflareProxyTransport, "edgeAddresses" | "quickServiceUrl">;
+  /** 诊断写入器；manager 传入的那个会补 attemptId 并用 secrets 脱敏。 */
+  onDiagnostic?: PublicAccessDiagnosticWriter;
 };
 
 export type CloudflareTunnelExit = { code: number | null; signal: NodeJS.Signals | null };
@@ -81,6 +92,10 @@ const DEFAULT_STOP_TIMEOUT_MS = 2_000;
 /**
  * 连接器不许继承他人的代理或 token 设置：剔除 *_proxy / TUNNEL_ / CLOUDFLARED_，
  * 把 HOME 指到本次运行的临时目录，token 只走环境变量（绝不进 argv）。
+ *
+ * 两种出网模式都照此剥离：直连时剥离是安全需求（别把用户的代理/凭据扩散给子进程）；
+ * 走代理桥时也要剥离 —— 流量已经在桥里了，cloudflared 只该看见 `--edge` /
+ * `--quick-service` 的本地地址，绝不能自己再读到一个代理 URL 直连出网（那样等于绕过桥）。
  */
 export function cloudflareProcessEnvironment(
   source: NodeJS.ProcessEnv,
@@ -185,21 +200,64 @@ export function publishedGatewayOrigin(
 }
 
 /**
+ * 代理桥交来的地址必须是回环：`--edge` 若被换成公网地址，cloudflared 会绕过本地桥直连，
+ * 代理就形同虚设。这里只做结构性校验，不解析桥内部状态。
+ */
+function isLoopbackAddress(address: string): boolean {
+  const match = /^(127\.0\.0\.1|localhost):(\d{1,5})$/.exec(address);
+  if (!match) return false;
+  const port = Number(match[2]);
+  return port > 0 && port <= 65535;
+}
+
+function isLoopbackService(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" && (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") && Boolean(parsed.port);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 起连接器。就绪 = 「边缘注册成功」且（quick 时）「入口地址已打印」；
  * 公网是否真的回到本机由 manager 另行验证（见 lib/public-access/gateway.ts）。
+ *
+ * `options.proxyBridge` 有值时，连接器不再直连边缘，而是走 `--edge` / `--quick-service`
+ * 指向的本地代理桥（见 lib/public-access/cloudflare-proxy.ts）。
  */
 export async function startCloudflareTunnel(
   options: CloudflareTunnelOptions,
   dependencies: CloudflareTunnelDependencies = {},
 ): Promise<CloudflareTunnel> {
-  validateOptions(options);
+  const startedAt = Date.now();
+  const diagnostic: PublicAccessDiagnosticWriter = (event) => {
+    try { options.onDiagnostic?.(event); } catch { /* 诊断是旁路，绝不能把连接器带崩。 */ }
+  };
+  try {
+    validateOptions(options);
+  } catch (error) {
+    diagnostic({ stage: "preparing", outcome: "failed", reason: "invalid_configuration", error, durationMs: Date.now() - startedAt });
+    throw error;
+  }
   if (options.signal?.aborted) throw aborted();
   const binary = dependencies.binaryPath ?? resolveCloudflaredBinary(dependencies.env ?? process.env, dependencies.cwd)?.path;
-  if (!binary) throw new CloudflareTunnelError("runtime", "The Cloudflare connector is unavailable");
+  if (!binary) {
+    diagnostic({ stage: "preparing", outcome: "failed", reason: "connector_unavailable", durationMs: Date.now() - startedAt });
+    throw new CloudflareTunnelError("runtime", "The Cloudflare connector is unavailable");
+  }
   try {
     await access(binary, constants.X_OK);
-  } catch {
+  } catch (error) {
+    diagnostic({ stage: "preparing", outcome: "failed", reason: "connector_unavailable", error, durationMs: Date.now() - startedAt });
     throw new CloudflareTunnelError("runtime", "The Cloudflare connector is unavailable");
+  }
+  if (options.proxyBridge) {
+    const bridge = options.proxyBridge;
+    if (bridge.edgeAddresses.length === 0 || bridge.edgeAddresses.some((address) => !isLoopbackAddress(address)) || !isLoopbackService(bridge.quickServiceUrl)) {
+      diagnostic({ stage: "proxy_transport", outcome: "failed", reason: "invalid_proxy_transport", durationMs: Date.now() - startedAt });
+      throw new CloudflareTunnelError("proxy", "The Cloudflare connector could not use the configured network proxy");
+    }
   }
   if (options.signal?.aborted) throw aborted();
 
@@ -250,19 +308,23 @@ export async function startCloudflareTunnel(
 
   const stop = () => {
     if (stopPromise) return stopPromise;
+    const stopStartedAt = Date.now();
     const operation = (async () => {
       stopping = true;
       reject(aborted());
+      diagnostic({ stage: "stopping", outcome: "started" });
       if (child && !exited) {
         try { child.kill("SIGTERM"); } catch { /* 宽限期过后再升级。 */ }
         if (!await waitForExit(dependencies.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS)) {
           try { child.kill("SIGKILL"); } catch { /* 下面核对是否真的退出。 */ }
           if (!await waitForExit(dependencies.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS)) {
+            diagnostic({ stage: "stopping", outcome: "failed", reason: "shutdown_unconfirmed", durationMs: Date.now() - stopStartedAt });
             throw new CloudflareTunnelError("runtime", "Cloudflare connector shutdown could not be confirmed", stop);
           }
         }
       }
       await cleanup();
+      diagnostic({ stage: "stopping", outcome: "succeeded", durationMs: Date.now() - stopStartedAt });
     })();
     stopPromise = operation;
     // 迟到的 OS 退出事件可以让一次未确认的关闭变得可恢复。
@@ -283,11 +345,21 @@ export async function startCloudflareTunnel(
     // 这些 flag 属于全局/tunnel 层，必须在 `run` 之前。
     // 用 TCP 而不是 QUIC：UDP 受限的网络里 QUIC 会先长重试再回退。
     const args = ["--no-autoupdate", "--config", configPath, "tunnel", "--metrics", "127.0.0.1:0", "--protocol", "http2"];
-    if (options.mode === "quick") args.push("--url", `http://127.0.0.1:${options.localPort}`);
-    else args.push("run");
+    if (options.proxyBridge) {
+      // 有代理桥：禁止内置预检（它探的是直连网络，在代理-only 网络里必然失败），
+      // 并把每一条出网连接都指到桥的本地入口。
+      args.push("--no-prechecks");
+      for (const address of options.proxyBridge.edgeAddresses) args.push("--edge", address);
+    }
+    if (options.mode === "quick") {
+      if (options.proxyBridge) args.push("--quick-service", options.proxyBridge.quickServiceUrl);
+      args.push("--url", `http://127.0.0.1:${options.localPort}`);
+    } else args.push("run");
 
     phase(options, "starting");
+    diagnostic({ stage: "spawning", outcome: "started", durationMs: Date.now() - startedAt });
     if (options.signal?.aborted) throw aborted();
+    const spawnStartedAt = Date.now();
     try {
       child = (dependencies.spawn ?? spawn)(binary, args, {
         cwd: directory,
@@ -295,7 +367,9 @@ export async function startCloudflareTunnel(
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
       });
-    } catch {
+      diagnostic({ stage: "spawning", outcome: "succeeded", durationMs: Date.now() - spawnStartedAt });
+    } catch (error) {
+      diagnostic({ stage: "spawning", outcome: "failed", reason: "spawn_failed", error, durationMs: Date.now() - spawnStartedAt });
       throw new CloudflareTunnelError("runtime", "The Cloudflare connector could not be started");
     }
 
@@ -304,6 +378,7 @@ export async function startCloudflareTunnel(
     let registered = false;
     let startupErrorCode: CloudflareTunnelErrorCode | undefined;
     let refusals = 0;
+    let registeringStartedAt = 0;
     let partialLine = "";
     let routes: CloudflareTunnelRoute[] | null = null;
     const routeWaiters = new Set<() => void>();
@@ -328,12 +403,14 @@ export async function startCloudflareTunnel(
       if (/provided.*token.*not valid|invalid tunnel token|failed to parse tunnel token/i.test(logWindow)) startupErrorCode = "token";
       if (/incorrect usage|flag provided but not defined|unknown flag|unknown command/i.test(logWindow)) startupErrorCode = "runtime";
       if (!registered && refusals >= TOKEN_REFUSALS) {
+        diagnostic({ stage: "registering", outcome: "failed", reason: "invalid_cloudflare_token", durationMs: Date.now() - registeringStartedAt });
         reject(new CloudflareTunnelError("token", "Cloudflare refused this tunnel token"));
         return;
       }
       if (registered && (options.mode === "named" || quickUrl)) {
         startupSettled = true;
         clearTimeout(startupTimer);
+        diagnostic({ stage: "registering", outcome: "succeeded", reason: "edge_registered", durationMs: Date.now() - registeringStartedAt });
         phase(options, "ready");
         resolveStartup(options.mode === "quick" ? quickUrl! : null);
       }
@@ -345,6 +422,15 @@ export async function startCloudflareTunnel(
       exitInfo = { code, signal };
       resolveExit();
       releaseRouteWaiters();
+      if (!startupSettled && !stopping) {
+        diagnostic({
+          stage: "registering",
+          outcome: "failed",
+          reason: startupErrorCode === "token" ? "invalid_cloudflare_token" : "connector_exited",
+          durationMs: Date.now() - registeringStartedAt,
+          details: { code, signal: signal ?? null },
+        });
+      }
       reject(new CloudflareTunnelError(startupErrorCode ?? "network", "Cloudflare disconnected before the connection was ready"));
       if (!stopping) {
         for (const callback of exitCallbacks) {
@@ -366,9 +452,14 @@ export async function startCloudflareTunnel(
     child.stderr?.on("data", onData);
     options.signal?.addEventListener("abort", onAbort, { once: true });
     startupTimer = setTimeout(
-      () => reject(new CloudflareTunnelError("network", "Cloudflare connection timed out")),
+      () => {
+        diagnostic({ stage: "registering", outcome: "failed", reason: "register_timeout", durationMs: Date.now() - registeringStartedAt, details: { timeoutMs: dependencies.timeoutMs ?? DEFAULT_START_TIMEOUT_MS } });
+        reject(new CloudflareTunnelError("network", "Cloudflare connection timed out"));
+      },
       dependencies.timeoutMs ?? DEFAULT_START_TIMEOUT_MS,
     );
+    registeringStartedAt = Date.now();
+    diagnostic({ stage: "registering", outcome: "started" });
     phase(options, "registering");
     if (options.signal?.aborted) onAbort();
 

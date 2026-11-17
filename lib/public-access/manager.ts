@@ -5,17 +5,30 @@
  * 与 cc-haha 的差异（有意为之）：
  *   - 没有第二个监听器，隧道直指 Next 进程的端口；`localPort` 一律取运行期真实端口，
  *     用户配置里的值只是记录（避免「配 30141 却跑在 38471」这种假失败）。
- *   - 没有代理桥，错误分类里也就没有 `proxy`；重试只针对 `network`。
  *   - 配置落在 pi-web/settings.json（lib/public-access/settings.ts），不再是私有文件。
+ *
+ * 代理桥（见 lib/public-access/cloudflare-proxy.ts）：本类在 start 时读一次网络代理设置，
+ * 有代理就先起桥并把句柄交给 tunnel.ts（`--edge` / `--quick-service`），自己持有桥的生命周期
+ * —— stop / dispose / 失败重试都要确保桥被关闭，否则本地端口会泄漏。桥起不来归 `proxy`
+ * 错误，**不**走 network 重试（重试没用，要用户改代理设置）。
  *
  * 并发不变量（cc-haha 逐个踩出来的，别删）：
  *   - `generation` 单调递增，所有异步回调用它判断自己是否过期；
  *   - `pending`/`pendingResult` 单飞：重复 start 复用同一次尝试；
  *   - `stopUnconfirmed`：关闭没被确认前禁止新的启动，防止出现两个连接器。
  */
+import { randomUUID } from "node:crypto";
 import { isWebPasswordSourceActive } from "../web-auth.ts";
+import { readNetworkProxySettings, resolveOutboundProxyUrl } from "../network-proxy.ts";
 import { classifyDomainBinding, type DomainBindingStatus } from "./binding.ts";
-import { verifyPublicGateway } from "./gateway.ts";
+import { gatewayId, verifyPublicGateway } from "./gateway.ts";
+import {
+  recordDiagnostic,
+  recentDiagnostics,
+  type PublicAccessDiagnostic,
+  type PublicAccessDiagnosticWriter,
+} from "./diagnostics.ts";
+import { startCloudflareProxyTransport, type CloudflareProxyTransport } from "./cloudflare-proxy.ts";
 import {
   isPublicAccessConfigured,
   PUBLIC_ACCESS_CONSENT_VERSION,
@@ -35,7 +48,7 @@ import {
 
 export type PublicAccessState = "unconfigured" | "disabled" | "connecting" | "online" | "reconnecting" | "failed";
 export type PublicAccessPhase = "preparing" | "connecting" | "routing" | "checking" | null;
-export type PublicAccessErrorKind = "network" | "configuration" | "token" | "route" | "runtime" | "stop";
+export type PublicAccessErrorKind = "network" | "configuration" | "token" | "route" | "runtime" | "stop" | "proxy";
 
 export interface PublicAccessStatus {
   state: PublicAccessState;
@@ -58,6 +71,8 @@ export interface PublicAccessStatus {
   /** 凭据是否已存；令牌本身永不外传。 */
   tokenSet: boolean;
   tunnelId: string | null;
+  /** 最近 20 条诊断事件（脱敏后），设置页据此显示「上次失败卡在哪一步」。 */
+  diagnostics: PublicAccessDiagnostic[];
 }
 
 /** 前端可见的配置视图：绝不含 token。 */
@@ -75,6 +90,12 @@ export type PublicAccessManagerOptions = {
   env?: NodeJS.ProcessEnv;
   startTunnel?: typeof startCloudflareTunnel;
   verify?: (origin: string) => Promise<boolean>;
+  /** 代理桥构建器（单测注入）；默认 startCloudflareProxyTransport。 */
+  startProxyTransport?: typeof startCloudflareProxyTransport;
+  /** 桥用的代理 URL 解析（单测注入）；默认读 pi-web 设置文件的 networkProxy 键。 */
+  resolveProxyUrl?: () => string | null;
+  /** 诊断写入器（单测捕获）；默认写进程内环形缓冲（recordDiagnostic）。 */
+  diagnosticWriter?: PublicAccessDiagnosticWriter;
   /** 公网校验的等待节奏（默认 VERIFY_WAITS_MS，测试注入短值）。 */
   verifyWaitsMs?: number[];
   /** 公网校验的总预算（默认 VERIFY_BUDGET_MS）。 */
@@ -83,7 +104,7 @@ export type PublicAccessManagerOptions = {
   bindingBudgetMs?: number;
 };
 
-const CONTROLLED_ERRORS = new Set(["runtime", "network", "configuration", "token", "route"]);
+const CONTROLLED_ERRORS = new Set(["runtime", "network", "configuration", "token", "route", "proxy"]);
 /** 仪表盘托管的隧道通常在注册后立刻推路由，给它一点时间。 */
 const ROUTE_WAIT_MS = 5_000;
 /**
@@ -149,6 +170,10 @@ export class PublicAccessManager {
   private pendingGeneration = 0;
   private controller: AbortController | null = null;
   private tunnel: CloudflareTunnel | null = null;
+  /** 当前尝试的代理桥（null = 直连）。stop/dispose/失败重试都要关掉它，防端口泄漏。 */
+  private bridge: CloudflareProxyTransport | null = null;
+  /** 本轮尝试的代理 URL（探针复用同一条出网路径）；null = 直连。 */
+  private attemptProxyUrl: string | null = null;
   private readonly stoppingTunnels = new Set<CloudflareTunnel>();
   private readonly pendingStops = new Set<() => Promise<void>>();
   private unsubscribe: (() => void) | null = null;
@@ -200,6 +225,47 @@ export class PublicAccessManager {
     return this.options.env ?? process.env;
   }
 
+  /**
+   * 读一次网络代理设置，得到「桥该用的代理 URL」（保留 userinfo 以便握手认证）。
+   *   - manual：直接用设置里的 URL（readNetworkProxySettings 已归一化、且不剥凭据）；
+   *   - direct：null；
+   *   - system：applyNetworkProxy 已把生效 URL 写进进程环境变量，从那里取（可能已剥凭据，
+   *     系统代理一般也无凭据）——探测是异步的，这里不重复探测。
+   * 非 http/https 的代理 URL 归一化后为空串，等价「没配」。
+   */
+  private resolveProxyUrl(): string | null {
+    if (this.options.resolveProxyUrl) return this.options.resolveProxyUrl();
+    // 与诊断路由共用同一个 helper：两处各写一份必然漂移，而漂移的表现就是
+    // 「隧道通了、诊断说没通」。
+    return resolveOutboundProxyUrl(readNetworkProxySettings(this.settingsPath()), this.env());
+  }
+
+  /**
+   * 写一条诊断事件。注入的 writer 只补 attemptId（测试自己决定怎么断言）；默认写
+   * recordDiagnostic，并用 secrets（token + 代理 URL）脱敏后再入环形缓冲。
+   */
+  private writeDiagnostic(attemptId: string, secrets: readonly string[], event: PublicAccessDiagnostic): void {
+    const writer = this.options.diagnosticWriter;
+    if (writer) {
+      try { writer({ ...event, attemptId }); } catch { /* 诊断是旁路。 */ }
+      return;
+    }
+    recordDiagnostic({ ...event, attemptId }, secrets);
+  }
+
+  /** 关掉当前代理桥并把它从字段里摘掉；关闭失败返回 false（由调用方决定是否升级为 stop 错误）。 */
+  private async stopBridge(): Promise<boolean> {
+    const bridge = this.bridge;
+    this.bridge = null;
+    if (!bridge) return true;
+    try {
+      await bridge.stop();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private isConfigured(): boolean {
     return isPublicAccessConfigured(this.settings);
   }
@@ -223,6 +289,7 @@ export class PublicAccessManager {
       customUrl: this.settings.customUrl,
       tokenSet: this.settings.token.length > 0,
       tunnelId: readCloudflareTunnelToken(this.settings.token)?.tunnelId ?? null,
+      diagnostics: recentDiagnostics(),
     };
   }
 
@@ -393,18 +460,58 @@ export class PublicAccessManager {
     const port = this.localPort();
     // 固定域名绑定超时的标记：终态里保留 timeout 结论（其余失败一律清空绑定状态）。
     let bindingTimeout = false;
+
+    // 本次尝试的因果 id（诊断事件共享它）与需要脱敏的凭据（token + 代理 URL）。
+    const attemptId = randomUUID();
+    const proxyUrl = this.resolveProxyUrl();
+    this.attemptProxyUrl = proxyUrl;
+    const secrets = [this.settings.token, proxyUrl ?? ""];
+    const write = (event: PublicAccessDiagnostic): void => this.writeDiagnostic(attemptId, secrets, event);
+    const attemptStartedAt = Date.now();
+    write({ stage: "preparing", outcome: "started" });
+
     try {
+      // 有代理就先起桥：连接器不知道代理，只认桥的本地入口（--edge / --quick-service）。
+      if (proxyUrl) {
+        const proxyStartedAt = Date.now();
+        write({ stage: "proxy_transport", outcome: "started" });
+        try {
+          const bridge = await (this.options.startProxyTransport ?? startCloudflareProxyTransport)(proxyUrl, {
+            signal: controller.signal,
+            onDiagnostic: write,
+          });
+          this.bridge = bridge;
+          write({ stage: "proxy_transport", outcome: "succeeded", durationMs: Date.now() - proxyStartedAt });
+        } catch (error) {
+          write({
+            stage: "proxy_transport",
+            outcome: controller.signal.aborted ? "cancelled" : "failed",
+            reason: "transport_setup_failed",
+            error,
+            durationMs: Date.now() - proxyStartedAt,
+          });
+          throw controller.signal.aborted
+            ? new Error("Public access start cancelled")
+            : new CloudflareTunnelError("proxy", "The Cloudflare connector could not use the configured network proxy");
+        }
+      }
+      write({ stage: "preparing", outcome: "succeeded", durationMs: Date.now() - attemptStartedAt });
+
       const tunnel = await (this.options.startTunnel ?? startCloudflareTunnel)({
         mode: this.settings.mode,
         localPort: port,
         token: this.settings.mode === "named" ? this.settings.token : undefined,
         signal: controller.signal,
         onPhase: () => { if (this.current(generation)) this.status.phase = "connecting"; },
+        proxyBridge: this.bridge ?? undefined,
+        onDiagnostic: write,
       });
       if (!this.current(generation)) {
         this.stoppingTunnels.add(tunnel);
+        let closed = await this.stopBridge();
         try { await tunnel.stop(); this.stoppingTunnels.delete(tunnel); }
-        catch {
+        catch { closed = false; }
+        if (!closed) {
           this.stopUnconfirmed = true;
           this.status = { state: "failed", error: "stop", publicUrl: null, phase: null, domainBinding: null, restoredByAutoStart: false };
         }
@@ -413,9 +520,25 @@ export class PublicAccessManager {
       this.tunnel = tunnel;
       this.unsubscribe = tunnel.onExit(() => { if (this.current(generation) && this.wanted) void this.recoverAfterExit(); });
       // quick 模式的入口来自日志 URL（tunnel.url）；命名隧道走推送规则。
-      const discovery = tunnel.url
-        ? { status: "origin" as const, origin: tunnel.url }
-        : await this.waitForRoute(tunnel, port, generation, controller.signal, onRouteWait);
+      let discovery: RouteDiscovery | null;
+      if (tunnel.url) {
+        discovery = { status: "origin", origin: tunnel.url };
+      } else {
+        const routesStartedAt = Date.now();
+        write({ stage: "routes", outcome: "started" });
+        try {
+          discovery = await this.waitForRoute(tunnel, port, generation, controller.signal, onRouteWait);
+          write({
+            stage: "routes",
+            outcome: discovery?.status === "timeout" ? "failed" : "succeeded",
+            ...(discovery?.status === "timeout" ? { reason: "binding_timeout" } : {}),
+            durationMs: Date.now() - routesStartedAt,
+          });
+        } catch (error) {
+          write({ stage: "routes", outcome: "failed", reason: "route_wait_failed", error, durationMs: Date.now() - routesStartedAt });
+          throw error;
+        }
+      }
       if (!discovery || !this.current(generation)) return this.getStatus();
       if (discovery.status === "timeout") {
         bindingTimeout = true;
@@ -426,8 +549,14 @@ export class PublicAccessManager {
       writePublicAccessOrigin(publicUrl, this.settingsPath());
       if (!this.current(generation)) return this.getStatus();
       this.status.phase = "checking";
+      const verifyStartedAt = Date.now();
+      write({ stage: "verifying", outcome: "started" });
       const verified = await this.verifyWithRetries(publicUrl, generation, controller.signal);
-      if (!verified) throw new CloudflareTunnelError("network", "The public hostname does not reach this gateway");
+      if (!verified) {
+        write({ stage: "verifying", outcome: "failed", reason: "gateway_unreachable", durationMs: Date.now() - verifyStartedAt });
+        throw new CloudflareTunnelError("network", "The public hostname does not reach this gateway");
+      }
+      write({ stage: "verifying", outcome: "succeeded", durationMs: Date.now() - verifyStartedAt });
       this.status = {
         state: "online",
         error: null,
@@ -436,6 +565,7 @@ export class PublicAccessManager {
         domainBinding: this.status.domainBinding,
         restoredByAutoStart,
       };
+      write({ stage: "online", outcome: "succeeded", durationMs: Date.now() - attemptStartedAt, ...(publicUrl ? { details: { url: publicUrl } } : {}) });
       this.retryCount = 0;
     } catch (error) {
       if (error instanceof CloudflareTunnelError && error.retryStop) {
@@ -450,6 +580,8 @@ export class PublicAccessManager {
       this.tunnel = null;
       controller.abort();
       let closed = this.pendingStops.size === 0;
+      // 桥的关闭不因 pendingStops 而短路：它和连接器的关闭是两件事，都要做。
+      if (!await this.stopBridge()) closed = false;
       if (tunnel) this.stoppingTunnels.add(tunnel);
       for (const closing of this.stoppingTunnels) {
         try { await closing.stop(); this.stoppingTunnels.delete(closing); } catch { closed = false; }
@@ -481,7 +613,8 @@ export class PublicAccessManager {
    * 等待可被 signal 中止（stop），中止按「未通过」返回，由 generation 守卫兜底。
    */
   private async verifyWithRetries(origin: string, generation: number, signal: AbortSignal): Promise<boolean> {
-    const verify = this.options.verify ?? verifyPublicGateway;
+    // 探针与连接器同路径：有代理桥时也经 ProxyAgent 走代理（attemptProxyUrl 本轮已定）。
+    const verify = this.options.verify ?? ((target: string) => verifyPublicGateway(target, gatewayId(), { proxyUrl: this.attemptProxyUrl }));
     const waits = this.options.verifyWaitsMs ?? VERIFY_WAITS_MS;
     const deadline = Date.now() + (this.options.verifyBudgetMs ?? VERIFY_BUDGET_MS);
     for (const [index, wait] of waits.entries()) {
@@ -528,6 +661,9 @@ export class PublicAccessManager {
     if (this.retry) clearTimeout(this.retry);
     this.retry = null;
     this.retryCount = 0;
+    const secrets = [this.settings.token, this.attemptProxyUrl ?? ""];
+    const stopStartedAt = Date.now();
+    this.writeDiagnostic(randomUUID(), secrets, { stage: "stopping", outcome: "started" });
     // 被中止的启动要单飞到底：关闭失败必须被观察到，之后才允许再起连接器。
     this.stopping++;
     let closed = true;
@@ -538,6 +674,8 @@ export class PublicAccessManager {
       for (const retryStop of this.pendingStops) {
         try { await retryStop(); this.pendingStops.delete(retryStop); } catch { closed = false; }
       }
+      // 桥的关闭同样是硬要求：留着会让本地端口泄漏，下一次 start 可能连不上旧桥。
+      if (!await this.stopBridge()) closed = false;
       try { writePublicAccessOrigin(null, this.settingsPath()); } catch { closed = false; }
       if (generation === this.generation) {
         this.stopUnconfirmed = !closed;
@@ -553,6 +691,12 @@ export class PublicAccessManager {
     } finally {
       this.stopping--;
     }
+    this.writeDiagnostic(randomUUID(), secrets, {
+      stage: "stopping",
+      outcome: closed ? "succeeded" : "failed",
+      ...(closed ? {} : { reason: "shutdown_unconfirmed" }),
+      durationMs: Date.now() - stopStartedAt,
+    });
     return this.getStatus();
   }
 
