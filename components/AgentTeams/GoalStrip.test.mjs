@@ -74,15 +74,27 @@ test("formatElapsed：秒 / 分", () => {
 // ───────────────────────── 定时重复 + 裁判（Alma 形态） ─────────────────────────
 
 test("定时目标：显示「每 2h」；等待空档里给出下次倒计时", () => {
+  // 静态渲染不跑 effect，墙钟由 props 注入（生产环境由 useWallClock 每秒采样）。
   const now = Date.now();
   const html = text(render({
     ...base,
     status: "active",
     intervalMs: 7_200_000,
     nextRunAt: now + 90_000,
-  }));
+  }, { now }));
   assert.ok(html.includes("every 2h"), "间隔展示");
   assert.match(html, /Next \d+m? ?\d*s/, "空档里显示下次倒计时");
+});
+
+test("首帧墙钟未知（now=null）→ 不显示倒计时，也不渲染出巨大的假剩余量", () => {
+  const html = text(render({
+    ...base,
+    status: "active",
+    intervalMs: 7_200_000,
+    nextRunAt: Date.now() + 90_000,
+  }, { now: null }));
+  assert.ok(html.includes("every 2h"), "间隔仍展示");
+  assert.doesNotMatch(html, /Next \d/, "不知道现在几点就不该猜倒计时");
 });
 
 test("定时目标正在跑：不显示倒计时（没有空档）", () => {
@@ -92,7 +104,7 @@ test("定时目标正在跑：不显示倒计时（没有空档）", () => {
     status: "active",
     intervalMs: 7_200_000,
     nextRunAt: now + 90_000,
-  }, { isRunning: true }));
+  }, { isRunning: true, now }));
   assert.ok(html.includes("every 2h"));
   assert.doesNotMatch(html, /Next \d/, "跑起来就不该再报倒计时");
 });

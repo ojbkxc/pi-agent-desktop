@@ -1,8 +1,8 @@
 "use client";
 
 import type { CSSProperties } from "react";
-import { useEffect, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { useWallClock } from "@/hooks/useWallClock";
 import { interpolateMessage } from "@/lib/i18n/format";
 import type { TranslationParams } from "@/lib/i18n/types";
 import type { GoalState } from "@/lib/goal/goal-types";
@@ -25,6 +25,11 @@ interface Props {
   isRunning?: boolean;
   /** 窄屏紧凑档：隐藏元信息（Budget / Continuations / Elapsed）。 */
   compact?: boolean;
+  /**
+   * 测试注入的墙钟（毫秒）。生产不传：组件用 `useWallClock` 每秒取一次真实时间。
+   * 传了就完全以它为准（含 `null` = 「还不知道现在几点」），便于静态渲染断言倒计时。
+   */
+  now?: number | null;
 }
 
 /** 状态 → 状态点颜色（主题 token）。completed 正常不会渲染，保留以防万一。 */
@@ -73,22 +78,14 @@ const S: Record<string, CSSProperties> = {
   metaItem: { maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
 };
 
-export function GoalStrip({ goal, isRunning = false, compact = false }: Props) {
+export function GoalStrip({ goal, isRunning = false, compact = false, now: injectedNow }: Props) {
   const { t } = useI18n();
 
-  // 渲染期不许调 Date.now（React 纯度规则，eslint 会判红）。「下次时间」是相对剩余量：
-  // 在 effect 里每秒取一次墙钟并落 state，目标活着时保持刷新，其余状态置 null。
-  const [now, setNow] = useState<number | null>(null);
-  useEffect(() => {
-    if (!goal?.intervalMs || goal.status !== "active" || isRunning) {
-      setNow(null);
-      return;
-    }
-    const tick = () => setNow(Date.now());
-    tick();
-    const timer = setInterval(tick, 1_000);
-    return () => clearInterval(timer);
-  }, [goal?.intervalMs, goal?.status, isRunning]);
+  // 渲染期不许调 Date.now（React 纯度规则，eslint 会判红），所以时间来自 effect 采样。
+  // 只有「等下一次定时运行」时才需要它：目标在跑（没有空档）或没有间隔就不必挂定时器。
+  const tickEveryMs = goal?.intervalMs && goal.status === "active" && !isRunning ? 1_000 : null;
+  const tickedNow = useWallClock(tickEveryMs);
+  const now = injectedNow !== undefined ? injectedNow : tickedNow;
 
   // 无目标 / 已完成 / 已清除 → 不渲染（用户拍板：completed 或没有目标都不占位）。
   if (!goal || goal.status === "completed" || goal.status === "cleared") return null;
