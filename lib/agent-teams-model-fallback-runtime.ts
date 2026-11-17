@@ -135,9 +135,10 @@ export async function maybeSwitchTeamMemberModel(
       return skip({ action: "no-candidate", considered: candidates.length });
     }
 
-    // 换成功才计一次「切换」。失败过的那几个模型交给 markModelFallbackFailed（由上层
-    // 在自己的 settle 钩子里登记），这里不猜。
+    // 换成功才计一次「切换」；投递失败说明模型没换，计上会白吃上限。
     recordModelFallbackAttempt(input.sessionId);
+    // 成功换过一次 ⇒ 清掉「已提醒 lead」标记（下一段故障重新算），不清「已试」清单
+    // —— 那些模型确实失败过。
     deps.clearSessionState(input.sessionId);
     // **先摘 outage 再续跑**：续跑会立刻触发新 turn，若 scheduler 的 tick 恰好落在
     // 这中间，就会给同一个会话再塞一条续跑提示。
