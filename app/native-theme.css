@@ -10685,20 +10685,20 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .composer-teams-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* /goal 快捷按钮：与团队开关同一套版式，放在它左边。点一下把 `/goal ` 前缀插进输入框，
-   命令本身由 goal 扩展处理（这里只是输入框助手）。 */
+   命令本身由 goal 扩展处理（这里只是输入框助手）。只显示图标：靶心本身已经说明是
+   「目标」，带文字的按钮在窄屏会把底部这一行挤到溢出（模型按钮因此被盖住，e2e 实测）。 */
 .composer-goal-button {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
   flex-shrink: 0;
   min-height: var(--control-h-sm);
-  padding: 0 8px;
+  width: var(--control-h-sm);
+  padding: 0;
   border: var(--hairline) solid var(--border);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
-  font-size: var(--fs-small);
-  font-family: var(--font-mono);
   cursor: pointer;
   transition: background var(--dur-base) var(--ease-native), border-color var(--dur-base) var(--ease-native), color var(--dur-base) var(--ease-native);
 }
@@ -10706,16 +10706,93 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .composer-goal-button:hover { background: var(--bg-hover); color: var(--text); }
 .composer-goal-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.composer-goal-button-label { white-space: nowrap; }
-
-/* 空 label（窄屏）时把按钮收成纯图标方块：多一个带文字的按钮会把底部这一行
-   挤到溢出，模型按钮因此被盖住、点不到（e2e 实测）。图标仍可点击，
-   title/aria-label 保留完整说明，无障碍不受影响。 */
-.composer-goal-button:has(.composer-goal-button-label:empty) {
-  padding: 0;
-  width: var(--control-h-sm);
+/* 「新建目标」弹窗（对齐 Alma 的 goal 面板）。与团队成本弹窗同一套版式与层级，
+   但表单是两栏自由文本 + 预设小按钮 + 置灰的 Start。 */
+.goal-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
   justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.32);
 }
+
+.goal-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(460px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 16px;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  color: var(--text);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+.goal-dialog-title { margin: 0 0 4px; font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.goal-dialog-label { color: var(--text); font-size: var(--fs-small); font-weight: var(--fw-medium); }
+
+.goal-dialog-input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: var(--control-h-sm);
+  padding: 6px 8px;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-small);
+  resize: none;
+}
+
+.goal-dialog-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.goal-dialog-textarea { min-height: 56px; line-height: 1.45; }
+
+.goal-dialog-hint { margin: 0 0 6px; color: var(--text-dim); font-size: var(--fs-micro); line-height: 1.45; }
+.goal-dialog-hint.is-warning { color: var(--warning); }
+
+.goal-dialog-presets { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+
+.goal-dialog-preset {
+  min-height: 24px;
+  padding: 0 8px;
+  border: var(--hairline) solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  cursor: pointer;
+}
+
+.goal-dialog-preset:hover { background: var(--bg-hover); color: var(--text); }
+.goal-dialog-preset.is-active { border-color: var(--accent); color: var(--text); }
+
+.goal-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+
+.goal-dialog-cancel,
+.goal-dialog-start {
+  min-height: var(--control-h-sm);
+  padding: 0 12px;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-small);
+  cursor: pointer;
+}
+
+.goal-dialog-cancel { background: transparent; color: var(--text); }
+.goal-dialog-cancel:hover { background: var(--bg-hover); }
+.goal-dialog-start { border-color: var(--accent); background: var(--accent); color: var(--bg); }
+.goal-dialog-start:hover { opacity: 0.9; }
+
+/* Start 在两栏都空时置灰（Alma 同口径：什么都没有就不给启动）。 */
+.goal-dialog-start:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .composer-teams-toggle.is-armed {
   border-color: var(--accent);

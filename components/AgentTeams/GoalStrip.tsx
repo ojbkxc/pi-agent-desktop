@@ -5,6 +5,7 @@ import { useI18n } from "@/hooks/useI18n";
 import { interpolateMessage } from "@/lib/i18n/format";
 import type { TranslationParams } from "@/lib/i18n/types";
 import type { GoalState } from "@/lib/goal/goal-types";
+import { formatGoalInterval, goalRepeatDue, goalRepeatRemainingMs } from "@/lib/goal/goal-interval";
 
 /**
  * `/goal` 目标进度条（会话消息列表上方的常驻条，对齐 cc-haha 的 ActiveGoalStrip）。
@@ -94,6 +95,27 @@ export function GoalStrip({ goal, isRunning = false, compact = false }: Props) {
   }
   if (goal.elapsedMs > 0) {
     meta.push(tOr(t, "chat.activeGoal.elapsed", "Elapsed {value}", { value: formatElapsed(goal.elapsedMs) }));
+  }
+  // 定时重复：显示「每 2h」，并在等待空档里给出下次时间（否则条上看起来像卡住）。
+  if (goal.intervalMs && goal.intervalMs > 0) {
+    meta.push(tOr(t, "chat.activeGoal.every", "every {value}", { value: formatGoalInterval(goal.intervalMs) }));
+    if (goal.status === "active" && !isRunning && !goalRepeatDue(goal, Date.now())) {
+      const remaining = goalRepeatRemainingMs(goal, Date.now());
+      meta.push(tOr(t, "chat.activeGoal.nextRun", "Next {value}", { value: formatElapsed(remaining) }));
+    }
+  }
+  // 裁判结论：让用户看到「谁在判、判成什么」，而不是黑箱地突然结束或一直不停。
+  if (goal.condition) {
+    if (!goal.judge) {
+      meta.push(tOr(t, "chat.activeGoal.verdictPending", "Verifier: checking…"));
+    } else if (goal.judge.unjudged) {
+      meta.push(tOr(t, "chat.activeGoal.verdictUnjudged", "Verifier: not judged this turn"));
+    } else {
+      const verdict = goal.judge.satisfied
+        ? tOr(t, "chat.activeGoal.satisfied", "satisfied")
+        : tOr(t, "chat.activeGoal.notYet", "not satisfied yet");
+      meta.push(tOr(t, "chat.activeGoal.verdict", "Verifier: {value}", { value: verdict }));
+    }
   }
 
   return (

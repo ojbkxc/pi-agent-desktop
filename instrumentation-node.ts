@@ -52,6 +52,19 @@ export function registerNodeInstrumentation(): void {
     startUnattendedSweepLoop();
   }
 
+  // /goal 的「按计划重复」：间隔可能长达 1d，等待空档里没有任何会话事件（agent_settled
+  // 只在一轮跑完时触发），会话会先被 idle 驱逐 —— 必须有一条进程级 tick 按 nextRunAt
+  // 把下一轮投出去。同一开关族；只扫 `intervalMs > 0` 的目标，连续续跑不受影响。
+  if (process.env.PI_WEB_DISABLE_SCHEDULER !== "1") {
+    void import("@/lib/goal/goal-repeat")
+      .then(async ({ startGoalRepeatSchedulerLoop, buildDefaultGoalRepeatDeps }) => {
+        startGoalRepeatSchedulerLoop(await buildDefaultGoalRepeatDeps());
+      })
+      .catch((error) => {
+        console.error("[goal-repeat] scheduler did not start:", error instanceof Error ? error.message : error);
+      });
+  }
+
   // The relay connection (Settings › Remote relay) must also come up without a page:
   // a phone reaches this computer through it.
   if (process.env.PI_WEB_DISABLE_RELAY !== "1") {

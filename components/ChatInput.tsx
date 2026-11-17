@@ -42,6 +42,7 @@ import { shouldShowAgentTeamGuide, markAgentTeamGuideSeen, dismissAgentTeamGuide
 import { AgentTeamToggle, useLeanModeEnabled, type AgentTeamUnavailableReason } from "./AgentTeams/AgentTeamToggle";
 import { AgentTeamChip } from "./AgentTeams/AgentTeamChip";
 import { AgentTeamCostDialog } from "./AgentTeams/AgentTeamCostDialog";
+import { GoalCreateDialog } from "./AgentTeams/GoalCreateDialog";
 import { AgentTeamGuide } from "./AgentTeams/AgentTeamGuide";
 import { useI18n } from "@/hooks/useI18n";
 import type { ReactNode } from "react";
@@ -976,6 +977,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const showTeamToggle = !memberSession && !leanMode;
   // /goal 快捷按钮与团队开关同一可见口径：成员会话不立目标、Lean 模式整行收起。
   const goalShortcutVisible = !memberSession && !leanMode;
+  // 「新建目标」弹窗（条件 + 按计划重复）。确认后只产出一条 `/goal …` 文本走 composer。
+  const [goalDialogOpen, setGoalDialogOpen] = useState(false);
   const teamAvailable = teamUnavailableReason === undefined;
   const showTeamChip = teamEnabled && armed && teamAvailable;
   // 一次性成本确认（A6）：首次勾起时弹一次；「不再提醒」由 lib/agent-teams-notice 记住。
@@ -3161,33 +3164,25 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 onSelectProject={onSelectProject}
               />
             )}
-            {/* /goal 快捷按钮：把 `/goal ` 前缀插到光标处，用户再接一句目标即可。
-                放在团队按钮左边（用户要求的顺序）。它是一个纯输入框助手——命令本身仍由
-                goal 扩展处理，这里不碰任何后端逻辑。 */}
+            {/* /goal 快捷按钮：打开「新建目标」弹窗（条件 + 按计划重复），对齐 Alma 的
+                形态。放在团队按钮左边（用户要求的顺序）。确认后弹窗只产出一条
+                `/goal …` 文本，仍由 composer 的发送链路交给 goal 扩展处理 ——
+                这里不写盘、不调接口。
+                只显示靶心图标、不带文字：图标本身已经说明是「目标」，带文字的按钮在窄屏
+                会把底部这一行挤到溢出（模型按钮因此被盖住、点不到，e2e 实测）。 */}
             {goalShortcutVisible && (
               <button
                 type="button"
                 className="composer-goal-button"
                 title={t("composer.goalHint")}
                 aria-label={t("composer.goalHint")}
-                onClick={() => {
-                  setValue((current) => `${current}${current && !current.endsWith(" ") ? " " : ""}/goal `);
-                  // 把焦点与光标留在目标文本该在的位置，用户可以直接接着写目标。
-                  requestAnimationFrame(() => {
-                    const el = textareaRef.current;
-                    if (!el) return;
-                    el.focus();
-                    const end = el.value.length;
-                    el.setSelectionRange(end, end);
-                  });
-                }}
+                onClick={() => setGoalDialogOpen(true)}
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <circle cx="12" cy="12" r="9" />
                   <circle cx="12" cy="12" r="4" />
                   <circle cx="12" cy="12" r="1" fill="currentColor" />
                 </svg>
-                <span className="composer-goal-button-label">{isNarrow ? null : "/goal"}</span>
               </button>
             )}
             {/* A2: Agent Team switch. Hidden only in a subagent/member session or under
@@ -3562,6 +3557,19 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         open={teamCostDialogOpen}
         onConfirm={() => { setTeamCostDialogOpen(false); armAgentTeam(teamScope); }}
         onCancel={() => setTeamCostDialogOpen(false)}
+      />
+      {/* /goal「新建目标」弹窗：确认后走与手打一致的发送链路（命令类消息不会被团队包装），
+          并保留输入框里的草稿 —— 用户是在弹窗里起目标，不是要清掉正在写的东西。 */}
+      <GoalCreateDialog
+        open={goalDialogOpen}
+        onSubmit={(command) => {
+          setGoalDialogOpen(false);
+          // 正在跑 / 工作区不可用时不发：与 handleSend 同一道闸，避免命令被悄悄丢掉。
+          if (isStreaming || workspaceUnavailable) return;
+          onAudioUnlock?.();
+          onSend(command);
+        }}
+        onCancel={() => setGoalDialogOpen(false)}
       />
     </fieldset>
   );

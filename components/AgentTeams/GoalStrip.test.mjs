@@ -70,3 +70,60 @@ test("formatElapsed：秒 / 分", () => {
   assert.equal(formatElapsed(125000), "2m 05s");
   assert.equal(formatElapsed(0), "0s");
 });
+
+// ───────────────────────── 定时重复 + 裁判（Alma 形态） ─────────────────────────
+
+test("定时目标：显示「每 2h」；等待空档里给出下次倒计时", () => {
+  const now = Date.now();
+  const html = text(render({
+    ...base,
+    status: "active",
+    intervalMs: 7_200_000,
+    nextRunAt: now + 90_000,
+  }));
+  assert.ok(html.includes("every 2h"), "间隔展示");
+  assert.match(html, /Next \d+m? ?\d*s/, "空档里显示下次倒计时");
+});
+
+test("定时目标正在跑：不显示倒计时（没有空档）", () => {
+  const now = Date.now();
+  const html = text(render({
+    ...base,
+    status: "active",
+    intervalMs: 7_200_000,
+    nextRunAt: now + 90_000,
+  }, { isRunning: true }));
+  assert.ok(html.includes("every 2h"));
+  assert.doesNotMatch(html, /Next \d/, "跑起来就不该再报倒计时");
+});
+
+test("带条件的目标：裁判结论三态（未判 / 未判定 / 已满足/尚未满足）", () => {
+  const pending = text(render({ ...base, condition: "npm test exits 0" }));
+  assert.ok(pending.includes("Verifier: checking"), "还没判过");
+
+  const unjudged = text(render({
+    ...base,
+    condition: "npm test exits 0",
+    judge: { satisfied: false, reason: "timeout", evidence: [], unjudged: true, at: 1 },
+  }));
+  assert.ok(unjudged.includes("not judged this turn"));
+
+  const notYet = text(render({
+    ...base,
+    condition: "npm test exits 0",
+    judge: { satisfied: false, reason: "no output", evidence: [], at: 1 },
+  }));
+  assert.ok(notYet.includes("not satisfied yet"));
+
+  const satisfied = text(render({
+    ...base,
+    condition: "npm test exits 0",
+    judge: { satisfied: true, reason: "PASS", evidence: ["PASS 12"], at: 1 },
+  }));
+  assert.ok(satisfied.includes("Verifier: satisfied"));
+});
+
+test("没有条件时不显示裁判行（旧口径的 goal 不该多出一行）", () => {
+  const html = text(render(base));
+  assert.doesNotMatch(html, /Verifier/);
+});
