@@ -1119,6 +1119,8 @@
   --z-dropdown: 120;  /* composer popovers and panel toggles */
   --z-popover: 650;   /* menus, notice shelf */
   --z-modal: 1000;    /* dialogs and their backdrops */
+  --z-modal-nested: 1100; /* a dialog opened from inside a dialog
+                             (e.g. Add provider in Settings) */
   --z-toast: 1200;    /* context menus and reminders above dialogs */
   --z-menu: 2400;     /* option menus opened from inside a dialog */
   --shadow-control: 0 1px 2px rgba(0, 0, 0, 0.045);
