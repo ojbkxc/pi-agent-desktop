@@ -3,7 +3,8 @@
  * （对齐 alma.now 的「批准命令」）。
  *
  * 接线约定：
- * - 只拦 bash / powershell；文件类工具、MCP 与自定义工具一律放行。
+ * - 只拦 shell 类工具（`bash` / `powershell` / `bash_background`，清单的唯一真源是
+ *   `policy.ts` 的 `SHELL_TOOLS` / `isShellTool`）；文件类工具、MCP 与自定义工具一律放行。
  * - 命中后走宿主的 **现有** 扩展 UI 管道：`ctx.ui.confirm(title, message)` ——
  *   pi-web 的 ChatWindow 已有 confirm 渲染与排队机制，这里不自建弹窗协议。
  * - `confirm` 返回 false 时返回 `{ block: true, reason }`，模型看到拒绝原因，
@@ -19,7 +20,7 @@
  * - 默认档 off，由设置页决定何时生效（见 lib/tool-approval/settings.ts）。
  */
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
-import { requiresApproval, type ApprovalDecision, type ApprovalMode } from "./policy";
+import { requiresApproval, isShellTool, type ApprovalDecision, type ApprovalMode } from "./policy";
 import { readApprovalMode } from "./settings";
 
 export const TOOL_APPROVAL_EXTENSION_NAME = "pi-web-tool-approval";
@@ -84,7 +85,11 @@ export function createToolApprovalExtension(
   return (pi) => {
     pi.on("tool_call", async (event: ToolCallEvent, ctx: ExtensionContext) => {
       // 1) 模式：非 shell 工具先放行，避免为其它工具读设置。
-      if (event.toolName !== "bash" && event.toolName !== "powershell") return undefined;
+      //
+      // 必须用 policy 的 isShellTool，**不要在这里再抄一份工具名清单**：抄过一份，
+      // 结果是 bash_background 加进 policy 的 SHELL_TOOLS 后仍然完全不经审批
+      // （policy 层成了死代码，等于一条绕过审批的后门）。工具名清单只许有一个真源。
+      if (!isShellTool(event.toolName)) return undefined;
 
       let decision: ApprovalDecision;
       try {

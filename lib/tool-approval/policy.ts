@@ -41,8 +41,17 @@ export const APPROVAL_ALL_RULE_LABEL = "所有 Shell 命令";
 /**
  * `bash_background` 也在其中：它同样执行任意 shell 命令，只是不阻塞循环。
  * 漏掉它等于给了一条绕过审批的后门（`all` 档也会放过）。
+ *
+ * **唯一真源**：扩展层（`lib/tool-approval/extension.ts`）在写 `tool_call` 钩子时
+ * 必须用 `isShellTool()` 判断，不要自己再抄一份工具名清单 —— 两份清单漂移过一次，
+ * 结果是 `bash_background` 完全不经审批（policy 层的加名成了死代码）。
  */
 const SHELL_TOOLS: ReadonlySet<string> = new Set(["bash", "powershell", "bash_background"]);
+
+/** 这个工具执行的是不是 shell 命令（按 `SHELL_TOOLS` 这个唯一真源判定）。 */
+export function isShellTool(toolName: string): boolean {
+  return SHELL_TOOLS.has(toolName);
+}
 
 /** 命令超过这个长度只截断展示，不影响匹配（匹配始终看完整命令）。 */
 export const COMMAND_EXCERPT_MAX = 1200;
@@ -370,7 +379,7 @@ export function approvalSummary(ruleLabel: string, command: string): string {
  * - 命令读不出来（input 形状异常）时 `dangerous` 放行，`all` 仍要求确认。
  */
 export function requiresApproval(mode: ApprovalMode, event: ApprovalToolCall): ApprovalDecision {
-  if (!SHELL_TOOLS.has(event?.toolName ?? "")) return { required: false, summary: "" };
+  if (!isShellTool(event?.toolName ?? "")) return { required: false, summary: "" };
   if (!isApprovalMode(mode) || mode === "off") return { required: false, summary: "" };
 
   const command = commandOf(event);
