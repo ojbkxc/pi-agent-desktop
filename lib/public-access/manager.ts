@@ -480,6 +480,14 @@ export class PublicAccessManager {
             signal: controller.signal,
             onDiagnostic: write,
           });
+          // generation 可能在起桥期间就作废（restore() 与用户 stop 竞争）：此时 stop()
+          // 早就跑过、看到的是 null 桥，若这里仍然赋值就会留下一个永不关闭的
+          // listener，且下一次 stop 也只会关掉「字段里那一个」。所以先判过期再落字段。
+          if (!this.current(generation)) {
+            await bridge.stop().catch(() => {});
+            write({ stage: "proxy_transport", outcome: "cancelled", durationMs: Date.now() - proxyStartedAt });
+            return this.getStatus();
+          }
           this.bridge = bridge;
           write({ stage: "proxy_transport", outcome: "succeeded", durationMs: Date.now() - proxyStartedAt });
         } catch (error) {

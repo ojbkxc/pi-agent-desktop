@@ -1,6 +1,7 @@
 "use client";
 
 import type { CSSProperties } from "react";
+import { useEffect, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { interpolateMessage } from "@/lib/i18n/format";
 import type { TranslationParams } from "@/lib/i18n/types";
@@ -75,6 +76,20 @@ const S: Record<string, CSSProperties> = {
 export function GoalStrip({ goal, isRunning = false, compact = false }: Props) {
   const { t } = useI18n();
 
+  // 渲染期不许调 Date.now（React 纯度规则，eslint 会判红）。「下次时间」是相对剩余量：
+  // 在 effect 里每秒取一次墙钟并落 state，目标活着时保持刷新，其余状态置 null。
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    if (!goal?.intervalMs || goal.status !== "active" || isRunning) {
+      setNow(null);
+      return;
+    }
+    const tick = () => setNow(Date.now());
+    tick();
+    const timer = setInterval(tick, 1_000);
+    return () => clearInterval(timer);
+  }, [goal?.intervalMs, goal?.status, isRunning]);
+
   // 无目标 / 已完成 / 已清除 → 不渲染（用户拍板：completed 或没有目标都不占位）。
   if (!goal || goal.status === "completed" || goal.status === "cleared") return null;
   const objective = goal.objective?.trim();
@@ -99,8 +114,10 @@ export function GoalStrip({ goal, isRunning = false, compact = false }: Props) {
   // 定时重复：显示「每 2h」，并在等待空档里给出下次时间（否则条上看起来像卡住）。
   if (goal.intervalMs && goal.intervalMs > 0) {
     meta.push(tOr(t, "chat.activeGoal.every", "every {value}", { value: formatGoalInterval(goal.intervalMs) }));
-    if (goal.status === "active" && !isRunning && !goalRepeatDue(goal, Date.now())) {
-      const remaining = goalRepeatRemainingMs(goal, Date.now());
+    // 首帧 now 还是 null（effect 未跑），此时不显示「下次」—— 否则会用 0 算出一个
+    // 巨大的剩余量闪一帧。
+    if (goal.status === "active" && !isRunning && now !== null && !goalRepeatDue(goal, now)) {
+      const remaining = goalRepeatRemainingMs(goal, now);
       meta.push(tOr(t, "chat.activeGoal.nextRun", "Next {value}", { value: formatElapsed(remaining) }));
     }
   }
