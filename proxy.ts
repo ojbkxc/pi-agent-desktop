@@ -16,6 +16,7 @@ import {
 } from "@/lib/remote-access";
 import { readRelayMark } from "@/lib/relay/mark";
 import { isPublicAccessRequestHost, readPublicAccessConfig } from "@/lib/public-access/settings";
+import { isDeviceAuthenticatedRequest, isPublicAccessPairingPath } from "@/lib/public-access/devices";
 import {
   isValidWebSessionToken,
   isValidBasicAuthorization,
@@ -104,7 +105,18 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  let authenticated = isValidWebSessionToken(request.cookies.get(PI_WEB_SESSION_COOKIE)?.value);
+  let authenticated = isValidWebSessionToken(request.cookies.get(PI_WEB_SESSION_COOKIE)?.value)
+    // A paired phone carries a device token in `__Host-pi-remote` (or as a Bearer
+    // header): that is the password-free path the QR pairing hands out. The row
+    // can be revoked on the computer at any time, and expiry is enforced here.
+    || isDeviceAuthenticatedRequest(request);
+  if (!authenticated
+    && isPublicAccessPairingPath(request.nextUrl.pathname)
+    && isPublicAccessRequestHost(request, readPublicAccessConfig())) {
+    // The phone is still pairing: the one-time secret / claimSecret in its body is
+    // the credential. Only the tunnel's own hostname reaches these paths.
+    authenticated = true;
+  }
   const authorization = isApiRequest ? request.headers.get("authorization") : null;
   if (!authenticated && authorization && /^Basic\s/i.test(authorization)) {
     // Every Basic header is a password guess, so it shares the login form's

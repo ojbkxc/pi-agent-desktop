@@ -11,20 +11,24 @@ import {
   readPublicAccessConfig,
   type PublicAccessConfig,
 } from "./public-access/settings.ts";
+import { isDeviceAuthenticatedRequest } from "./public-access/devices.ts";
 import { isWebPasswordEnabled } from "./web-auth.ts";
 
 /**
  * The Cloudflare tunnel's published hostname. Trusting it is deliberately tied to
- * a live tunnel and a web password: `origin` is only written while the tunnel is
- * online, and without PI_WEB_PASSWORD the proxy would hand a shell to anyone who
- * can reach the URL. Editing the settings file by hand therefore changes nothing.
+ * a live tunnel and one of two credentials: a configured web password (the
+ * desktop's own lock) or a paired phone's device token. `origin` is only written
+ * while the tunnel is online, and the tunnel cannot start without a web password,
+ * so editing the settings file by hand alone never widens the host allow-list.
  */
 function isTrustedPublicAccessRequest(request: Request, publicAccess: PublicAccessConfig | null): boolean {
-  return isWebPasswordEnabled() && isPublicAccessRequestHost(request, publicAccess);
+  return isPublicAccessRequestHost(request, publicAccess)
+    && (isWebPasswordEnabled() || isDeviceAuthenticatedRequest(request));
 }
 
-function isPublicAccessOrigin(origin: string, publicAccess: PublicAccessConfig | null): boolean {
-  if (!publicAccess?.origin || !isWebPasswordEnabled()) return false;
+function isPublicAccessOrigin(origin: string, request: Request, publicAccess: PublicAccessConfig | null): boolean {
+  if (!publicAccess?.origin) return false;
+  if (!isWebPasswordEnabled() && !isDeviceAuthenticatedRequest(request)) return false;
   return canonicalOrigin(origin) === publicAccess.origin;
 }
 
@@ -197,7 +201,7 @@ export function isApiRequestOriginAllowed(
   const requestOrigin = getRequestOrigin(request);
   if (requestOrigin !== null && canonicalOrigin(origin) === requestOrigin) return true;
   if (isRemoteAccessOrigin(origin, request, remoteAccess)) return true;
-  if (isPublicAccessOrigin(origin, publicAccess)) return true;
+  if (isPublicAccessOrigin(origin, request, publicAccess)) return true;
 
   return isProxyRewrittenSameOrigin(request, origin);
 }
