@@ -3187,7 +3187,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                   <circle cx="12" cy="12" r="4" />
                   <circle cx="12" cy="12" r="1" fill="currentColor" />
                 </svg>
-                <span>/goal</span>
+                <span className="composer-goal-button-label">{isNarrow ? null : "/goal"}</span>
               </button>
             )}
             {/* A2: Agent Team switch. Hidden only in a subagent/member session or under

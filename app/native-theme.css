@@ -10706,6 +10706,17 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .composer-goal-button:hover { background: var(--bg-hover); color: var(--text); }
 .composer-goal-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+.composer-goal-button-label { white-space: nowrap; }
+
+/* 空 label（窄屏）时把按钮收成纯图标方块：多一个带文字的按钮会把底部这一行
+   挤到溢出，模型按钮因此被盖住、点不到（e2e 实测）。图标仍可点击，
+   title/aria-label 保留完整说明，无障碍不受影响。 */
+.composer-goal-button:has(.composer-goal-button-label:empty) {
+  padding: 0;
+  width: var(--control-h-sm);
+  justify-content: center;
+}
+
 .composer-teams-toggle.is-armed {
   border-color: var(--accent);
   background: var(--bg-hover);
