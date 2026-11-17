@@ -114,7 +114,7 @@ jobs:
           tagName: v__VERSION__
           releaseName: pi-agent-desktop v__VERSION__
           releaseBody: |
-            ## Pi Agent Desktop 0.8.3 (fork)
+            ## Pi Agent Desktop 0.8.6 (fork)
 
             The **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2. This release carries the security, stability and performance work from upstream pi-web v0.10 through v0.17, a pi SDK 1.5.2 / Next.js 16.4.4 / undici 8.12.3 upgrade, and the fork's own additions.
 
@@ -161,12 +161,17 @@ jobs:
             - **Web login is password-only.** The username field is gone (including the browser's Basic-auth prompt), and `/login` doubles as the first-time password setup page when no password is configured yet.
             - **Team members switch models when theirs dies.** If a member's provider starts failing (upstream 5xx, dropped connections, exhausted quota) while the team has other usable models, the member is moved to another model and told to continue where it stopped. A different provider is preferred, since one provider's failure usually takes its sibling models with it; models already tried in that failure are not retried; a model must both exist and have credentials; and after two switches the team lead is notified instead. Code errors, auth failures and missing models never trigger a switch.
             - **A `/goal` button next to the team toggle.** One click inserts `/goal ` at the cursor; type the objective and the agent keeps working toward it across turns.
+            - **Goal mode became a full Alma-style panel.** The target button opens a dialog with a verifiable completion condition and a repeat plan (`5m` / `2h` / `1d` lead the line; stops after 7 days). Every turn ends with a **separate model** checking the condition against the conversation, so the working model can no longer declare itself done. An interval starts the next turn on a timer; a busy session rolls that slot back instead of swallowing it; 7 days is the hard limit.
+            - **Cloudflare tunnels work behind a proxy.** cloudflared dials the edge directly and ignores `HTTPS_PROXY`, so the connector now speaks the user's HTTP proxy through a loopback bridge for both the edge connection and Quick Tunnel provisioning; the proof-of-arrival probe takes the same path, so a working tunnel is no longer torn down as a "network failure".
+            - **Phone pairing for public access.** A QR code on the computer hands the phone a one-time secret (5 minutes); approving issues a per-device token stored only as a SHA-256 hash, carried in a `__Host-` cookie, revocable at any time and expiring in 30 days. The web password still works — the device path is for a phone that should not keep typing it.
+            - **Connection diagnostics.** Every start attempt records stage / outcome / duration events (tunnel token and proxy credentials redacted) in a collapsible panel, and a "Check configuration" button runs binary / proxy / token / DNS / public round-trip checks from this computer.
 
             ### UI
 
             - **Quote instead of "ask about this".** Selecting text now inserts a block quote at the cursor, with no scaffold text.
             - **"New session from this message"** carries the message text and images into the new composer.
             - **Favicon unread badge**: amber while a session waits for input, blue for unread completions, with a count collected while the window is hidden.
+            - **The team run report has a permanent entry.** The header strip still opens the team the current session belongs to; a new "Agent Teams" sidebar row opens the report ("智能体团队 · 共享任务列表") from any session.
             - **Standalone renderers**: SVG fences preview like Mermaid (an `<img>` only — source never enters the DOM), inline audio/video playback, copy-LaTeX on display math, a diff preview of an edit before it is applied, structured tool-argument rows instead of raw JSON, per-turn durations, and a virtualized CSV/TSV table view.
 
             ### Fixes
@@ -174,12 +179,15 @@ jobs:
             - **Skill market, six defects.** The installed tab no longer crashes on minimal metadata; infinite scroll no longer sticks after a filter change mid-page; 429 responses are no longer recorded as healthy; installs lock by owner and uninstall takes the same lock; file previews validate both the `path` shape and the skill's file list; compaction model choices filter to stored credentials.
             - **Teams stop what they list.** Stop / reclaim / ended / quota now include plan-only members; a corrupt `plan.json` answers 400 with a reason instead of "no plan yet"; resend validates the assignment state instead of delivering a duplicate; a failed `team_create` is no longer recorded against the lead session.
             - **MCP sign-in on pi 1.5.2.** The SDK store's refresh lock is forwarded, and project trust follows the pi 1.5 semantics.
+            - **The installer no longer carries this checkout's configuration or credentials.** The payload is cleared before tracing, the traced `.pi/` is pruned, and a fail-closed scan refuses the build on any `.pi/` path, `Bearer ak_` token, armoured private key or build-output leftover — there is no skip switch.
+            - **Composer double-submit.** A submit still resolving its `#` references can no longer fire twice, and a slow response no longer wipes text typed during the wait.
+            - **Closed panels leave the tab order** (`inert`); coarse pointers get 44 px targets; CJK session times no longer overlap the title; the Add Provider picker stays inside its dialog; the project menu scrolls instead of growing past the viewport; model discovery pages through catalogs (repeated cursors and post-page failures answer 502 instead of silently truncating).
 
             Bundled components: pi 1.5.2, pi-web 0.10.0 (the fork's pinned base; this build carries the upstream v0.10 → v0.17 changes).
 
             ---
 
-            ## Pi Agent Desktop 0.8.3（fork）
+            ## Pi Agent Desktop 0.8.6（fork）
 
             这是 pi-agent-desktop 的 **ojbkxc fork**，基于上游 0.8.2 构建。本版包含：上游 pi-web v0.10 至 v0.17 的安全 / 稳定性 / 性能吸收、pi SDK 1.5.2 / Next.js 16.4.4 / undici 8.12.3 升级，以及本 fork 的新增功能。
 
@@ -226,12 +234,17 @@ jobs:
             - **网页登录只要密码。** 用户名已移除（连同浏览器的 Basic 认证弹框），`/login` 在尚未设密码时兼作首次设置页。
             - **团队成员模型挂了会自动换。** 成员的上游开始失败（5xx、连接中断、额度耗尽）而团队里还有别的可用模型时，把成员切到另一个模型并让它接着干没干完的活。优先换**另一个 provider** —— 同一 provider 的故障通常连带其下所有模型；本次故障里已经试过又失败的模型不再重试；候选必须**模型存在且有凭据**；换满两次就改为提醒 team lead，不再硬换。代码错误、鉴权失败、模型不存在一律不触发切换。
             - **团队按钮左边的 `/goal` 按钮。** 点一下把 `/goal ` 插到光标处；写下目标，模型会跨轮次持续推进直到完成。
+            - **目标模式升级为完整的 Alma 式面板。** 靶心按钮打开对话框，可填**可验证的完成条件**与重复计划（`5m` / `2h` / `1d` 带头；7 天封顶）。每一轮结束都由**另一个模型**拿条件核对对话，干活的那个模型不能再自己宣布完成；到了间隔就按定时器开下一轮，会话正忙时把这一格回滚而不是吞掉；7 天是硬上限。
+            - **代理后面的 Cloudflare 隧道终于能用。** cloudflared 只会直连边缘节点、不认 `HTTPS_PROXY`，所以连接器现在通过本机回环桥把边缘连接与 Quick Tunnel 开通都走用户的 HTTP 代理；到站探针走同一条路，一条本来通的隧道不会再被误判成「网络故障」而拆掉。
+            - **公网访问支持手机配对。** 电脑上出二维码，手机拿到一次性密钥（5 分钟有效）；批准后签发**按设备**的令牌，只存 SHA-256 哈希，装在 `__Host-` cookie 里，随时可撤销、30 天过期。web 密码照旧可用 —— 设备通道是给「不该一直手打密码的手机」用的。
+            - **连接诊断。** 每次启动尝试都记录阶段 / 结果 / 耗时事件（隧道令牌与代理凭据已脱敏），收在可展开的面板里；「检查配置」按钮在本机跑 binary / proxy / token / DNS / 公网回环五项检查。
 
             ### 界面
 
             - **「引用」替代「关于这段内容」。** 选中文字后在光标处插入块引用，不再带脚手架文字。
             - **「另开新会话」** 把该消息的文字与图片带进新会话输入框。
             - **favicon 未读徽标**：等待输入为琥珀色，未读完成为蓝色，窗口隐藏期间累计计数。
+            - **团队运行报告有了常驻入口。** 会话头部团队条仍会打开「当前会话所属的团队」；侧栏新增「智能体团队」一行，任何会话下都能打开报告（「智能体团队 · 共享任务列表」）。
             - **独立渲染组件**：SVG 围栏像 Mermaid 一样预览（只挂 img，源码不进 DOM）、音视频内联播放、公式一键复制 LaTeX、编辑落盘前的 diff 预览、结构化工具参数行（不再是一坨 JSON）、每轮耗时、CSV/TSV 虚拟化表格视图。
 
             ### 修复
@@ -239,6 +252,9 @@ jobs:
             - **技能市场六项缺陷。** 已安装页签不再因元数据缺失崩溃；翻页途中改筛选不再永久卡死；429 不再记成健康；安装锁按 owner 区分，卸载取同一把锁；文件预览同时校验 `path` 形状与技能文件清单；compaction 模型候选只保留已存凭据的模型。
             - **团队停止要停全。** 停止 / 回收 / 结束判定 / 配额都补上计划独有成员；`plan.json` 损坏明确返回 400 而不是「尚无计划」；重发前校验 assignment 状态，不再重复投递；`team_create` 失败结果不再记到 lead 会话名下。
             - **MCP 登录适配 pi 1.5.2。** 转发 SDK store 的 refresh lock，项目信任语义与 pi 1.5 对齐。
+            - **安装包不再携带本 checkout 的配置与凭据。** 追踪前先清空 payload，追踪出的 `.pi/` 目录被剪除，并有 fail-closed 扫描：发现任何 `.pi/` 路径、`Bearer ak_` 令牌、装甲私钥或构建残留即拒绝构建 —— 没有跳过开关。
+            - **输入框重复提交。** 一次仍在解析 `#` 引用的提交不会再触发两次，慢响应也不会抹掉等待期间输入的文字。
+            - **关闭的面板退出 Tab 焦点顺序**（`inert`）；粗指针设备得到 44 px 触控目标；中文会话时间不再压到标题上；「添加 provider」选择器留在对话框内；项目菜单改为滚动而不是长过视口；模型发现会翻页拉取目录（重复游标与翻页后失败返回 502，不再静默截断）。
 
             内置组件版本：pi 1.5.2、pi-web 0.10.0（fork 钉住的基线版本；本构建已携带上游 v0.10 → v0.17 的变更）。
           releaseDraft: true
