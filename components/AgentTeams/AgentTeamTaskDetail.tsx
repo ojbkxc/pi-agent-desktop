@@ -92,8 +92,8 @@ export function AgentTeamTaskDetailBody({
       }}
       style={{
         // 门户到 document.body 后用 fixed 定位：原实现是 absolute，被祖先
-        // `.scheduled-view`（position:absolute + overflow:hidden）的裁剪盒裁掉，且其
-        // z-index:30 层叠上下文把抽屉压到顶栏（--z-chrome=90）之下（裁切与封顶是两条
+        // `.scheduled-view`（absolute + z 30，overflow 由本视图内联成 hidden）的裁剪盒
+        // 裁掉，且其层叠上下文把抽屉压到顶栏（--z-chrome=90）之下（裁切与封顶是两条
         // 独立机制，见组件注释）。fixed 以视口为包含块，门户后不再受祖先影响。
         position: "fixed",
         right: dockOpen ? 396 : 68,
@@ -188,8 +188,9 @@ export function AgentTeamTaskDetailBody({
  * 任务详情抽屉（C8）：点任务卡 → 右下角浮层显示负责人 / 依赖（本票依赖谁）/ 解锁（谁依赖本票）。
  *
  * **门户到 `document.body`**：工作台 `AgentTeamsView` 挂在 `.scheduled-view`
- * （position:absolute + z-index:var(--z-sticky) + overflow:hidden）里。准确的机制有两条
- * （实测：把竞争侧栏降到 z-index:1、低于 #view 的 30 后探针定位）：
+ * （`position:absolute` + `z-index:var(--z-sticky)`=30）里；该类自己只声明
+ * `overflow-y:auto`，本视图再用内联 `style={{overflow:"hidden"}}` 把两轴都收成裁剪盒。
+ * 准确的机制有两条（实测：把竞争侧栏降到 z-index:1、低于该容器的 30 后探针定位）：
  *   1. `absolute` 后代（本组件的原实现）：**同时**被祖先的层叠上下文封顶（压不过顶栏
  *      --z-chrome=90）**和**被祖先的 overflow 裁剪盒裁切——越界的 absolute 探针命中侧栏。
  *   2. `fixed` 后代：**不被**祖先 overflow 裁切（包含块是视口，除非某祖先建立了包含块
