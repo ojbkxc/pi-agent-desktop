@@ -116,6 +116,15 @@ jobs:
           releaseBody: |
             ## Pi Agent Desktop 0.8.6 (fork)
 
+            **2026-11-18 覆盖式重发 / re-release.** Same version number; this build replaces the previous v0.8.6 artifacts.
+            基于全仓细节巡检重新打包（126 文件）：
+
+            - **Keyboard & focus.** 项目选择器与所有模态接入共享焦点陷阱 + Esc 栈（Tab 循环、关闭后焦点归还、Radix 下拉放行）；顶栏下拉、Teams / Tasks 整页按 Esc 不再误停运行中的 agent。
+            - **Theme & contrast.** 深色主按钮 hover 白字白底 1.00:1 → 18.1:1；`--text-dim` 对 elevated 卡面 4.40 → 5.56:1；literal z-index 归一；补全 reduced-motion 漏项；清理死 CSS。
+            - **Data boundaries.** 登录与改密路由请求体有界读取；团队工作台响应投影截断（`?limit=`）；错误响应不再回传绝对路径原文。
+            - **Timers & races.** 团队轮询判死定时器、通知 store 单句柄覆盖、9 处复制提示计时器互踩；`/goal` 与团队条不再每条消息闪空；文件查看器增量失败保留已加载内容。
+            - **Tests.** 恒真断言（`indexOf` 恒小于正数）改为跨行 `assert.match`，并做真·反向复现（删源码行才红）。
+
             The **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2. This release carries the security, stability and performance work from upstream pi-web v0.10 through v0.17, a pi SDK 1.5.2 / Next.js 16.4.4 / undici 8.12.3 upgrade, and the fork's own additions.
 
             ### Security (upstream v0.10 → v0.17, ported)
