@@ -5346,6 +5346,87 @@ html.dark {
   background: color-mix(in srgb, var(--surface) 34%, transparent);
 }
 
+/* Tool-call groups: cc-haha folds a run of same-ish calls into one quiet line
+   ("读取 2 个文件、运行 1 条命令"). The row stays lighter than a tool card so the
+   process reads as a summary rather than a wall of bordered boxes. */
+.tool-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tool-group-summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 9px;
+  border: var(--hairline) solid var(--separator);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-size: var(--fs-small);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-native),
+    background var(--dur-fast) var(--ease-native),
+    border-color var(--dur-fast) var(--ease-native);
+}
+
+.tool-group-summary:hover {
+  border-color: var(--border);
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.tool-group-summary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.tool-group-chevron {
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+
+.tool-group-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-group-failed {
+  flex-shrink: 0;
+  color: var(--danger);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-group-aborted {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+}
+
+.tool-group-duration {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-group-calls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 10px;
+  border-left: var(--hairline) solid var(--separator);
+}
+
 @media (max-width: 1120px) {
   .app-topbar-title {
     max-width: 240px;
@@ -10486,21 +10567,28 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 /* Session-topbar Agent Team strip (components/AgentTeams/AgentTeamStrip.tsx): the
    always-visible trace of the team the current session is running. Clicking it
    opens the workbench. A team never takes over the conversation — this strip is
-   the only thing it adds to the chat surface. */
+   the only thing it adds to the chat surface.
+
+   It sits in the chat column's header next to the goal strip, as a full-width
+   banner (cc-haha's `LG`: `flex w-full max-w-full flex-wrap`), not as a chip
+   beside the topbar title. The chip form was where "the banner does not look
+   like cc-haha's" came from: same information, wrong shape and place. */
 .agent-team-strip {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  width: 100%;
   min-width: 0;
   max-width: 100%;
-  margin-left: 8px;
-  padding: 3px 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--bg-panel);
   color: var(--text-muted);
-  font-size: var(--fs-micro);
-  white-space: nowrap;
+  font-size: var(--fs-caption);
+  text-align: left;
   cursor: pointer;
   transition: background var(--dur-base) var(--ease-native), border-color var(--dur-base) var(--ease-native);
 }
@@ -10513,7 +10601,7 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   box-shadow: 0 0 0 2px var(--accent);
 }
 
-.agent-team-strip--compact { padding: 2px 6px; gap: 4px; }
+.agent-team-strip--compact { padding: 4px 8px; gap: 6px; }
 
 .agent-team-strip-icon { flex-shrink: 0; color: var(--text-dim); }
 

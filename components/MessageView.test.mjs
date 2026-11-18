@@ -244,7 +244,7 @@ test("renders subagents as standard tool calls with only an extra session button
     onOpenSession() {},
   });
 
-  assert.match(html, /border:1px solid rgba\(34,197,94,0\.25\)/);
+  assert.match(html, /border:1px solid var\(--border\)/);
   assert.match(html, />Agent</);
   assert.match(html, />Explore</);
   assert.match(html, /aria-label="Open sub-agent session"/);
@@ -785,4 +785,84 @@ test("复制反馈：三处复制按钮复用共享 useCopyFeedback，失败有�
   assert.match(messageViewSource, /failed \? t\("i18n\.copyFailed"\)/, "失败时显示复制失败");
   assert.doesNotMatch(messageViewSource, /setTimeout\(\(\) => setCopied\(false\), 1500\)/, "裸计时器必须消失");
   assert.doesNotMatch(messageViewSource, /function useCopyFeedback\(\)/, "不得保留第二套本地实现");
+});
+
+test("folds consecutive read calls into one cc-haha style summary row", () => {
+  clearExpandedToolCalls();
+  const html = renderMessage({
+    role: "assistant",
+    content: [
+      { type: "toolCall", toolCallId: "read-a", toolName: "read", input: { file_path: "a.ts" } },
+      { type: "toolCall", toolCallId: "read-b", toolName: "read", input: { file_path: "b.ts" } },
+    ],
+    timestamp: 1,
+  });
+  assert.match(html, /data-tool-group="2"/);
+  assert.match(html, /Read 2 files/);
+  // Collapsed by default: the folded cards' previews must stay out of the markup.
+  assert.doesNotMatch(html, /a\.ts/);
+  assert.doesNotMatch(html, /b\.ts/);
+});
+
+test("a lone tool call stays an individual card with a verb header", () => {
+  clearExpandedToolCalls();
+  const html = renderMessage({
+    role: "assistant",
+    content: [{ type: "toolCall", toolCallId: "read-one", toolName: "read", input: { file_path: "a.ts" } }],
+  });
+  assert.doesNotMatch(html, /data-tool-group/);
+  assert.match(html, /data-tool-name="read"/);
+  assert.match(html, />Read</);
+  assert.match(html, /a\.ts/);
+});
+
+test("an edit splits a run of reads instead of folding into it", () => {
+  clearExpandedToolCalls();
+  const html = renderMessage({
+    role: "assistant",
+    content: [
+      { type: "toolCall", toolCallId: "read-a", toolName: "read", input: { file_path: "a.ts" } },
+      { type: "toolCall", toolCallId: "read-b", toolName: "read", input: { file_path: "b.ts" } },
+      { type: "toolCall", toolCallId: "edit-c", toolName: "edit", input: { file_path: "c.ts", old_string: "x", new_string: "y" } },
+    ],
+  });
+  assert.equal((html.match(/data-tool-group=/g) ?? []).length, 1);
+  assert.match(html, /data-tool-group="2"/);
+  // The edit keeps its own card (its diff is the point of the call).
+  assert.match(html, /data-tool-name="edit"/);
+});
+
+test("a folded group reports its failed calls", () => {
+  clearExpandedToolCalls();
+  const html = renderMessage({
+    role: "assistant",
+    content: [
+      { type: "toolCall", toolCallId: "read-a", toolName: "read", input: { file_path: "a.ts" } },
+      { type: "toolCall", toolCallId: "read-b", toolName: "read", input: { file_path: "b.ts" } },
+    ],
+  }, {
+    toolResults: new Map([["read-b", { role: "toolResult", toolCallId: "read-b", content: [], isError: true }]]),
+  });
+  assert.match(html, /1 failed/);
+});
+
+test("the group summary speaks Chinese in zh-CN (cc-haha wording)", () => {
+  clearExpandedToolCalls();
+  const html = renderToStaticMarkup(
+    React.createElement(
+      I18nProvider,
+      { initialLocale: "zh-CN" },
+      React.createElement(MessageView, {
+        message: {
+          role: "assistant",
+          content: [
+            { type: "toolCall", toolCallId: "read-a", toolName: "read", input: { file_path: "a.ts" } },
+            { type: "toolCall", toolCallId: "read-b", toolName: "read", input: { file_path: "b.ts" } },
+            { type: "toolCall", toolCallId: "bash-c", toolName: "bash", input: { command: "ls" } },
+          ],
+        },
+      }),
+    ),
+  );
+  assert.match(html, /读取 2 个文件、运行 1 条命令/);
 });

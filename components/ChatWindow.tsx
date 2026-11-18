@@ -7,6 +7,7 @@ import type { AgentMessage, AssistantContentBlock, AssistantMessage, BashExecuti
 import { normalizeCustomPanelLines } from "@/lib/ansi";
 import { asBracketedPaste, toTerminalKeyData } from "@/lib/terminal-input";
 import { countToolCallBlocks, getAssistantErrorMessage, getDisplayableAssistantBlocks, hasAssistantAnswer, isAssistantTruncated, isMessageGroupAnchor, splitFinalAssistantBlocks } from "@/lib/message-display";
+import { formatToolSummary, summarizeToolCalls, type ToolSummaryInput, type ToolSummarySegment } from "@/lib/tool-groups";
 import { ConversationFind } from "./ConversationFind";
 import { extractTurnWrittenFiles, type WrittenFile } from "@/lib/turn-written-files";
 import { formatTurnDuration, getTurnDurationMs } from "@/lib/turn-duration";
@@ -83,6 +84,12 @@ interface Props {
   ) => void;
   onSessionStatsChange?: (stats: SessionStatsInfo | null) => void;
   onSessionStatsPanelOpen?: () => void;
+  /**
+   * 当前会话所属团队的头部横幅（对齐 cc-haha：团队条与目标条相邻、都在消息列上方，
+   * 是一整宽的横幅，不挤在应用顶栏）。由 AppShell 传组件进来，ChatWindow 不自己拉数据。
+   * 该会话没有团队时传 null，不占位。
+   */
+  teamStrip?: React.ReactNode;
   /** Opens Settings on a section: a bare `/mcp` that pi's built-in MCP extension owns opens Settings › MCP. */
   onOpenSettings?: (section: SettingsSection) => void;
   onContextUsageChange?: (usage: { percent: number | null; contextWindow: number; tokens: number | null } | null) => void;
@@ -228,13 +235,18 @@ export function getTurnWrittenFiles(finalAssistant: AssistantMessage, turnMessag
   return files;
 }
 
-function ProcessDetailsGroup({ messageCount, toolCallCount, durationMs, defaultExpanded = false, reveal = false, children, t }: { messageCount: number; toolCallCount: number; durationMs?: number; defaultExpanded?: boolean; reveal?: boolean; children: ReactNode; t: (key: string, params?: Record<string, string | number>) => string }) {
+function ProcessDetailsGroup({ messageCount, toolCallCount, toolSegments, durationMs, defaultExpanded = false, reveal = false, children, t }: { messageCount: number; toolCallCount: number; toolSegments?: readonly ToolSummarySegment[]; durationMs?: number; defaultExpanded?: boolean; reveal?: boolean; children: ReactNode; t: (key: string, params?: Record<string, string | number>) => string }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   useLayoutEffect(() => {
     if (reveal) setExpanded(true);
   }, [reveal]);
-  const parts = [t("chat.processDetails"), `${messageCount} ${t(messageCount === 1 ? "chat.message" : "chat.messages")}`];
-  if (toolCallCount > 0) parts.push(`${toolCallCount} ${t(toolCallCount === 1 ? "chat.toolCall" : "chat.toolCalls")}`);
+  // cc-haha's summary is a verb phrase ("读取 2 个文件、运行 1 条命令"), not a
+  // message/tool count. Fall back to the counts when nothing has a verb.
+  const toolSummary = formatToolSummary(toolSegments ?? [], t);
+  const parts = toolSummary
+    ? [toolSummary]
+    : [t("chat.processDetails"), `${messageCount} ${t(messageCount === 1 ? "chat.message" : "chat.messages")}`];
+  if (!toolSummary && toolCallCount > 0) parts.push(`${toolCallCount} ${t(toolCallCount === 1 ? "chat.toolCall" : "chat.toolCalls")}`);
   if (durationMs !== undefined) parts.push(t("chat.turnDuration", { time: formatTurnDuration(durationMs) }));
 
   return (
@@ -276,7 +288,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, durationMs, defaultE
   );
 }
 
-export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTargetHandled, initialScrollPosition, onScrollPositionChange, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, modelsRefreshKey, workspaceUnavailable, onRecheckWorkspace, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onOpenSettings, onOpenModelsConfig, onContextUsageChange, onOpenFile, onOpenSession, onAskInNewChat, onSelectProject, projectOptions, onProjectChange, onProjectFilesImported, quoteSelectionEnabled = true, conversationNavigatorEnabled = true, initialPrompt, onInitialPromptConsumed, soundEnabled = true, playDoneSound = () => {}, unlockAudio }: Props) {
+export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTargetHandled, initialScrollPosition, onScrollPositionChange, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, modelsRefreshKey, workspaceUnavailable, onRecheckWorkspace, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, teamStrip, onOpenSettings, onOpenModelsConfig, onContextUsageChange, onOpenFile, onOpenSession, onAskInNewChat, onSelectProject, projectOptions, onProjectChange, onProjectFilesImported, quoteSelectionEnabled = true, conversationNavigatorEnabled = true, initialPrompt, onInitialPromptConsumed, soundEnabled = true, playDoneSound = () => {}, unlockAudio }: Props) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
   const chatOnly = workspaceKind === "chat" || session?.workspaceKind === "chat";
@@ -1465,12 +1477,14 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
         )}
         {!isEmptyNew && <>
         <div style={{ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, flex: 1, overflow: "hidden" }}>
-        {/* G2 目标进度条：常驻在消息列表上方（照 cc-haha ActiveSession 的 header 位）。包一层 column
-            让条位于列表之上，**不改** chatContentRegion 的 row（ConversationNavigator 仍是它的同行
-            子项）。无目标时 GoalStrip 自己返回 null，不留空位；这里只负责与消息列一致的居中内边距。 */}
-        <div style={{ flexShrink: 0, padding: `0 ${CHAT_COLUMN_PADDING}px` }}>
+        {/* G2 目标进度条 + 会话头部团队条：都常驻在消息列表上方（照 cc-haha ActiveSession
+            header 位，两者相邻、都是整宽横幅）。包一层 column 让条位于列表之上，**不改**
+            chatContentRegion 的 row（ConversationNavigator 仍是它的同行子项）。无目标 / 无团队时
+            各自返回 null，不留空位；这里只负责与消息列一致的居中内边距。 */}
+        <div style={{ flexShrink: 0, padding: `0 ${CHAT_COLUMN_PADDING}px`, display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ width: "100%", maxWidth: "var(--chat-content-max-width, 820px)", margin: "0 auto" }}>
             <GoalStrip goal={goalState.goal} isRunning={sessionRunning} compact={isMobile} />
+            {teamStrip}
           </div>
         </div>
         <div
@@ -1633,6 +1647,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
 
                 const processViews: ReactNode[] = [];
                 let processToolCount = 0;
+                const processToolCalls: ToolSummaryInput[] = [];
                 let processRefIdx: number | undefined;
                 let revealProcess = false;
 
@@ -1649,6 +1664,9 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
                   if (blocks.length === 0) continue;
                   processRefIdx ??= visibleRefIndexByMessage.get(processIdx);
                   processToolCount += countToolCallBlocks(blocks);
+                  for (const block of blocks) {
+                    if (block.type === "toolCall") processToolCalls.push({ toolName: block.toolName, input: block.input });
+                  }
                   revealProcess ||= Boolean(pendingSearchScroll && entryIds[processIdx] === pendingSearchScroll.entryId && (!searchBlock || blocks.includes(searchBlock)));
                   processViews.push(renderMessage(processIdx, {
                     attachRef: false,
@@ -1669,7 +1687,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
                           would otherwise stay open once its answer shows up, e.g. when
                           switching between an answered and an unanswered leaf of the same
                           turn. Manual toggles survive every other re-render. */}
-                      <ProcessDetailsGroup key={finalAnswerMessage ? "answered" : "unanswered"} messageCount={processViews.length} toolCallCount={processToolCount} durationMs={turnDurationMs} defaultExpanded={!finalAnswerMessage} reveal={revealProcess} t={t}>
+                      <ProcessDetailsGroup key={finalAnswerMessage ? "answered" : "unanswered"} messageCount={processViews.length} toolCallCount={processToolCount} toolSegments={summarizeToolCalls(processToolCalls)} durationMs={turnDurationMs} defaultExpanded={!finalAnswerMessage} reveal={revealProcess} t={t}>
                         {processViews}
                       </ProcessDetailsGroup>
                     </div>,

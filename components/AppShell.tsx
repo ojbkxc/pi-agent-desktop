@@ -2361,18 +2361,9 @@ export function AppShell() {
             <span>{topBarTitle}</span>
             <small>{topBarSubtitle}</small>
           </div>
-          {/* 会话头部团队条（B1）：当前会话有所属 Agent Team 时常驻在标题右侧、
-              操作区之前；无团队 / 未进成员就取消的团队时组件渲染 null，不占位。
-              窄屏（移动端）走 compact 档。 */}
-          {showChat && !pageOpen && activeTeamStrip.phase !== "none" && (
-            <AgentTeamStrip
-              snapshot={activeTeamStrip.snapshot}
-              phase={activeTeamStrip.phase}
-              progress={activeTeamStrip.progress}
-              onOpen={() => handleOpenTeamWorkbench(activeTeamStrip.snapshot?.team.id ?? null)}
-              compact={isMobile}
-            />
-          )}
+          {/* 团队状态横幅与目标条一起走 ChatWindow 的会话头部（对齐 cc-haha：两者相邻、
+              都是消息列上方的整宽横幅）。这里不再渲染顶栏 chip —— 那是「横幅对不上」的
+              来源：功能都在，但被挤在标题旁当小标签。 */}
           {/* W2：会话 token 用量常驻小字（无数据不渲染，不留空位）；完整文本走 title。 */}
           {showChat && !pageOpen && usageSummary !== "" && (
             <span className="app-topbar-usage" title={usageSummary}>{usageSummary}</span>
@@ -3043,6 +3034,16 @@ export function AppShell() {
               onSystemInfoLoaderChange={handleSystemInfoLoaderChange}
               onSessionStatsChange={handleSessionStatsChange}
               onSessionStatsPanelOpen={openSessionStatsPanel}
+              // 团队状态横幅现在住在会话头部（与 GoalStrip 相邻），不再挤在顶栏。
+              teamStrip={activeTeamStrip.phase !== "none" ? (
+                <AgentTeamStrip
+                  snapshot={activeTeamStrip.snapshot}
+                  phase={activeTeamStrip.phase}
+                  progress={activeTeamStrip.progress}
+                  onOpen={() => handleOpenTeamWorkbench(activeTeamStrip.snapshot?.team.id ?? null)}
+                  compact={isMobile}
+                />
+              ) : null}
               onOpenSettings={openSettingsSection}
               onContextUsageChange={handleContextUsageChange}
               onSelectProject={desktopMode && !isChatWorkspaceActive

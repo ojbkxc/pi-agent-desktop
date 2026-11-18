@@ -57,14 +57,20 @@ export function AgentTeamStrip({ snapshot, phase, progress, onOpen, compact = fa
   const shown = members.slice(0, MAX_AVATARS);
   const overflow = members.length - shown.length;
   const phaseLabel = t(phaseLabelKey(phase));
+  // cc-haha titles the strip with `team.name`: with more than one team on the
+  // machine, "Agent Team · 并行执行" alone does not say which one this session
+  // belongs to. Falls back to the open hint when the name is missing.
+  const teamName = snapshot.team.name?.trim();
 
   return (
     <button
       type="button"
       className={`agent-team-strip agent-team-strip--${phase}${compact ? " agent-team-strip--compact" : ""}`}
       onClick={onOpen}
-      title={t("teams.strip.open")}
-      aria-label={`${t("teams.strip.label")} · ${phaseLabel}`}
+      title={teamName ? `${teamName} · ${t("teams.strip.open")}` : t("teams.strip.open")}
+      aria-label={teamName
+        ? `${t("teams.strip.label")} ${teamName} · ${phaseLabel}`
+        : `${t("teams.strip.label")} · ${phaseLabel}`}
     >
       <svg
         className="agent-team-strip-icon"

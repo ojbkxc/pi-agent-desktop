@@ -15,6 +15,7 @@ import { applyPatchPreviewToFiles, applyPatchResultHasFailures, extractApplyPatc
 import { editPreviewFile } from "@/lib/edit-preview";
 import { toolFieldsOfInput, type ToolField } from "@/lib/tool-fields";
 import { isApplyPatchToolName, isEditToolName, isWriteToolName } from "@/lib/tool-names";
+import { formatToolSummary, summarizeToolCalls, toolCategory, toolGroupCategory, toolVerbKey } from "@/lib/tool-groups";
 import { isToolCallExpanded, setToolCallExpanded } from "@/lib/tool-call-expansion";
 import { isThinkingExpandedByDefault, THINKING_EXPANDED_EVENT } from "@/lib/thinking-expansion-preference";
 import { TurnWrittenFiles } from "./TurnWrittenFiles";
@@ -724,6 +725,10 @@ function AssistantMessageView({
     .map((block, originalIndex) => ({ block, originalIndex }))
     .filter(({ block }) => !isEmptyThinkingBlock(block, { isStreaming })), [message.content, isStreaming]);
   const blocks = useMemo(() => blockItems.map(({ block }) => block), [blockItems]);
+  // Consecutive foldable tool calls become one summary row (cc-haha's activity
+  // group); specialised views (edit diff, patch, codemode, MCP, subagent, team
+  // cards) stay as their own blocks.
+  const renderItems = useMemo(() => buildToolRenderItems(blockItems), [blockItems]);
   const providerError = getAssistantErrorMessage(message, { isStreaming });
   const truncated = isAssistantTruncated(message, { isStreaming });
   const unansweredTruncation = truncated && !hasAssistantAnswer(message);
@@ -899,8 +904,18 @@ function AssistantMessageView({
       </div>
 
       <div className="message-assistant-content" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {blockItems.map(({ block, originalIndex }) => (
-          <BlockView key={`${entryId ?? "stream"}-${originalIndex}`} block={block} searchTarget={block === searchBlock} toolResults={toolResults} isStreaming={isStreaming} streamingDuration={streamingDurations.get(originalIndex) ?? (block.type === "thinking" ? thinkingDurationFromFile : undefined)} toolCallDurations={toolCallDurations} cwd={cwd} onOpenFile={onOpenFile} onOpenSession={onOpenSession} sessionId={sessionId} entryId={entryId} blockIndex={originalIndex} />
+        {renderItems.map((item) => item.kind === "toolGroup" ? (
+          <ToolGroupBlock
+            key={`${entryId ?? "stream"}-${item.key}`}
+            calls={item.calls}
+            searchTarget={item.calls.some((call) => call.block === searchBlock)}
+            toolResults={toolResults}
+            isStreaming={isStreaming}
+            toolCallDurations={toolCallDurations}
+            onOpenSession={onOpenSession}
+          />
+        ) : (
+          <BlockView key={`${entryId ?? "stream"}-${item.originalIndex}`} block={item.block} searchTarget={item.block === searchBlock} toolResults={toolResults} isStreaming={isStreaming} streamingDuration={streamingDurations.get(item.originalIndex) ?? (item.block.type === "thinking" ? thinkingDurationFromFile : undefined)} toolCallDurations={toolCallDurations} cwd={cwd} onOpenFile={onOpenFile} onOpenSession={onOpenSession} sessionId={sessionId} entryId={entryId} blockIndex={item.originalIndex} />
         ))}
       </div>
 
@@ -1019,6 +1034,105 @@ function AssistantMessageView({
           <span className="message-meta" style={{ fontSize: "var(--fs-micro)", color: "var(--text-dim)", marginLeft: "auto" }}>{time}</span>
         )}
       </div>
+    </div>
+  );
+}
+
+type RenderItem =
+  | { kind: "block"; block: AssistantContentBlock; originalIndex: number }
+  | { kind: "toolGroup"; key: string; calls: { block: ToolCallContent; originalIndex: number }[] };
+
+/** A call whose card folds into an inline summary row. Specialised views return false. */
+function isGroupableToolBlock(block: AssistantContentBlock): block is ToolCallContent {
+  if (block.type !== "toolCall") return false;
+  if (!block.toolName.trim()) return false;
+  if (block.toolName === AGENT_TEAM_CREATE_TOOL_NAME || block.toolName === AGENT_TEAM_DELETE_TOOL_NAME) return false;
+  return toolGroupCategory(block.toolName) !== null;
+}
+
+/**
+ * Fold each run of consecutive groupable tool calls into one item. A run of one
+ * stays a plain block, so single calls render exactly as before (and every
+ * existing specialised view keeps its one-click card).
+ */
+export function buildToolRenderItems(items: { block: AssistantContentBlock; originalIndex: number }[]): RenderItem[] {
+  const out: RenderItem[] = [];
+  let run: { block: ToolCallContent; originalIndex: number }[] = [];
+  const flush = () => {
+    if (run.length === 1) {
+      out.push({ kind: "block", block: run[0].block, originalIndex: run[0].originalIndex });
+    } else if (run.length > 1) {
+      out.push({ kind: "toolGroup", key: `group-${run[0].originalIndex}-${run[run.length - 1].originalIndex}`, calls: run });
+    }
+    run = [];
+  };
+  for (const item of items) {
+    if (isGroupableToolBlock(item.block)) run.push({ block: item.block, originalIndex: item.originalIndex });
+    else { flush(); out.push({ kind: "block", block: item.block, originalIndex: item.originalIndex }); }
+  }
+  flush();
+  return out;
+}
+
+function ToolGroupBlock({ calls, searchTarget, toolResults, isStreaming, toolCallDurations, onOpenSession }: {
+  calls: { block: ToolCallContent; originalIndex: number }[];
+  searchTarget?: boolean;
+  toolResults?: Map<string, ToolResultMessage>;
+  isStreaming?: boolean;
+  toolCallDurations?: Map<string, number>;
+  onOpenSession?: (sessionId: string) => void;
+}) {
+  const { t } = useI18n();
+  const [expanded, setExpanded] = useState(false);
+  // A search hit inside a folded call must surface that call, not stay hidden.
+  useEffect(() => { if (searchTarget) setExpanded(true); }, [searchTarget]);
+  const open = expanded || searchTarget === true;
+
+  const summary = formatToolSummary(
+    summarizeToolCalls(calls.map(({ block }) => ({ toolName: block.toolName, input: block.input }))),
+    t,
+  );
+  let failed = 0;
+  let aborted = 0;
+  // Calls in one assistant message start together, so the group ran for the
+  // longest of them — summing would double-count the overlap.
+  let longestSeconds: number | undefined;
+  for (const { block } of calls) {
+    const id = block.toolCallId.trim() ? block.toolCallId : null;
+    const result = id ? toolResults?.get(id) : undefined;
+    if (result?.isError) failed++;
+    // A call with no result that is not still streaming never ran to completion;
+    // say so at the group level too, so the folded cards are not mistaken for
+    // finished ones while the group stays collapsed.
+    if (!isStreaming && !result) aborted++;
+    const seconds = id ? toolCallDurations?.get(id) : undefined;
+    if (seconds !== undefined && (longestSeconds === undefined || seconds > longestSeconds)) longestSeconds = seconds;
+  }
+
+  return (
+    <div className="tool-group" data-tool-group={calls.length}>
+      <button
+        type="button"
+        className="tool-group-summary"
+        aria-expanded={open}
+        onClick={() => setExpanded((value) => !value)}
+        title={t(open ? "chat.collapseProcess" : "chat.expandProcess")}
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="tool-group-chevron" aria-hidden="true" style={{ transform: open ? "rotate(90deg)" : "none" }}>
+          <polyline points="4 2.5 7.5 6 4 9.5" />
+        </svg>
+        <span className="tool-group-label">{summary || `${calls.length} ${t("chat.toolCalls")}`}</span>
+        {failed > 0 && <span className="tool-group-failed">{t("toolGroup.failedCount", { count: failed })}</span>}
+        {aborted > 0 && <span className="tool-group-aborted">{t("chat.toolCancelled")}</span>}
+        {longestSeconds !== undefined && <span className="tool-group-duration">{longestSeconds}s</span>}
+      </button>
+      {open && (
+        <div className="tool-group-calls">
+          {calls.map((call) => (
+            <BlockView key={call.block.toolCallId || call.originalIndex} block={call.block} toolResults={toolResults} isStreaming={isStreaming} toolCallDurations={toolCallDurations} onOpenSession={onOpenSession} blockIndex={call.originalIndex} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1255,23 +1369,23 @@ function ToolCallBlock({ block, result, duration, aborted, defaultExpanded, onOp
     ? result.details
     : null;
   const codemodeCallCount = codemode ? codemode.calls.length + codemode.omitted : 0;
+  // A Chinese/English verb instead of the raw tool name: "读取" + path, not
+  // "read" + path. Tools with no verb (agent, unknown, MCP server/tool) keep
+  // their own label. See `lib/tool-groups.ts`.
+  const verbLabelKey = toolVerbKey(toolCategory(block.toolName));
+  const verbLabel = verbLabelKey ? t(verbLabelKey) : null;
 
   return (
     <div
+      data-tool-name={block.toolName}
       style={{
         borderRadius: "var(--radius-md)",
         overflow: "hidden",
         fontSize: "var(--fs-caption)",
         border: isError
           ? "1px solid rgba(248,113,113,0.45)"
-          : aborted
-            ? "1px solid rgba(148,163,184,0.4)"
-            : "1px solid rgba(34,197,94,0.25)",
-        background: isError
-          ? "rgba(248,113,113,0.05)"
-          : aborted
-            ? "rgba(148,163,184,0.06)"
-            : "rgba(34,197,94,0.04)",
+          : "1px solid var(--border)",
+        background: isError ? "rgba(248,113,113,0.05)" : "transparent",
       }}
     >
       {/* ── Tool call header ── */}
@@ -1294,15 +1408,15 @@ function ToolCallBlock({ block, result, duration, aborted, defaultExpanded, onOp
           }}
         >
           <span
-            title={mcpLabel ? block.toolName : undefined}
-            style={{ color: isError ? "var(--danger)" : aborted ? "var(--text-dim)" : "var(--success)", fontFamily: "var(--font-mono)", fontWeight: "var(--fw-semibold)", fontSize: "var(--fs-micro)", flexShrink: 0 }}
+            title={mcpLabel ? block.toolName : verbLabel ? undefined : block.toolName}
+            style={{ color: isError ? "var(--danger)" : aborted ? "var(--text-dim)" : "var(--text-muted)", fontFamily: verbLabel && !mcpLabel ? undefined : "var(--font-mono)", fontWeight: "var(--fw-semibold)", fontSize: "var(--fs-micro)", flexShrink: 0 }}
           >
             {mcpLabel ? (
               <>
                 <span style={{ fontWeight: "var(--fw-medium)", opacity: 0.75 }}>{mcpLabel.server}/</span>
                 {mcpLabel.tool}
               </>
-            ) : block.toolName}
+            ) : verbLabel ?? block.toolName}
           </span>
           {aborted && (
             <span title={t("chat.toolCancelled")} style={{ flexShrink: 0, fontSize: "var(--fs-micro)", color: "var(--text-dim)", border: "var(--hairline) solid var(--border)", borderRadius: "var(--radius-xs)", padding: "1px 5px" }}>
@@ -1346,7 +1460,7 @@ function ToolCallBlock({ block, result, duration, aborted, defaultExpanded, onOp
             style={{
               padding: "6px 10px 8px",
               background: "var(--bg-subtle)",
-              borderTop: isError ? "1px solid rgba(248,113,113,0.25)" : "1px solid rgba(34,197,94,0.2)",
+              borderTop: isError ? "1px solid rgba(248,113,113,0.25)" : "1px solid var(--border)",
             }}
           >
             <ToolFieldRows fields={toolFields} />
@@ -1361,7 +1475,7 @@ function ToolCallBlock({ block, result, duration, aborted, defaultExpanded, onOp
               lineHeight: 1.5,
               overflow: "auto",
               background: "var(--bg-subtle)",
-              borderTop: isError ? "1px solid rgba(248,113,113,0.25)" : "1px solid rgba(34,197,94,0.2)",
+              borderTop: isError ? "1px solid rgba(248,113,113,0.25)" : "1px solid var(--border)",
               whiteSpace: "pre-wrap",
               wordBreak: "break-all",
             }}
@@ -1384,14 +1498,14 @@ function ToolCallBlock({ block, result, duration, aborted, defaultExpanded, onOp
 
       {/* ── Expanded: a pending edit's diff, from its arguments ── */}
       {editPreview && (
-        <div style={{ borderTop: "var(--hairline) solid rgba(34,197,94,0.15)", background: "var(--bg)" }}>
+        <div style={{ borderTop: "var(--hairline) solid var(--border)", background: "var(--bg)" }}>
           <SplitFilesView files={editPreview} />
         </div>
       )}
 
       {/* ── Expanded: applied-patch split diff ── */}
       {expanded && patchFiles && (
-        <div style={{ borderTop: "var(--hairline) solid rgba(34,197,94,0.15)", background: "var(--bg)" }}>
+        <div style={{ borderTop: "var(--hairline) solid var(--border)", background: "var(--bg)" }}>
           <ApplyPatchDiffView files={patchFiles} />
         </div>
       )}
@@ -1431,7 +1545,7 @@ function PairedDiffResult({ diff }: {
   return (
     <div
       style={{
-        borderTop: "var(--hairline) solid rgba(34,197,94,0.15)",
+        borderTop: "var(--hairline) solid var(--border)",
         background: "var(--bg)",
       }}
     >
@@ -1827,7 +1941,7 @@ function ResultImages({ images, isError }: { images: ImageContent[]; isError: bo
         flexWrap: "wrap",
         padding: "10px",
         background: "var(--bg)",
-        borderTop: `1px solid ${isError ? "rgba(248,113,113,0.3)" : "rgba(34,197,94,0.15)"}`,
+        borderTop: `1px solid ${isError ? "rgba(248,113,113,0.3)" : "var(--border)"}`,
       }}
     >
       {images.map((image, index) => {
@@ -1878,7 +1992,7 @@ function PairedResult({ text, isEmpty, isError }: {
   return (
     <div
       style={{
-        borderTop: `1px solid ${isError ? "rgba(248,113,113,0.3)" : "rgba(34,197,94,0.15)"}`,
+        borderTop: `1px solid ${isError ? "rgba(248,113,113,0.3)" : "var(--border)"}`,
         background: isError ? "rgba(248,113,113,0.04)" : "var(--bg-subtle)",
       }}
     >
