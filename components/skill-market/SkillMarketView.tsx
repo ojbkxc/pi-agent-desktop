@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { formatClockTime } from "@/lib/i18n/format";
+import type { Locale } from "@/lib/i18n/types";
 import { isImeComposing } from "@/lib/ime";
 import { AppSelect } from "@/components/AppSelect";
 import { SkillMarketCard } from "./SkillMarketCard";
@@ -215,12 +217,8 @@ export function MarketResultSummary({ scope, total, loadedCount, catalogUpdatedA
 }
 
 /** 缓存时间的本地化展示；无效时间返回空串（调用方回退到不显示时间）。 */
-function formatSourceTime(timestamp: number): string {
-  try {
-    return new Date(timestamp).toLocaleTimeString();
-  } catch {
-    return "";
-  }
+function formatSourceTime(timestamp: number, locale: Locale): string {
+  return formatClockTime(timestamp, locale);
 }
 
 export interface MarketSourceStatusBarProps {
@@ -234,7 +232,7 @@ export interface MarketSourceStatusBarProps {
  * 一个来源都没记录时整条不渲染。
  */
 export function MarketSourceStatusBar({ sources }: MarketSourceStatusBarProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const present = SKILL_MARKET_SOURCES.filter((source) => sources[source]);
   if (present.length === 0) return null;
   return (
@@ -242,7 +240,7 @@ export function MarketSourceStatusBar({ sources }: MarketSourceStatusBarProps) {
       {present.map((source) => {
         const info = sources[source]!;
         const label = info.status === "cached" && info.at
-          ? t("market.sourceStatus.cachedAt", { time: formatSourceTime(info.at) })
+          ? t("market.sourceStatus.cachedAt", { time: formatSourceTime(info.at, locale) })
           : t(`market.sourceStatus.${info.status}`);
         return (
           <span

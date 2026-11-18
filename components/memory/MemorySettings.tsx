@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useId, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { formatDateTime } from "@/lib/i18n/format";
+import type { Locale } from "@/lib/i18n/types";
 import { ConfigButton, ConfigEmptyState } from "../SettingsUi";
 import { ConfirmDangerButton } from "../ConfirmDangerButton";
 
@@ -66,10 +68,10 @@ export function parseTagDraft(draft: string): string[] {
 
 const byteLength = (text: string): number => new TextEncoder().encode(text).length;
 
-function formatUpdated(entry: MemoryEntryView): string {
+function formatUpdated(entry: MemoryEntryView, locale: Locale): string {
   if (!entry.updatedAt) return "";
   const date = new Date(entry.updatedAt);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? "" : formatDateTime(date, locale);
 }
 
 /** 一行记忆：正文 + 标签 + 更新时间 + 编辑/删除；编辑态就地换成 textarea。 */
@@ -84,7 +86,7 @@ function MemoryRow({
   onSave: (patch: { text: string; tags: string[] }) => Promise<boolean>;
   onDelete: () => Promise<void>;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(entry.text);
   const [tagsDraft, setTagsDraft] = useState((entry.tags ?? []).join(", "));
@@ -112,8 +114,8 @@ function MemoryRow({
             {(entry.tags ?? []).map((tag) => (
               <span key={tag} className="memory-tag">{tag}</span>
             ))}
-            {formatUpdated(entry) && (
-              <span className="memory-row-updated">{t("memory.updated", { date: formatUpdated(entry) })}</span>
+            {formatUpdated(entry, locale) && (
+              <span className="memory-row-updated">{t("memory.updated", { date: formatUpdated(entry, locale) })}</span>
             )}
           </div>
         </div>

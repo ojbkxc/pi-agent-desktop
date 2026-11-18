@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useMemo, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { formatDateTime } from "@/lib/i18n/format";
 
 /**
  * 无人值守兜底的设置面 + manualNeeds 列表。
@@ -82,7 +83,7 @@ export function ManualNeedsList({
   busyKey?: string | null;
   onClear: (key: string) => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   if (items.length === 0) return null;
   return (
     <div className="team-fallback-manual" data-testid="fallback-manual-needs">
@@ -94,7 +95,7 @@ export function ManualNeedsList({
               <span className="team-fallback-manual-key">{item.key}</span>
               <span className="team-fallback-manual-reason">{item.reason}</span>
               <time className="team-fallback-manual-time" dateTime={new Date(item.at).toISOString()}>
-                {new Date(item.at).toLocaleString()}
+                {formatDateTime(item.at, locale)}
               </time>
             </span>
             <button
