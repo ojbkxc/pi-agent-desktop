@@ -96,6 +96,8 @@ interface AgentEvent {
 interface CompactCommandResult {
   tokensBefore?: number;
   estimatedTokensAfter?: number;
+  /** The policy extension attaches the summary model here; absent on the SDK's native path. */
+  details?: { compactionModel?: { provider?: unknown; modelId?: unknown } };
 }
 
 interface LastAssistantTextResponse {
@@ -174,6 +176,8 @@ export interface CompactResultInfo {
   reason: "manual" | "threshold" | "overflow" | "auto" | string;
   tokensBefore: number;
   estimatedTokensAfter: number;
+  /** Which model wrote the summary (absent when the SDK's native path summarized). */
+  compactionModel?: { provider: string; modelId: string };
 }
 
 export interface SlashCommandInfo {
@@ -319,7 +323,16 @@ function readCompactResult(result: unknown, reason: string): CompactResultInfo |
   if (!result || typeof result !== "object") return null;
   const r = result as CompactCommandResult;
   if (typeof r.tokensBefore !== "number" || typeof r.estimatedTokensAfter !== "number") return null;
-  return { reason, tokensBefore: r.tokensBefore, estimatedTokensAfter: r.estimatedTokensAfter };
+  const rawModel = r.details?.compactionModel;
+  const compactionModel = rawModel && typeof rawModel.provider === "string" && typeof rawModel.modelId === "string"
+    ? { provider: rawModel.provider, modelId: rawModel.modelId }
+    : undefined;
+  return {
+    reason,
+    tokensBefore: r.tokensBefore,
+    estimatedTokensAfter: r.estimatedTokensAfter,
+    ...(compactionModel ? { compactionModel } : {}),
+  };
 }
 
 export interface ChatInputHandle {

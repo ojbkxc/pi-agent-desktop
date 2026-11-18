@@ -357,16 +357,22 @@ function modelRefOf(model: CompactionSettingsModelArg): { provider: string; id: 
  */
 export function createCompactionSettingsManager(
   base: SettingsManager,
-  policy: CompactionPolicy = readCompactionPolicy(),
+  policy?: CompactionPolicy,
 ): CompactionSettingsManager {
-  if (policy.mode === "native") return base;
+  // A caller that pins a policy (tests, explicit call sites) keeps it; one that
+  // passes nothing reads the stored policy on every `getCompactionSettings`, so
+  // a settings change reaches a running session without a restart. A fixed
+  // `native` policy returns the base manager unchanged (identity tests pin).
+  if (policy !== undefined && policy.mode === "native") return base;
+  const readPolicy: () => CompactionPolicy = policy === undefined ? readCompactionPolicy : () => policy;
 
   const settingsFor = (model: CompactionSettingsModelArg) => {
+    const activePolicy = readPolicy();
     const baseSettings = base.getCompactionSettings(model);
     const explicit = readExplicitCompactionSettings(base, modelRefOf(model));
     if (explicit.reserveTokens !== undefined) return baseSettings;
     const thresholds = computeCompactionThresholds(
-      policy,
+      activePolicy,
       contextWindowOf(model),
       explicit.keepRecentTokens,
       baseSettings.reserveTokens,
