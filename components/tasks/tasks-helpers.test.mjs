@@ -17,6 +17,7 @@ test("waiting beats running, sub-agents and transient sessions stay out, recent 
     session("new", "2026-10-31T00:00:00Z"),
     session("run", "2026-10-15T00:00:00Z"),
     session("ask", "2026-10-14T00:00:00Z"),
+    session("out", "2026-10-16T00:00:00Z"),
     session("streamed", "2026-10-13T00:00:00Z"),
     session("child", "2026-10-30T00:00:00Z", { relation: { kind: "subagent", parentSessionId: "run", profile: "x", description: "", status: "running" } }),
     session("draft", "2026-10-30T00:00:00Z", { transient: true }),
@@ -24,9 +25,15 @@ test("waiting beats running, sub-agents and transient sessions stay out, recent 
   const groups = groupTasks(sessions, [
     snapshot("run", { running: true, activity: { kind: "tool", name: "bash" } }),
     snapshot("ask", { running: true, waiting: [{ method: "confirm", prompt: "Delete?" }] }),
+    snapshot("out", {
+      waitingForProvider: true,
+      lastRun: { outcome: { status: "failed", error: "upstream 503" }, finishedAt: Date.parse("2026-10-16T00:00:00Z") },
+    }),
   ], new Set(["streamed"]));
 
   assert.deepEqual(groups.waiting.map((row) => row.session.id), ["ask"]);
+  // Suspended on an upstream outage: its own group, never "recent" as a red failure.
+  assert.deepEqual(groups.outage.map((row) => row.session.id), ["out"]);
   assert.deepEqual(groups.running.map((row) => row.session.id), ["run", "streamed"]);
   assert.deepEqual(groups.recent.map((row) => row.session.id), ["new", "old"]);
 });

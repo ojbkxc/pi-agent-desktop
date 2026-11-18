@@ -18,6 +18,7 @@ import { MarkdownBody } from "./MarkdownBody";
 import { ChatInput, getUserMessageDraftImages, getUserMessageText, type ChatInputHandle } from "./ChatInput";
 import { AgentTeamPlanCard } from "./AgentTeams/AgentTeamPlanCard";
 import { GoalStrip } from "./AgentTeams/GoalStrip";
+import { OutageBanner } from "./OutageBanner";
 import { useTeamPlan } from "@/hooks/useTeamPlan";
 import { agentTeamScopeKey } from "@/hooks/useAgentTeamsEnabled";
 import { useGoalState } from "@/hooks/useGoalState";
@@ -1490,6 +1491,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
           <div style={{ width: "100%", maxWidth: "var(--chat-content-max-width, 820px)", margin: "0 auto" }}>
             <GoalStrip goal={goalState.goal} isRunning={sessionRunning} compact={isMobile} />
             {teamStrip}
+            <OutageBanner sessionId={session?.id ?? null} />
           </div>
         </div>
         <div

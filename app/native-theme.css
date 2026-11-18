@@ -10564,6 +10564,67 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   .tasks-dot--running { animation: none; }
 }
 
+/* Provider-outage row actions (the "outage" group): retry now / stop waiting,
+   kept outside the row button so a card click still opens the session. */
+.tasks-card-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  padding: 0 2px 6px;
+}
+
+.tasks-action {
+  border: var(--hairline) solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-micro);
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.tasks-action:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.tasks-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.tasks-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Session-header banner while the run is suspended on a provider outage
+   (components/OutageBanner.tsx): amber edge like the Tasks "waiting" group,
+   never the red failure treatment. */
+.outage-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border: var(--hairline) solid var(--warning);
+  border-radius: 10px;
+  background: var(--bg-panel);
+}
+
+.outage-banner-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-caption);
+  color: var(--text-muted);
+}
+
+.outage-banner-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
 /* Session-topbar Agent Team strip (components/AgentTeams/AgentTeamStrip.tsx): the
    always-visible trace of the team the current session is running. Clicking it
    opens the workbench. A team never takes over the conversation — this strip is

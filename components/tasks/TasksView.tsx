@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { formatRelativeTime } from "@/lib/i18n/format";
+import type { OutageSnapshot } from "@/lib/outage/types";
 import type { AgentTaskSnapshot, SessionInfo } from "@/lib/types";
 import { createTasksPoller, describeActivity, groupTasks, projectLabel, sessionTitle, type TaskRow } from "./tasks-helpers";
 
@@ -24,6 +25,11 @@ const LIVE_REFRESH_MS = 3000;
 export function TasksView({ sessions, runningSessionIds, onOpenSession }: Props) {
   const { t, locale } = useI18n();
   const [snapshots, setSnapshots] = useState<AgentTaskSnapshot[] | null>(null);
+  // Outage records are supplementary: they add the retry counter to the
+  // "waiting for the provider" row, never gate whether the row appears.
+  const [outageRecords, setOutageRecords] = useState<Record<string, OutageSnapshot>>({});
+  const [actingSessionId, setActingSessionId] = useState<string | null>(null);
+  const [actionTick, setActionTick] = useState(0);
   const [failed, setFailed] = useState(false);
   const rootRef = useRef<HTMLElement>(null);
   const runningKey = [...runningSessionIds].sort().join(",");
@@ -39,14 +45,30 @@ export function TasksView({ sessions, runningSessionIds, onOpenSession }: Props)
       clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
       load: async () => {
         try {
-          const response = await fetch("/api/agent/tasks", { cache: "no-store" });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const data = await response.json() as { tasks: AgentTaskSnapshot[] };
+          // Both reads in one tick: the tasks endpoint decides the rows, the
+          // outage endpoint only decorates them. A failed outage read leaves the
+          // rows on the plain waiting copy instead of hiding them.
+          const [tasksResponse, outageResponse] = await Promise.all([
+            fetch("/api/agent/tasks", { cache: "no-store" }),
+            fetch("/api/outage", { cache: "no-store" }).catch(() => null),
+          ]);
+          if (!tasksResponse.ok) throw new Error(`HTTP ${tasksResponse.status}`);
+          const data = await tasksResponse.json() as { tasks: AgentTaskSnapshot[] };
+          const records: Record<string, OutageSnapshot> = {};
+          if (outageResponse?.ok) {
+            try {
+              const outage = await outageResponse.json() as { records?: OutageSnapshot[] };
+              for (const record of outage.records ?? []) records[record.sessionId] = record;
+            } catch { /* malformed body: keep the rows, drop the counters */ }
+          }
           if (!cancelled) {
             setSnapshots(data.tasks);
+            setOutageRecords(records);
             setFailed(false);
           }
-          return { live: data.tasks.some((task) => task.running || task.waiting.length > 0) };
+          return {
+            live: data.tasks.some((task) => task.running || task.waiting.length > 0 || task.waitingForProvider === true),
+          };
         } catch (error) {
           if (!cancelled) setFailed(true);
           throw error;
@@ -61,22 +83,51 @@ export function TasksView({ sessions, runningSessionIds, onOpenSession }: Props)
       poller.stop();
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [runningKey]);
+  }, [runningKey, actionTick]);
 
   const groups = useMemo(
     () => groupTasks(sessions, snapshots ?? [], runningSessionIds),
     [sessions, snapshots, runningSessionIds],
   );
 
+  // One action per row: retry resumes on the next scheduler tick, cancel stops
+  // waiting for good (same path as Stop in the chat, but without the user
+  // needing to open the session first).
+  const actOnOutage = async (action: "retry" | "cancel", sessionId: string) => {
+    setActingSessionId(sessionId);
+    try {
+      await fetch("/api/outage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, sessionId }),
+      });
+    } catch {
+      // The next poll re-reads the truth; a failed action changes nothing.
+    } finally {
+      setActingSessionId(null);
+      setActionTick((tick) => tick + 1);
+    }
+  };
+
   const renderRow = (row: TaskRow) => {
     const { session, snapshot } = row;
     const failedRun = snapshot?.lastRun?.outcome.status === "failed" ? snapshot.lastRun.outcome : null;
+    const outage = outageRecords[session.id];
     let status: string;
     let tone: "attention" | "running" | "failed" | "done";
     if (row.group === "waiting") {
       tone = "attention";
       const prompt = snapshot?.waiting[0]?.prompt;
       status = prompt ? t("tasks.waitingFor", { prompt }) : t("tasks.waiting");
+    } else if (row.group === "outage") {
+      // Suspended, not failed: amber like the Waiting group, never red (§4.1).
+      tone = "attention";
+      status = outage
+        ? t(outage.kind === "quota" ? "tasks.waitingQuota" : "tasks.waitingProviderRetry", {
+          attempt: outage.attempts,
+          max: outage.maxAttempts,
+        })
+        : t("tasks.waitingProvider");
     } else if (row.group === "running") {
       tone = "running";
       const activity = describeActivity(snapshot?.activity ?? null, t);
@@ -102,17 +153,37 @@ export function TasksView({ sessions, runningSessionIds, onOpenSession }: Props)
             <span className="scheduled-hint">{projectLabel(session, t("workspace.chatTitle"))}</span>
           </span>
         </button>
+        {row.group === "outage" && (
+          <div className="tasks-card-actions">
+            <button
+              type="button"
+              className="tasks-action"
+              disabled={actingSessionId === session.id}
+              onClick={() => void actOnOutage("retry", session.id)}
+            >
+              {t("tasks.retryNow")}
+            </button>
+            <button
+              type="button"
+              className="tasks-action"
+              disabled={actingSessionId === session.id}
+              onClick={() => void actOnOutage("cancel", session.id)}
+            >
+              {t("tasks.cancelWait")}
+            </button>
+          </div>
+        )}
       </li>
     );
   };
 
-  const section = (key: "waiting" | "running" | "recent", rows: TaskRow[]) => rows.length > 0 && (
+  const section = (key: "waiting" | "outage" | "running" | "recent", rows: TaskRow[]) => rows.length > 0 && (
     <section
-      className={`tasks-section${key === "waiting" ? " tasks-section--attention" : ""}`}
+      className={`tasks-section${key === "waiting" || key === "outage" ? " tasks-section--attention" : ""}`}
       aria-labelledby={`tasks-${key}`}
     >
       <h3 id={`tasks-${key}`} className="tasks-section-title">
-        {key === "waiting" && <span className="tasks-section-dot" aria-hidden="true" />}
+        {(key === "waiting" || key === "outage") && <span className="tasks-section-dot" aria-hidden="true" />}
         {t(`tasks.section.${key}`)}
         <span className="tasks-section-count">{rows.length}</span>
       </h3>
@@ -142,10 +213,11 @@ export function TasksView({ sessions, runningSessionIds, onOpenSession }: Props)
         </header>
         {failed && <p className="scheduled-error" role="alert">{t("tasks.loadFailed")}</p>}
         {snapshots === null && !failed && <p className="scheduled-hint">{t("tasks.loading")}</p>}
-        {snapshots !== null && groups.waiting.length + groups.running.length === 0 && (
+        {snapshots !== null && groups.waiting.length + groups.outage.length + groups.running.length === 0 && (
           <p className="scheduled-hint">{t("tasks.nothingRunning")}</p>
         )}
         {section("waiting", groups.waiting)}
+        {section("outage", groups.outage)}
         {section("running", groups.running)}
         {section("recent", groups.recent)}
       </div>

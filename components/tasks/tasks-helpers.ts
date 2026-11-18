@@ -1,6 +1,6 @@
 import type { AgentTaskSnapshot, SessionInfo } from "@/lib/types";
 
-export type TaskGroup = "waiting" | "running" | "recent";
+export type TaskGroup = "waiting" | "outage" | "running" | "recent";
 
 export interface TaskRow {
   group: TaskGroup;
@@ -30,9 +30,11 @@ export function describeActivity(activity: AgentTaskSnapshot["activity"], t: Tra
 }
 
 /**
- * Sort sessions into the page's three lists. Waiting beats running (a dialog
- * blocks the run). Sub-agent runs stay with their parent, and a session the
- * running stream reports before its snapshot arrives still counts as running.
+ * Sort sessions into the page's lists. Waiting beats everything (a dialog blocks
+ * the run). A provider-outage suspension gets its own group: the last run failed,
+ * but the session is waiting to resume, so it must never render as a red error.
+ * Sub-agent runs stay with their parent, and a session the running stream reports
+ * before its snapshot arrives still counts as running.
  */
 export function groupTasks(
   sessions: SessionInfo[],
@@ -40,13 +42,14 @@ export function groupTasks(
   runningSessionIds: ReadonlySet<string>,
 ): Record<TaskGroup, TaskRow[]> {
   const byId = new Map(snapshots.map((snapshot) => [snapshot.sessionId, snapshot]));
-  const groups: Record<TaskGroup, TaskRow[]> = { waiting: [], running: [], recent: [] };
+  const groups: Record<TaskGroup, TaskRow[]> = { waiting: [], outage: [], running: [], recent: [] };
   const visible = sessions
     .filter((session) => session.relation?.kind !== "subagent" && !session.transient)
     .sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified));
   for (const session of visible) {
     const snapshot = byId.get(session.id) ?? null;
     if (snapshot && snapshot.waiting.length > 0) groups.waiting.push({ group: "waiting", session, snapshot });
+    else if (snapshot?.waitingForProvider) groups.outage.push({ group: "outage", session, snapshot });
     else if (snapshot?.running || runningSessionIds.has(session.id)) groups.running.push({ group: "running", session, snapshot });
     else if (groups.recent.length < RECENT_LIMIT) groups.recent.push({ group: "recent", session, snapshot });
   }
