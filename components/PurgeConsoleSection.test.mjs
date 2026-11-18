@@ -10,7 +10,7 @@ const repoRoot = join(import.meta.dirname, "..");
 const read = (path) => readFileSync(join(repoRoot, path), "utf8").replace(/\r\n/g, "\n");
 const componentSource = read("components/PurgeConsoleSection.tsx");
 const panelSource = read("components/SettingsPanel.tsx");
-const cssSource = read("app/settings.css");
+const cssSource = read("app/native-theme.css");
 
 const jiti = createJiti(import.meta.url, { tsconfigPaths: true });
 const { getLocalePlugin, getSupportedLocales } = await jiti.import("../lib/i18n/registry.ts");
@@ -384,7 +384,7 @@ test("the locally declared contract stays locked to lib/purge/types.ts", async (
   }
 });
 
-test("every section class has a rule in app/settings.css", () => {
+test("every section class has a rule in app/native-theme.css", () => {
   // Read the classes off className attributes only: the same prefix is used for
   // element ids, which need no CSS rule.
   const classes = new Set();
@@ -397,7 +397,7 @@ test("every section class has a rule in app/settings.css", () => {
   }
   assert.ok(classes.size >= 10, `expected the section's class set, got ${[...classes].join(", ")}`);
   for (const name of classes) {
-    assert.match(cssSource, new RegExp(`\\.${name}\\b`), `${name} has no rule in app/settings.css`);
+    assert.match(cssSource, new RegExp(`\\.${name}\\b`), `${name} has no rule in app/native-theme.css`);
   }
   // New rules never add `!important` (scripts/native-theme-important-baseline.test.mjs).
   assert.equal(/settings-purge[^}]*!important/.test(cssSource), false);
