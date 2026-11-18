@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getAgentDir, SettingsManager, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import { filterProvidersWithoutStoredCredential } from "@/lib/model-scope";
 import {
@@ -9,7 +10,9 @@ import {
   validateCompactionPolicyPatch,
   writeCompactionPolicy,
   type CompactionModelCandidate,
+  type CompactionPolicy,
 } from "@/lib/compaction-settings-api";
+import { compactionThresholdsByMode, type CompactionModeSummary } from "@/lib/compaction-policy";
 import { createModelRuntimeWithExtensions } from "@/lib/model-runtime";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +21,18 @@ export const dynamic = "force-dynamic";
 // file paths. The settings still load; only the candidate list is empty.
 const CANDIDATES_UNAVAILABLE = "Model list is temporarily unavailable.";
 
-async function listCandidates(): Promise<{ candidates: CompactionModelCandidate[]; error?: string }> {
+/** The default model's real trigger per tier — the labels are only honest with these. */
+interface CompactionTriggerSummary {
+  model: string;
+  contextWindow: number;
+  modes: Record<"balanced" | "long" | "native", CompactionModeSummary>;
+}
+
+async function listCandidates(): Promise<{
+  candidates: CompactionModelCandidate[];
+  error?: string;
+  runtime?: ModelRuntime;
+}> {
   try {
     const modelRuntime = await createModelRuntimeWithExtensions();
     // 与对话选择器 / Settings›Models 同口径：内置 provider 没有 auth.json 存储凭据时
@@ -28,20 +42,45 @@ async function listCandidates(): Promise<{ candidates: CompactionModelCandidate[
       await modelRuntime.getAvailable(),
       modelRuntime,
     );
-    return { candidates: toCompactionModelCandidates(models) };
+    return { candidates: toCompactionModelCandidates(models), runtime: modelRuntime };
   } catch {
     return { candidates: [], error: CANDIDATES_UNAVAILABLE };
   }
 }
 
+/**
+ * Thresholds for the default model, so the settings UI can say "balanced 50%"
+ * and mean it. `null` when no default model is set or its window is unknown —
+ * the block works without the hint.
+ */
+function triggerSummary(policy: CompactionPolicy, runtime: ModelRuntime): CompactionTriggerSummary | null {
+  try {
+    const settings = SettingsManager.create(getAgentDir(), getAgentDir());
+    const provider = settings.getDefaultProvider();
+    const modelId = settings.getDefaultModel();
+    if (!provider || !modelId) return null;
+    const model = runtime.getModel(provider, modelId);
+    const contextWindow = model?.contextWindow ?? 0;
+    if (!model || contextWindow <= 0) return null;
+    return {
+      model: `${provider}/${modelId}`,
+      contextWindow,
+      modes: compactionThresholdsByMode(settings, policy, model),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function GET() {
   const policy = readCompactionPolicy();
-  const { candidates, error } = await listCandidates();
+  const { candidates, error, runtime } = await listCandidates();
   return NextResponse.json({
     policy,
     defaults: defaultCompactionPolicy(),
     limits: COMPACTION_LIMITS,
     candidates,
+    thresholds: runtime ? triggerSummary(policy, runtime) : null,
     ...(error ? { candidatesError: error } : {}),
   });
 }

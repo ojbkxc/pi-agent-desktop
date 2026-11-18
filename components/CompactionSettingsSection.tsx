@@ -21,6 +21,19 @@ interface CompactionCandidate {
   priceConfirmed: boolean;
 }
 
+interface CompactionTriggerMode {
+  trigger: number;
+  percent: number;
+  /** False when this window is too small (or pi settings override the tier). */
+  applied: boolean;
+}
+
+interface CompactionTriggerSummary {
+  model: string;
+  contextWindow: number;
+  modes: Record<CompactionMode, CompactionTriggerMode>;
+}
+
 interface CompactionSettingsPayload {
   policy: CompactionPolicy;
   defaults: CompactionPolicy;
@@ -30,6 +43,8 @@ interface CompactionSettingsPayload {
   };
   candidates: CompactionCandidate[];
   candidatesError?: string;
+  /** The default model's real trigger per tier; null when no default model is set. */
+  thresholds: CompactionTriggerSummary | null;
 }
 
 const MODES: readonly CompactionMode[] = ["balanced", "long", "native"];
@@ -37,6 +52,13 @@ const MODE_LABEL_KEYS: Record<CompactionMode, string> = {
   balanced: "settings.compactionModeBalanced",
   long: "settings.compactionModeLong",
   native: "settings.compactionModeNative",
+};
+
+/** One line per tier: the label's share, the real token count it fires at. */
+const MODE_TRIGGER_KEYS: Record<CompactionMode, string> = {
+  balanced: "settings.compactionTriggerBalanced",
+  long: "settings.compactionTriggerLong",
+  native: "settings.compactionTriggerNative",
 };
 
 const MODEL_CHOICES: readonly CompactionModelChoice[] = ["auto", "current", "preferred"];
@@ -119,6 +141,27 @@ export function asCompactionPolicy(raw: unknown): CompactionPolicy | null {
   };
 }
 
+/** One tier's numbers; a malformed row drops the whole hint rather than printing "NaN". */
+function asTriggerMode(raw: unknown): CompactionTriggerMode | null {
+  if (!isRecord(raw)) return null;
+  if (typeof raw.trigger !== "number" || !Number.isFinite(raw.trigger) || raw.trigger < 0) return null;
+  return {
+    trigger: raw.trigger,
+    percent: typeof raw.percent === "number" && Number.isFinite(raw.percent) ? raw.percent : 0,
+    applied: raw.applied === true,
+  };
+}
+
+function asTriggerSummary(raw: unknown): CompactionTriggerSummary | null {
+  if (!isRecord(raw) || !isRecord(raw.modes)) return null;
+  if (typeof raw.model !== "string" || typeof raw.contextWindow !== "number" || raw.contextWindow <= 0) return null;
+  const balanced = asTriggerMode(raw.modes.balanced);
+  const long = asTriggerMode(raw.modes.long);
+  const native = asTriggerMode(raw.modes.native);
+  if (!balanced || !long || !native) return null;
+  return { model: raw.model, contextWindow: raw.contextWindow, modes: { balanced, long, native } };
+}
+
 /**
  * The whole GET payload, or null when it carries no usable policy. Every field
  * the render reads is completed here, so a response whose `limits` or
@@ -155,6 +198,7 @@ export function asCompactionSettings(raw: unknown): CompactionSettingsPayload | 
         && typeof candidate.label === "string"
         && typeof candidate.priceConfirmed === "boolean")
       : [],
+    thresholds: asTriggerSummary(raw.thresholds),
     ...(typeof raw.candidatesError === "string" ? { candidatesError: raw.candidatesError } : {}),
   };
 }
@@ -166,7 +210,7 @@ export function asCompactionSettings(raw: unknown): CompactionSettingsPayload | 
  * reload picks the values up.
  */
 export function CompactionSettingsSection() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const keepRecentHintId = useId();
   const [policy, setPolicy] = useState<CompactionPolicy | null>(null);
   const [payload, setPayload] = useState<CompactionSettingsPayload | null>(null);
@@ -220,6 +264,9 @@ export function CompactionSettingsSection() {
   const maxPreferred = limits.preferredModels.max;
   const candidates = payload?.candidates ?? [];
   const chosen = policy?.preferredModels ?? [];
+  const thresholds = payload?.thresholds ?? null;
+  const number = (value: number) => new Intl.NumberFormat(locale).format(value);
+  const percent = (value: number) => (Number.isInteger(value) ? String(value) : value.toFixed(1));
   const busy = policy === null || saving;
 
   const commitKeepRecent = () => {
@@ -264,6 +311,27 @@ export function CompactionSettingsSection() {
             ))}
           </div>
         </div>
+
+        {thresholds && (
+          <div className="settings-chat-option settings-chats-field">
+            <span className="settings-chats-hint">
+              {t("settings.compactionTriggerModel", {
+                model: thresholds.model,
+                window: number(thresholds.contextWindow),
+              })}
+            </span>
+            <span className="settings-chats-hint">
+              {MODES.map((mode) => {
+                const row = thresholds.modes[mode];
+                const label = t(MODE_TRIGGER_KEYS[mode], {
+                  percent: percent(row.percent),
+                  tokens: number(row.trigger),
+                });
+                return row.applied ? label : `${label} ${t("settings.compactionTriggerUnsupported")}`;
+              }).join(" · ")}
+            </span>
+          </div>
+        )}
 
         <div className="settings-chat-option settings-chat-choice-option">
           <span>{t("settings.compactionModel")}</span>

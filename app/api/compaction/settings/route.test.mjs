@@ -56,6 +56,38 @@ test("GET returns the policy, its defaults, limits and candidate list", async ()
     assert.equal(typeof candidate.priceConfirmed, "boolean");
     assert.equal("apiKey" in candidate, false);
   }
+  // No default model configured yet: the hint is absent rather than invented.
+  assert.equal(body.thresholds, null);
+});
+
+test("GET reports the default model's real trigger per tier", async () => {
+  // The labels ("balanced 50%") must describe the trigger the SDK will use.
+  writeFileSync(join(testAgentDir, "models.json"), JSON.stringify({
+    providers: {
+      acme: {
+        baseUrl: "https://example.invalid/v1",
+        api: "openai-completions",
+        models: [{ id: "m1", contextWindow: 128_000, maxTokens: 4_096 }],
+      },
+    },
+  }));
+  writeFileSync(join(testAgentDir, "settings.json"), JSON.stringify({
+    defaultProvider: "acme",
+    defaultModel: "m1",
+  }));
+
+  const response = await GET();
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.thresholds.model, "acme/m1");
+  assert.equal(body.thresholds.contextWindow, 128_000);
+  assert.deepEqual(body.thresholds.modes.balanced, { trigger: 64_000, percent: 50, applied: true });
+  assert.deepEqual(body.thresholds.modes.long, { trigger: 102_400, percent: 80, applied: true });
+  assert.deepEqual(body.thresholds.modes.native, {
+    trigger: 128_000 - 16_384,
+    percent: ((128_000 - 16_384) / 128_000) * 100,
+    applied: true,
+  });
 });
 
 test("PUT refuses an untrusted origin and a non-JSON content type", async () => {

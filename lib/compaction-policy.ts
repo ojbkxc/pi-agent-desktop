@@ -31,7 +31,7 @@ export const MAX_PREFERRED_MODELS = 8;
 export interface CompactionPolicy {
   /** `balanced` = 50% of the real window, `long` = 80%, `native` = SDK settings untouched. */
   mode: CompactionMode;
-  /** Verbatim tail kept when compacting; clamped to a quarter of small windows. */
+  /** Verbatim tail kept when compacting; clamped to half of the tier's trigger. */
   keepRecentTokens: number;
   /** Which model summarizes the discarded history. */
   compactionModel: CompactionModelChoice;
@@ -134,7 +134,7 @@ export const COMPACTION_MODE_RATIOS: Readonly<Record<Exclude<CompactionMode, "na
   long: 0.8,
 };
 
-/** Floor for the trigger: never compact a window smaller than this from the top. */
+/** Headroom a compaction must leave between the kept tail and the trigger. */
 export const COMPACTION_TRIGGER_FLOOR = 16_384;
 
 /** The SDK's own default reserve, used when a policy cannot apply. */
@@ -157,11 +157,26 @@ export interface CompactionThresholds {
  * than inventing capacity, and an explicit `keepRecentTokens` in pi's own
  * settings wins over the policy default.
  *
- * Formulae (plan r2):
- *   effectiveLimit = floor(window × ratio)
- *   keepRecentEff  = min(keepRecentTokens, floor(window / 4))
- *   trigger        = max(effectiveLimit − keepRecentEff, 16384)
- *   reserve        = clamp(window − trigger, 16384, max(16384, window − 1))
+ * Formulae (plan r3):
+ *   trigger        = floor(window × ratio)
+ *   keepRecentEff  = min(keepRecentTokens, floor(trigger / 2))
+ *   reserve        = window − trigger
+ *
+ * `trigger` IS the tier's share of the window. The previous r2 formula
+ * subtracted the kept tail from it, which made `trigger` collapse onto
+ * `keepRecentEff` for every window up to four times the tail (≤ 262,144 with
+ * the 64K default): compaction fired at 25% on a 128K/200K model, found
+ * nothing outside the kept tail, and the SDK silently skipped it. The
+ * post-compaction context was still above the threshold, so every following
+ * turn retriggered — a compaction loop that only summarized the strip that
+ * had just fallen out of the tail. Keeping the tail at most half of the
+ * trigger guarantees at least half a trigger of headroom below it.
+ *
+ * A tier is only applied when that headroom is representable: the trigger
+ * must sit `COMPACTION_TRIGGER_FLOOR` above the kept tail, and `window −
+ * trigger` must hold the SDK's own reserve floor (otherwise the clamped
+ * reserve would move the real trigger back down). Small windows stay
+ * `native` instead of claiming a tier whose numbers cannot be expressed.
  */
 export function computeCompactionThresholds(
   policy: Pick<CompactionPolicy, "mode" | "keepRecentTokens">,
@@ -186,26 +201,17 @@ export function computeCompactionThresholds(
 
   const window = contextWindow;
   const ratio = COMPACTION_MODE_RATIOS[policy.mode];
-  const effectiveLimit = Math.floor(window * ratio);
-  const keepRecentEff = Math.min(keepRecentSetting, Math.floor(window / 4));
-  const trigger = Math.max(effectiveLimit - keepRecentEff, COMPACTION_TRIGGER_FLOOR);
+  const trigger = Math.floor(window * ratio);
+  const keepRecentEff = Math.min(keepRecentSetting, Math.floor(trigger / 2));
   // Three ways a tier cannot be expressed as a reserve:
-  // - a window at or below the trigger floor (nothing to compact at the top),
+  // - the kept tail would eat the headroom the next turn needs, which is the
+  //   compaction loop r2 shipped (a 32K window under balanced),
   // - a trigger with no room above `window - 1` ("always compact"),
-  // - less reserve headroom than the SDK floor, where `clamp()` would raise the
-  //   reserve to 16384 and the SDK's real trigger would land far below the
-  //   tier's intended one (a 20K window would compact at 3.6K). Native gives
-  //   that same real trigger without pretending the tier applied.
-  //
-  // DEVIATION from the plan's r2 formula, approved by the team lead: the plan
-  // lists only `trigger >= window → native`. The third clause above is a
-  // deliberate tightening. Without it, a 20K window yields trigger = max(10240
-  // − 16384, 16384) = 16384 and reserve = clamp(20480 − 16384, 16384, 20479) =
-  // 16384, so the SDK fires at 20480 − 16384 = 4096 — far below the tier. The
-  // point is not to hide that: it is to avoid *claiming* a tier whose reserve
-  // cannot be represented. `window − trigger == 16384` exactly (e.g. 32768
-  // under balanced) still applies the tier, because that reserve is
-  // representable and the SDK fires exactly at the computed trigger.
+  // - less reserve headroom than the SDK floor, where the clamp would raise
+  //   the reserve and the SDK's real trigger would land far below the tier's
+  //   intended one (a 20K window would compact at 4K). Native gives that same
+  //   real trigger without pretending the tier applied.
+  if (trigger - keepRecentEff < COMPACTION_TRIGGER_FLOOR) return native;
   if (trigger >= window || window - trigger < NATIVE_RESERVE_TOKENS) return native;
 
   const reserve = Math.min(
@@ -213,6 +219,38 @@ export function computeCompactionThresholds(
     Math.max(NATIVE_RESERVE_TOKENS, window - 1),
   );
   return { mode: policy.mode, trigger, reserveTokens: reserve, keepRecentTokens: keepRecentEff };
+}
+
+/** One tier's effective numbers for a model, `applied: false` when it fell back to native. */
+export interface CompactionModeSummary {
+  trigger: number;
+  /** Share of the model's window the trigger fires at. */
+  percent: number;
+  /** False when the window is too small (or pi settings override the tier). */
+  applied: boolean;
+}
+
+/**
+ * Every tier's effective trigger for one model. The settings UI shows these so
+ * the mode labels ("balanced 50%") describe what actually happens, and a window
+ * that forced a native fallback says so instead of repeating the label.
+ */
+export function compactionThresholdsByMode(
+  base: SettingsManager,
+  policy: CompactionPolicy,
+  model: { provider: string; id: string; contextWindow?: number },
+): Record<CompactionMode, CompactionModeSummary> {
+  const window = model.contextWindow ?? 0;
+  const modes = {} as Record<CompactionMode, CompactionModeSummary>;
+  for (const mode of COMPACTION_MODES) {
+    const thresholds = compactionThresholdsFor(base, { ...policy, mode }, model);
+    modes[mode] = {
+      trigger: thresholds.trigger,
+      percent: window > 0 ? (thresholds.trigger / window) * 100 : 0,
+      applied: mode === "native" || thresholds.mode === mode,
+    };
+  }
+  return modes;
 }
 
 function isUsableTokenCount(value: number | undefined): value is number {
