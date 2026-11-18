@@ -1,0 +1,757 @@
+"use client";
+
+import { useCallback, useEffect, useId, useState } from "react";
+import { useI18n } from "@/hooks/useI18n";
+import { AppSelect } from "./AppSelect";
+import { ConfigButton, ConfigSwitch } from "./SettingsUi";
+
+export type PurgeReasoningFloor = "off" | "low" | "medium" | "high" | "xhigh";
+
+/** One rewrite row: the text an incoming request contains, and what it is replaced with. */
+export interface PurgeRule {
+  from: string;
+  to: string;
+}
+
+/**
+ * The wire shape of the purge console settings (`GET`/`PUT /api/purge`).
+ *
+ * Declared here on purpose instead of imported from `lib/purge/types.ts`: this
+ * section must render (and be testable) before that module lands. The field
+ * names are the contract — they are sent to the server verbatim — so any change
+ * here has to change there in the same commit.
+ */
+export interface PurgeSettings {
+  /** Master switch: off means plain passthrough, nothing is judged or rewritten. */
+  enabled: boolean;
+  system_normalize: boolean;
+  dead_zone_rewrite: boolean;
+  synonym_enabled: boolean;
+  reduce_reasoning: boolean;
+  skill_inject: boolean;
+  structured_prompt: boolean;
+  reasoning_floor: PurgeReasoningFloor;
+  rewrite_rules: PurgeRule[];
+  synonym_pairs: PurgeRule[];
+  normalize_strip_prefixes: string[];
+  skill_dir: string;
+  skill_inject_limit: number;
+  structured_suffix: string;
+}
+
+/** Counter snapshot: cumulative since the process started, never reset per request. */
+export interface PurgeStats {
+  requests: number;
+  rewrite_hits: number;
+  synonym_hits: number;
+  skill_hits: number;
+  reasoning_clamps: number;
+  structured_appends: number;
+  started_at: string;
+}
+
+/** The process the counters belong to; `uptime_secs` is how long it has been up. */
+export interface PurgeRuntime {
+  pid: number;
+  uptime_secs: number;
+}
+
+/**
+ * The seven governance switches, master first, in the order the console shows
+ * them. They are exactly the boolean fields of `PurgeSettings`, so the render
+ * can index the settings object with a key from this list.
+ */
+export const PURGE_TOGGLE_KEYS = [
+  "enabled",
+  "system_normalize",
+  "dead_zone_rewrite",
+  "synonym_enabled",
+  "reduce_reasoning",
+  "skill_inject",
+  "structured_prompt",
+] as const;
+
+export type PurgeToggleKey = (typeof PURGE_TOGGLE_KEYS)[number];
+
+/** Label and one-line explanation per switch; one i18n key each, no inline prose. */
+export const PURGE_TOGGLE_LABEL_KEYS: Record<PurgeToggleKey, string> = {
+  enabled: "purge.toggleEnabled",
+  system_normalize: "purge.toggleSystemNormalize",
+  dead_zone_rewrite: "purge.toggleDeadZoneRewrite",
+  synonym_enabled: "purge.toggleSynonymEnabled",
+  reduce_reasoning: "purge.toggleReduceReasoning",
+  skill_inject: "purge.toggleSkillInject",
+  structured_prompt: "purge.toggleStructuredPrompt",
+};
+
+export const PURGE_TOGGLE_HINT_KEYS: Record<PurgeToggleKey, string> = {
+  enabled: "purge.toggleEnabledHint",
+  system_normalize: "purge.toggleSystemNormalizeHint",
+  dead_zone_rewrite: "purge.toggleDeadZoneRewriteHint",
+  synonym_enabled: "purge.toggleSynonymEnabledHint",
+  reduce_reasoning: "purge.toggleReduceReasoningHint",
+  skill_inject: "purge.toggleSkillInjectHint",
+  structured_prompt: "purge.toggleStructuredPromptHint",
+};
+
+export const PURGE_REASONING_FLOORS: readonly PurgeReasoningFloor[] = [
+  "off",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+];
+
+export const PURGE_REASONING_FLOOR_LABEL_KEYS: Record<PurgeReasoningFloor, string> = {
+  off: "purge.floorOff",
+  low: "purge.floorLow",
+  medium: "purge.floorMedium",
+  high: "purge.floorHigh",
+  xhigh: "purge.floorXHigh",
+};
+
+/** The range `PUT /api/purge` clamps `skill_inject_limit` to. */
+export const PURGE_SKILL_INJECT_LIMIT_MIN = 16;
+export const PURGE_SKILL_INJECT_LIMIT_MAX = 20_000;
+
+/** The server caps both lists the same way; the form keeps the same ceiling. */
+const PURGE_RULE_LIMIT = 200;
+const PURGE_PREFIX_LIMIT = 64;
+
+/**
+ * What the form shows before the first `GET` answers — and what it falls back to
+ * for any field a response leaves out. Every control stays disabled until a load
+ * succeeds, so these values never reach the server.
+ */
+export const DEFAULT_PURGE_SETTINGS: PurgeSettings = {
+  enabled: false,
+  system_normalize: false,
+  dead_zone_rewrite: false,
+  synonym_enabled: false,
+  reduce_reasoning: false,
+  skill_inject: false,
+  structured_prompt: false,
+  reasoning_floor: "low",
+  rewrite_rules: [],
+  synonym_pairs: [],
+  normalize_strip_prefixes: [],
+  skill_dir: "",
+  skill_inject_limit: 1500,
+  structured_suffix: "",
+};
+
+/** Counter rows of the read-only block, in render order. */
+const PURGE_STAT_ROWS: readonly { labelKey: string; pick: (stats: PurgeStats) => number }[] = [
+  { labelKey: "purge.statRequests", pick: (stats) => stats.requests },
+  { labelKey: "purge.statRewriteHits", pick: (stats) => stats.rewrite_hits },
+  { labelKey: "purge.statSynonymHits", pick: (stats) => stats.synonym_hits },
+  { labelKey: "purge.statSkillHits", pick: (stats) => stats.skill_hits },
+  { labelKey: "purge.statReasoningClamps", pick: (stats) => stats.reasoning_clamps },
+  { labelKey: "purge.statStructuredAppends", pick: (stats) => stats.structured_appends },
+];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asBoolean(raw: unknown): boolean {
+  return raw === true;
+}
+
+function asString(raw: unknown): string {
+  return typeof raw === "string" ? raw : "";
+}
+
+function asCount(raw: unknown): number {
+  return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 0;
+}
+
+/** Anything but one of the five tiers reads as the default tier. */
+export function asReasoningFloor(raw: unknown): PurgeReasoningFloor {
+  return typeof raw === "string" && (PURGE_REASONING_FLOORS as readonly string[]).includes(raw)
+    ? (raw as PurgeReasoningFloor)
+    : DEFAULT_PURGE_SETTINGS.reasoning_floor;
+}
+
+/**
+ * An integer inside the supported range, otherwise the default — the same rule
+ * the server applies (`clamp(16, 20_000)`), plus the string branch the number
+ * input's draft needs (`""`, `"12abc"` and `"1e9"` all have to land somewhere).
+ */
+export function clampSkillInjectLimit(raw: unknown): number {
+  const value = typeof raw === "string" ? Number(raw.trim()) : raw;
+  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_PURGE_SETTINGS.skill_inject_limit;
+  return Math.min(PURGE_SKILL_INJECT_LIMIT_MAX, Math.max(PURGE_SKILL_INJECT_LIMIT_MIN, Math.trunc(value)));
+}
+
+/**
+ * Trimmed rows, empty-`from` rows dropped, capped — the normalization the API
+ * applies before it writes (`normalize()` in the purge admin handler). A row a
+ * user added but never filled in therefore never reaches the server.
+ */
+export function normalizePurgeRules(raw: unknown): PurgeRule[] {
+  if (!Array.isArray(raw)) return [];
+  const rules: PurgeRule[] = [];
+  for (const item of raw) {
+    if (!isRecord(item)) continue;
+    const from = asString(item.from).trim();
+    if (from === "") continue;
+    rules.push({ from, to: asString(item.to).trim() });
+    if (rules.length >= PURGE_RULE_LIMIT) break;
+  }
+  return rules;
+}
+
+/** Trimmed non-empty prefixes, capped at the server's ceiling. */
+export function normalizePrefixList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const prefixes: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") continue;
+    const prefix = item.trim();
+    if (prefix === "") continue;
+    prefixes.push(prefix);
+    if (prefixes.length >= PURGE_PREFIX_LIMIT) break;
+  }
+  return prefixes;
+}
+
+/** The comma/whitespace separated input mirror of `normalize_strip_prefixes`. */
+export function splitPurgePrefixes(value: string): string[] {
+  return normalizePrefixList(value.split(/[,，\s]+/));
+}
+
+/** The input mirror's initial value from the stored list. */
+export function joinPurgePrefixes(list: readonly string[]): string {
+  return list.join(", ");
+}
+
+/** One toggle flipped, everything else untouched. */
+export function setPurgeToggle(
+  settings: PurgeSettings,
+  key: PurgeToggleKey,
+  value: boolean,
+): PurgeSettings {
+  // The seven keys are exactly the boolean fields, so the computed key is sound.
+  return { ...settings, [key]: value } as PurgeSettings;
+}
+
+export function addPurgeRule(rules: readonly PurgeRule[]): PurgeRule[] {
+  return rules.length >= PURGE_RULE_LIMIT ? [...rules] : [...rules, { from: "", to: "" }];
+}
+
+export function patchPurgeRule(
+  rules: readonly PurgeRule[],
+  index: number,
+  part: Partial<PurgeRule>,
+): PurgeRule[] {
+  return rules.map((rule, position) => (position === index ? { ...rule, ...part } : rule));
+}
+
+export function removePurgeRule(rules: readonly PurgeRule[], index: number): PurgeRule[] {
+  return rules.filter((_, position) => position !== index);
+}
+
+/** The counter block's rows with their numbers resolved (kept pure for the test). */
+export function purgeStatValues(stats: PurgeStats): { labelKey: string; value: number }[] {
+  return PURGE_STAT_ROWS.map((row) => ({ labelKey: row.labelKey, value: row.pick(stats) }));
+}
+
+/** Uptime in the coarsest useful unit pair, with the caller's unit words. */
+export function formatPurgeUptime(
+  totalSeconds: number,
+  units: { seconds: string; minutes: string; hours: string; days: string },
+): string {
+  const seconds = Number.isFinite(totalSeconds) ? Math.max(0, Math.floor(totalSeconds)) : 0;
+  if (seconds < 60) return `${seconds} ${units.seconds}`;
+  if (seconds < 3_600) return `${Math.floor(seconds / 60)} ${units.minutes}`;
+  if (seconds < 86_400) {
+    return `${Math.floor(seconds / 3_600)} ${units.hours} ${Math.floor((seconds % 3_600) / 60)} ${units.minutes}`;
+  }
+  return `${Math.floor(seconds / 86_400)} ${units.days}`;
+}
+
+/** A `settings` object from any JSON body, every field filled; null when there is none. */
+export function asPurgeSettings(raw: unknown): PurgeSettings | null {
+  if (!isRecord(raw)) return null;
+  return {
+    enabled: asBoolean(raw.enabled),
+    system_normalize: asBoolean(raw.system_normalize),
+    dead_zone_rewrite: asBoolean(raw.dead_zone_rewrite),
+    synonym_enabled: asBoolean(raw.synonym_enabled),
+    reduce_reasoning: asBoolean(raw.reduce_reasoning),
+    skill_inject: asBoolean(raw.skill_inject),
+    structured_prompt: asBoolean(raw.structured_prompt),
+    reasoning_floor: asReasoningFloor(raw.reasoning_floor),
+    rewrite_rules: normalizePurgeRules(raw.rewrite_rules),
+    synonym_pairs: normalizePurgeRules(raw.synonym_pairs),
+    normalize_strip_prefixes: normalizePrefixList(raw.normalize_strip_prefixes),
+    skill_dir: asString(raw.skill_dir).trim(),
+    skill_inject_limit: clampSkillInjectLimit(raw.skill_inject_limit),
+    structured_suffix: asString(raw.structured_suffix),
+  };
+}
+
+export function asPurgeStats(raw: unknown): PurgeStats | null {
+  if (!isRecord(raw)) return null;
+  return {
+    requests: asCount(raw.requests),
+    rewrite_hits: asCount(raw.rewrite_hits),
+    synonym_hits: asCount(raw.synonym_hits),
+    skill_hits: asCount(raw.skill_hits),
+    reasoning_clamps: asCount(raw.reasoning_clamps),
+    structured_appends: asCount(raw.structured_appends),
+    started_at: asString(raw.started_at),
+  };
+}
+
+export function asPurgeRuntime(raw: unknown): PurgeRuntime | null {
+  if (!isRecord(raw)) return null;
+  if (typeof raw.pid !== "number" || !Number.isFinite(raw.pid)) return null;
+  return { pid: Math.trunc(raw.pid), uptime_secs: asCount(raw.uptime_secs) };
+}
+
+/**
+ * The `PUT /api/purge` body: the whole settings object, normalized the way the
+ * server would — trimmed strings, empty-`from` rows dropped, the limit clamped,
+ * the unknown tier replaced. Key order follows the contract, so the request body
+ * stays readable in a network log.
+ */
+export function purgeSavePayload(draft: PurgeSettings): PurgeSettings {
+  return {
+    enabled: draft.enabled === true,
+    system_normalize: draft.system_normalize === true,
+    dead_zone_rewrite: draft.dead_zone_rewrite === true,
+    synonym_enabled: draft.synonym_enabled === true,
+    reduce_reasoning: draft.reduce_reasoning === true,
+    skill_inject: draft.skill_inject === true,
+    structured_prompt: draft.structured_prompt === true,
+    reasoning_floor: asReasoningFloor(draft.reasoning_floor),
+    rewrite_rules: normalizePurgeRules(draft.rewrite_rules),
+    synonym_pairs: normalizePurgeRules(draft.synonym_pairs),
+    normalize_strip_prefixes: normalizePrefixList(draft.normalize_strip_prefixes),
+    skill_dir: asString(draft.skill_dir).trim(),
+    skill_inject_limit: clampSkillInjectLimit(draft.skill_inject_limit),
+    structured_suffix: asString(draft.structured_suffix),
+  };
+}
+
+/** One editable rule table (rewrite rules, synonym pairs). */
+function PurgeRulesTable({
+  heading,
+  hint,
+  addLabel,
+  emptyLabel,
+  columnFrom,
+  columnTo,
+  columnAction,
+  removeLabel,
+  rows,
+  disabled,
+  onAdd,
+  onPatch,
+  onRemove,
+}: {
+  heading: string;
+  hint: string;
+  addLabel: string;
+  emptyLabel: string;
+  columnFrom: string;
+  columnTo: string;
+  columnAction: string;
+  removeLabel: string;
+  rows: readonly PurgeRule[];
+  disabled: boolean;
+  onAdd: () => void;
+  onPatch: (index: number, part: Partial<PurgeRule>) => void;
+  onRemove: (index: number) => void;
+}) {
+  return (
+    <section className="settings-general-section">
+      <div className="settings-purge-section-head">
+        <h3 className="settings-general-heading">{heading}</h3>
+        <ConfigButton variant="secondary" size="small" disabled={disabled} onClick={onAdd}>
+          {addLabel}
+        </ConfigButton>
+      </div>
+      <p className="settings-general-description">{hint}</p>
+      {rows.length === 0 ? (
+        <p className="settings-purge-empty">{emptyLabel}</p>
+      ) : (
+        <table className="settings-purge-table">
+          <thead>
+            <tr>
+              <th scope="col">{columnFrom}</th>
+              <th scope="col">{columnTo}</th>
+              <th scope="col">{columnAction}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((rule, index) => (
+              <tr key={index}>
+                <td>
+                  <input
+                    className="settings-chats-control"
+                    type="text"
+                    aria-label={`${columnFrom} ${index + 1}`}
+                    placeholder={columnFrom}
+                    value={rule.from}
+                    disabled={disabled}
+                    onChange={(event) => onPatch(index, { from: event.target.value })}
+                  />
+                </td>
+                <td>
+                  <input
+                    className="settings-chats-control"
+                    type="text"
+                    aria-label={`${columnTo} ${index + 1}`}
+                    placeholder={columnTo}
+                    value={rule.to}
+                    disabled={disabled}
+                    onChange={(event) => onPatch(index, { to: event.target.value })}
+                  />
+                </td>
+                <td className="settings-purge-table-action">
+                  <ConfigButton
+                    variant="ghost"
+                    size="small"
+                    disabled={disabled}
+                    aria-label={`${removeLabel} ${index + 1}`}
+                    onClick={() => onRemove(index)}
+                  >
+                    {removeLabel}
+                  </ConfigButton>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+type PurgeStatus = "idle" | "saved" | "saveFailed" | "loadFailed";
+
+/**
+ * Settings › Purge: the armor-piercing gateway in front of every model request.
+ *
+ * Every control edits local state; one button `PUT`s the whole settings object
+ * and the response is the new truth. Nothing here is optimistic and nothing is
+ * saved per control — a half-typed rule table must never reach the gateway.
+ */
+export function PurgeConsoleSection() {
+  const { t, locale } = useI18n();
+  const limitHintId = useId();
+  const [draft, setDraft] = useState<PurgeSettings>(DEFAULT_PURGE_SETTINGS);
+  const [stats, setStats] = useState<PurgeStats | null>(null);
+  const [runtime, setRuntime] = useState<PurgeRuntime | null>(null);
+  const [limitDraft, setLimitDraft] = useState(String(DEFAULT_PURGE_SETTINGS.skill_inject_limit));
+  const [prefixDraft, setPrefixDraft] = useState(joinPurgePrefixes(DEFAULT_PURGE_SETTINGS.normalize_strip_prefixes));
+  const [loaded, setLoaded] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState<PurgeStatus>("idle");
+  const [reloadKey, setReloadKey] = useState(0);
+
+  const applySettings = useCallback((next: PurgeSettings) => {
+    setDraft(next);
+    setLimitDraft(String(next.skill_inject_limit));
+    setPrefixDraft(joinPurgePrefixes(next.normalize_strip_prefixes));
+  }, []);
+
+  // One read per mount: the stored settings plus the counters since start-up.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/purge", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
+      .then((data: unknown) => {
+        if (cancelled) return;
+        const body = isRecord(data) ? data : {};
+        const settings = asPurgeSettings(body.settings);
+        if (!settings) {
+          setStatus("loadFailed");
+          return;
+        }
+        applySettings(settings);
+        setStats(asPurgeStats(body.stats));
+        setRuntime(asPurgeRuntime(body.runtime));
+        setLoaded(true);
+        setDirty(false);
+        setStatus("idle");
+      })
+      .catch(() => { if (!cancelled) setStatus("loadFailed"); });
+    return () => { cancelled = true; };
+  }, [applySettings, reloadKey]);
+
+  const edit = useCallback((next: Partial<PurgeSettings>) => {
+    setDraft((current) => ({ ...current, ...next }));
+    setDirty(true);
+    // A saved note about the previous write must not survive the next edit.
+    setStatus((current) => (current === "saved" ? "idle" : current));
+  }, []);
+
+  const save = useCallback(() => {
+    const payload = purgeSavePayload({
+      ...draft,
+      skill_inject_limit: clampSkillInjectLimit(limitDraft),
+      normalize_strip_prefixes: splitPurgePrefixes(prefixDraft),
+    });
+    setSaving(true);
+    setStatus("idle");
+    fetch("/api/purge", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
+      .then((data: unknown) => {
+        // The response is the new truth; a body without settings still means the
+        // write landed, so the normalized payload stays on screen instead of the
+        // form emptying itself.
+        applySettings(asPurgeSettings(isRecord(data) ? data.settings : undefined) ?? payload);
+        setDirty(false);
+        setStatus("saved");
+      })
+      .catch(() => setStatus("saveFailed"))
+      .finally(() => setSaving(false));
+  }, [applySettings, draft, limitDraft, prefixDraft]);
+
+  const number = (value: number) => new Intl.NumberFormat(locale).format(value);
+  const parsedLimit = limitDraft.trim() === "" ? Number.NaN : Number(limitDraft);
+  const limitInvalid = !Number.isFinite(parsedLimit);
+  const disabled = saving || !loaded;
+  const canSave = loaded && !saving && !limitInvalid && dirty;
+  const uptime = runtime ? formatPurgeUptime(runtime.uptime_secs, {
+    seconds: t("purge.uptimeSeconds"),
+    minutes: t("purge.uptimeMinutes"),
+    hours: t("purge.uptimeHours"),
+    days: t("purge.uptimeDays"),
+  }) : "";
+
+  return (
+    <div className="settings-general settings-purge">
+      <h2 className="settings-general-title">{t("purge.title")}</h2>
+      <p className="settings-general-description">{t("purge.description")}</p>
+
+      <section className="settings-general-section">
+        <h3 className="settings-general-heading">{t("purge.togglesHeading")}</h3>
+        <div className="settings-option-list">
+          {PURGE_TOGGLE_KEYS.map((key) => (
+            <div
+              key={key}
+              className={`settings-option settings-purge-toggle${key === "enabled" ? " is-master" : ""}`}
+            >
+              <span className="settings-option-text">
+                <span className="settings-option-title">{t(PURGE_TOGGLE_LABEL_KEYS[key])}</span>
+                <span className="settings-option-hint">{t(PURGE_TOGGLE_HINT_KEYS[key])}</span>
+              </span>
+              <ConfigSwitch
+                checked={draft[key]}
+                disabled={disabled}
+                label={t(PURGE_TOGGLE_LABEL_KEYS[key])}
+                onChange={(next) => edit(setPurgeToggle(draft, key, next))}
+              />
+            </div>
+          ))}
+        </div>
+        <p className="settings-general-description">{t("purge.masterNote")}</p>
+      </section>
+
+      <section className="settings-general-section">
+        <h3 className="settings-general-heading">{t("purge.reasoningHeading")}</h3>
+        <div className="settings-option-list">
+          <div className="settings-option">
+            <span className="settings-option-text">
+              <span className="settings-option-title">{t("purge.reasoningFloor")}</span>
+              <span className="settings-option-hint">{t("purge.reasoningFloorHint")}</span>
+            </span>
+            <AppSelect
+              className="settings-purge-select"
+              aria-label={t("purge.reasoningFloor")}
+              value={draft.reasoning_floor}
+              disabled={disabled}
+              onValueChange={(value) => edit({ reasoning_floor: asReasoningFloor(value) })}
+              options={PURGE_REASONING_FLOORS.map((floor) => ({
+                value: floor,
+                label: t(PURGE_REASONING_FLOOR_LABEL_KEYS[floor]),
+              }))}
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className="settings-general-section">
+        <h3 className="settings-general-heading">{t("purge.fieldsHeading")}</h3>
+        <div className="settings-purge-fields">
+          <div className="settings-purge-field">
+            <label htmlFor="settings-purge-skill-dir">{t("purge.skillDir")}</label>
+            <input
+              id="settings-purge-skill-dir"
+              className="settings-chats-control"
+              type="text"
+              aria-label={t("purge.skillDir")}
+              placeholder={t("purge.skillDirPlaceholder")}
+              value={draft.skill_dir}
+              disabled={disabled}
+              onChange={(event) => edit({ skill_dir: event.target.value })}
+            />
+            <span className="settings-chats-hint">{t("purge.skillDirHint")}</span>
+          </div>
+
+          <div className="settings-purge-field">
+            <label htmlFor="settings-purge-skill-limit">{t("purge.skillInjectLimit")}</label>
+            <input
+              id="settings-purge-skill-limit"
+              className="settings-chats-control"
+              type="number"
+              inputMode="numeric"
+              min={PURGE_SKILL_INJECT_LIMIT_MIN}
+              max={PURGE_SKILL_INJECT_LIMIT_MAX}
+              step={1}
+              aria-label={t("purge.skillInjectLimit")}
+              aria-describedby={limitHintId}
+              value={limitDraft}
+              disabled={disabled}
+              onChange={(event) => { setLimitDraft(event.target.value); setDirty(true); }}
+            />
+            <span id={limitHintId} className="settings-chats-hint" role={limitInvalid ? "alert" : undefined}>
+              {limitInvalid
+                ? t("purge.skillInjectLimitInvalid", {
+                  min: PURGE_SKILL_INJECT_LIMIT_MIN,
+                  max: PURGE_SKILL_INJECT_LIMIT_MAX,
+                })
+                : t("purge.skillInjectLimitHint", {
+                  min: PURGE_SKILL_INJECT_LIMIT_MIN,
+                  max: PURGE_SKILL_INJECT_LIMIT_MAX,
+                })}
+            </span>
+          </div>
+
+          <div className="settings-purge-field">
+            <label htmlFor="settings-purge-prefixes">{t("purge.stripPrefixes")}</label>
+            <input
+              id="settings-purge-prefixes"
+              className="settings-chats-control"
+              type="text"
+              aria-label={t("purge.stripPrefixes")}
+              placeholder={t("purge.stripPrefixesPlaceholder")}
+              value={prefixDraft}
+              disabled={disabled}
+              onChange={(event) => { setPrefixDraft(event.target.value); setDirty(true); }}
+            />
+            <span className="settings-chats-hint">{t("purge.stripPrefixesHint")}</span>
+          </div>
+
+          <div className="settings-purge-field">
+            <label htmlFor="settings-purge-structured-suffix">{t("purge.structuredSuffix")}</label>
+            <textarea
+              id="settings-purge-structured-suffix"
+              className="settings-chats-control settings-purge-textarea"
+              rows={4}
+              aria-label={t("purge.structuredSuffix")}
+              value={draft.structured_suffix}
+              disabled={disabled}
+              onChange={(event) => edit({ structured_suffix: event.target.value })}
+            />
+            <span className="settings-chats-hint">{t("purge.structuredSuffixHint")}</span>
+          </div>
+        </div>
+      </section>
+
+      <PurgeRulesTable
+        heading={t("purge.rewriteRulesHeading")}
+        hint={t("purge.rewriteRulesHint")}
+        addLabel={t("purge.addRewriteRule")}
+        emptyLabel={t("purge.rewriteRulesEmpty")}
+        columnFrom={t("purge.columnFrom")}
+        columnTo={t("purge.columnTo")}
+        columnAction={t("purge.columnAction")}
+        removeLabel={t("purge.removeRule")}
+        rows={draft.rewrite_rules}
+        disabled={disabled}
+        onAdd={() => { edit({ rewrite_rules: addPurgeRule(draft.rewrite_rules) }); }}
+        onPatch={(index, part) => { edit({ rewrite_rules: patchPurgeRule(draft.rewrite_rules, index, part) }); }}
+        onRemove={(index) => { edit({ rewrite_rules: removePurgeRule(draft.rewrite_rules, index) }); }}
+      />
+
+      <PurgeRulesTable
+        heading={t("purge.synonymsHeading")}
+        hint={t("purge.synonymsHint")}
+        addLabel={t("purge.addSynonymPair")}
+        emptyLabel={t("purge.synonymsEmpty")}
+        columnFrom={t("purge.columnSensitiveWord")}
+        columnTo={t("purge.columnSynonym")}
+        columnAction={t("purge.columnAction")}
+        removeLabel={t("purge.removeRule")}
+        rows={draft.synonym_pairs}
+        disabled={disabled}
+        onAdd={() => { edit({ synonym_pairs: addPurgeRule(draft.synonym_pairs) }); }}
+        onPatch={(index, part) => { edit({ synonym_pairs: patchPurgeRule(draft.synonym_pairs, index, part) }); }}
+        onRemove={(index) => { edit({ synonym_pairs: removePurgeRule(draft.synonym_pairs, index) }); }}
+      />
+
+      <section className="settings-general-section">
+        <h3 className="settings-general-heading">{t("purge.statsHeading")}</h3>
+        <p className="settings-general-description">{t("purge.statsHint")}</p>
+        {stats === null ? (
+          <p className="settings-purge-empty" role="status">
+            {status === "loadFailed" ? t("purge.statsUnavailable") : t("purge.statsPending")}
+          </p>
+        ) : (
+          <dl className="settings-purge-stats">
+            {purgeStatValues(stats).map((row) => (
+              <div key={row.labelKey} className="settings-purge-stat">
+                <dt>{t(row.labelKey)}</dt>
+                <dd>{number(row.value)}</dd>
+              </div>
+            ))}
+            <div className="settings-purge-stat">
+              <dt>{t("purge.statStartedAt")}</dt>
+              <dd>{stats.started_at || "—"}</dd>
+            </div>
+            {runtime !== null && (
+              <div className="settings-purge-stat">
+                <dt>{t("purge.statUptime")}</dt>
+                <dd>{t("purge.runtimeLine", { pid: runtime.pid, uptime })}</dd>
+              </div>
+            )}
+          </dl>
+        )}
+      </section>
+
+      <div className="settings-purge-actions">
+        <ConfigButton
+          variant="primary"
+          disabled={!canSave}
+          title={!dirty && loaded ? t("purge.noChanges") : undefined}
+          onClick={save}
+        >
+          {saving ? t("purge.saving") : t("purge.save")}
+        </ConfigButton>
+        <span className="settings-chats-hint" role="status">
+          {saving ? t("purge.saving") : status === "saved" ? t("purge.saved") : ""}
+        </span>
+        {status === "loadFailed" && (
+          <ConfigButton
+            variant="secondary"
+            size="small"
+            onClick={() => setReloadKey((key) => key + 1)}
+          >
+            {t("purge.reload")}
+          </ConfigButton>
+        )}
+      </div>
+
+      {(status === "saveFailed" || status === "loadFailed") && (
+        <p role="alert" className="settings-general-error">
+          {status === "saveFailed" ? t("purge.saveFailed") : t("purge.loadFailed")}
+        </p>
+      )}
+
+      {stats !== null && (
+        <p className="settings-general-description">{t("purge.statsFootnote")}</p>
+      )}
+    </div>
+  );
+}

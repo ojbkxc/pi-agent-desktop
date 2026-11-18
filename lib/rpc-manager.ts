@@ -71,6 +71,7 @@ import { additionalForkSkillPaths } from "./fork-skill-paths";
 import { createExactSystemPromptExtension } from "./exact-system-prompt";
 import { createArtifactGuideExtension } from "./artifact-guide-extension";
 import { createAgentGuideExtension } from "./agent-guide-extension";
+import { createPurgeExtension } from "./purge/extension";
 // v0.8.2 压缩策略：会话级阈值包装（SettingsManager Proxy）与 session_before_compact 执行扩展。
 // 两处必须与 lib/subagent-runtime.ts 的成员新建路径装配同一套，见 lib/compaction-wiring.test.mjs。
 import { createCompactionSettingsManager } from "./compaction-policy";
@@ -3594,6 +3595,11 @@ export async function startRpcSession(
                   unrestricted: chatUnlocked,
                   ...(chatGrants ? { grants: chatGrants } : {}),
                 }),
+                // 破甲控制台（请求治理）：必须排在最后。before_agent_start 返回的 systemPrompt 是
+                // 整体替换（SDK 把它写成 forceSystemPrompt，不带 sections），只有先于它注册的
+                // handler 改的段会活下来；放末尾治理的就是最终要发的那份提示词，聊天指令/日期/
+                // 团队段都不会被抹平。每次请求现读配置，关闭时零改动。
+                createPurgeExtension(),
               ],
               // An unlocked chat has every tool, so extensions that hand work to an agent may load too.
               ...(chatUnlocked
@@ -3631,6 +3637,9 @@ export async function startRpcSession(
                 subagentController: SUBAGENT_CONTROLLER,
                 ...(options.skipToolApproval ? { skipToolApproval: true } : {}),
               }),
+              // 破甲控制台（请求治理）：排在最后，理由同 workspace-chat 分支的同一注释
+              // （forceSystemPrompt 是整体替换，先注册的 handler 改动才不会丢）。关闭时零改动。
+              createPurgeExtension(),
             ],
             extensionsOverride: (base) => preferUserPowerShellExtension(
               preferUserBashExtension(preferPiWebSubagentExtension(base)),
