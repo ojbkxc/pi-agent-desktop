@@ -310,7 +310,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
   const {
     loading, error, messages, activeToolResults, entryIds, historyCursor, hasEarlierMessages, streamingStore,
     agentRunning, bashRunning, pendingBash, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, toolPreset, thinkingLevel,
-    retryInfo, contextUsage, forkingEntryId, summarizationRetry, automation, handleSetAutomation,
+    retryInfo, contextUsage, forkingEntryId, summarizationRetry, automation, handleSetAutomation, compactionLimits,
     isCompacting, compactError, compactNotice, compactResult, displayModel: displayModelValue, modelSwitching, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices, extensionDialog, waitingExtensionDialogCount, extensionCustomUi, waitingExtensionCustomUiCount, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput, setNoticePaused,
@@ -1330,6 +1330,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
       onToggleChatUnlocked={handleToggleChatUnlocked}
       onSessionStatsPanelOpen={onSessionStatsPanelOpen}
       contextUsage={contextUsage}
+      compactionLimits={compactionLimits}
       sessionStats={sessionStats}
     />
   );

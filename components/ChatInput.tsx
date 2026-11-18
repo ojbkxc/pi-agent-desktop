@@ -192,6 +192,8 @@ interface Props {
   autoFocus?: boolean;
   /** Live context-window usage (numerator) for the usage ring next to the model selector */
   contextUsage?: ContextUsage | null;
+  /** Trigger this session's compaction policy resolved; the usage panel quotes it. */
+  compactionLimits?: { trigger: number | null; keepRecentTokens: number | null } | null;
   /** Session token summary shown when hovering the usage ring */
   sessionStats?: SessionStatsInfo | null;
   /** Open the top-bar session-stats panel when the usage ring is clicked */
@@ -924,6 +926,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   contextUsage,
   sessionStats,
   onSessionStatsPanelOpen,
+  compactionLimits,
   compact = false,
 }: Props, ref) {
   const { t } = useI18n();
@@ -3289,7 +3292,15 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 → {routedModelName}{routedModel.thinkingLevel && !isNarrow ? ` • ${routedModel.thinkingLevel}` : ""}
               </span>
             )}
-            <ContextUsageRing contextUsage={contextUsage} sessionStats={sessionStats} onOpenStats={onSessionStatsPanelOpen} />
+            <ContextUsageRing
+              contextUsage={contextUsage}
+              sessionStats={sessionStats}
+              onOpenStats={onSessionStatsPanelOpen}
+              compactionLimits={compactionLimits}
+              onCompact={canCompactNow ? onCompact : undefined}
+              onAbortCompaction={onAbortCompaction}
+              isCompacting={isCompacting}
+            />
           </div>
 
           {/* spacer */}

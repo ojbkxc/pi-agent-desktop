@@ -3512,6 +3512,135 @@ html:not(.dark) .session-item.is-selected .session-item-time {
   animation: native-popover-in var(--dur-fast) var(--ease-native) both;
 }
 
+/* ── Context-usage popover (click on the composer's usage ring) ───────────────
+   A square card above the ring: percentage, a bar that also marks the trigger,
+   token counts, the resolved auto-compaction threshold and the manual action.
+   Width is fixed so the numbers do not reflow as the percentage grows. */
+.ctx-usage-popover {
+  width: 264px;
+  max-width: calc(100vw - 24px);
+  padding: 12px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* The action block below reaches the card's edges with negative margins, so
+     the card owns the rounded corners instead of each button. */
+  overflow: hidden;
+  transform-origin: bottom left;
+}
+
+.ctx-usage-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ctx-usage-title {
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.ctx-usage-pct {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-body);
+  color: var(--text-muted);
+}
+
+.ctx-usage-pct[data-danger="true"] {
+  color: var(--danger);
+}
+
+.ctx-usage-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  overflow: hidden;
+}
+
+.ctx-usage-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width var(--dur-base) var(--ease-native);
+}
+
+/* The trigger is tick-marked on the bar so "how full before it compacts" is a
+   position, not only a sentence. */
+.ctx-usage-bar-mark {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  background: var(--text-dim);
+  border-radius: 1px;
+}
+
+.ctx-usage-tokens,
+.ctx-usage-trigger,
+.ctx-usage-kept {
+  font-size: var(--fs-caption);
+  line-height: 1.45;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ctx-usage-kept {
+  color: var(--text-dim);
+}
+
+.ctx-usage-actions {
+  display: flex;
+  flex-direction: column;
+  margin: 2px -14px -10px;
+  border-top: var(--hairline) solid var(--border);
+}
+
+.ctx-usage-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 14px;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-body);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-native);
+}
+
+.ctx-usage-action:first-child {
+  border-bottom-left-radius: var(--radius-lg);
+  border-bottom-right-radius: var(--radius-lg);
+}
+
+.ctx-usage-action:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.ctx-usage-action:disabled {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.ctx-usage-action-secondary {
+  color: var(--text-muted);
+  border-top: var(--hairline) solid var(--border);
+  font-size: var(--fs-caption);
+  min-height: 30px;
+}
+
+.ctx-usage-action:focus-visible {
+  outline: 2px solid var(--menu-focus-ring);
+  outline-offset: -2px;
+}
+
 @keyframes native-popover-in {
   from {
     opacity: 0;

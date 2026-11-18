@@ -105,6 +105,10 @@ interface LastAssistantTextResponse {
 type AgentStateResponse = {
   model?: { provider: string; id: string };
   contextUsage?: { percent: number | null; contextWindow: number; tokens: number | null } | null;
+  /** Resolved compaction trigger for this session's model; null when unknown. */
+  compactionTrigger?: number | null;
+  /** Verbatim tail kept when that compaction runs. */
+  compactionKeepRecent?: number | null;
   systemPrompt?: string;
   thinkingLevel?: string;
   isStreaming?: boolean;
@@ -418,6 +422,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [liveThinkingLevel, setLiveThinkingLevel] = useState<ConcreteThinkingLevel | null>(null);
   const [retryInfo, setRetryInfo] = useState<{ attempt: number; maxAttempts: number; errorMessage?: string } | null>(null);
   const [contextUsage, setContextUsage] = useState<{ percent: number | null; contextWindow: number; tokens: number | null } | null>(null);
+  // Resolved trigger for the usage panel's "auto-compacts at N%". It follows the
+  // session's own compaction policy (mode + keepRecent), so it is read from the
+  // wrapper rather than recomputed in the browser. `undefined` = not yet known.
+  const [compactionLimits, setCompactionLimits] = useState<{ trigger: number | null; keepRecentTokens: number | null } | null>(null);
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
   const [forkingEntryId, setForkingEntryId] = useState<string | null>(null);
   const [currentModelOverride, setCurrentModelOverride] = useState<{ provider: string; modelId: string } | null>(null);
@@ -671,6 +679,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setRoutedModel(null);
     setCacheWarming(null);
     setLiveThinkingLevel(null);
+    // A compaction trigger belongs to one session's model + policy; a switch must
+    // not carry it over (the next state read fills it again).
+    setCompactionLimits(null);
     // A model / reasoning pick is session-scoped: its optimistic override is
     // otherwise cleared only by the owning session's own read (loadSession), which
     // a switch never runs. Without this the new session is labelled with the model
@@ -928,6 +939,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         syncLiveModel(liveState);
         if (liveState) {
           if (liveState.contextUsage !== undefined) setContextUsage(liveState.contextUsage ?? null);
+          if (liveState.compactionTrigger !== undefined || liveState.compactionKeepRecent !== undefined) {
+            setCompactionLimits({
+              trigger: liveState.compactionTrigger ?? null,
+              keepRecentTokens: liveState.compactionKeepRecent ?? null,
+            });
+          }
           if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt ?? null);
           if (liveState.extensionStatuses !== undefined) setExtensionStatuses(liveState.extensionStatuses ?? []);
           if (liveState.extensionWidgets !== undefined) setExtensionWidgets(liveState.extensionWidgets ?? []);
@@ -1633,6 +1650,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // Usage advances between tool calls while the logical prompt is still busy.
       // Sync before the busy return so the ring and stats panel follow the run.
       if (state?.contextUsage !== undefined) setContextUsage(state.contextUsage ?? null);
+      if (state?.compactionTrigger !== undefined || state?.compactionKeepRecent !== undefined) {
+        setCompactionLimits({
+          trigger: state.compactionTrigger ?? null,
+          keepRecentTokens: state.compactionKeepRecent ?? null,
+        });
+      }
       // Mirror compaction state unconditionally: a missed compaction_end
       // would otherwise leave the "Stop compaction" UI stuck. No state
       // (wrapper destroyed) means nothing is compacting.
@@ -1761,6 +1784,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
               ) return;
               syncLiveModel(d.state);
               if (d.state?.contextUsage !== undefined) setContextUsage(d.state.contextUsage ?? null);
+              if (d.state?.compactionTrigger !== undefined || d.state?.compactionKeepRecent !== undefined) {
+                setCompactionLimits({
+                  trigger: d.state.compactionTrigger ?? null,
+                  keepRecentTokens: d.state.compactionKeepRecent ?? null,
+                });
+              }
               if (d.state?.systemPrompt !== undefined) setSystemPrompt(d.state.systemPrompt ?? null);
               if (d.state?.extensionStatuses !== undefined) setExtensionStatuses(d.state.extensionStatuses ?? []);
               if (d.state?.extensionWidgets !== undefined) setExtensionWidgets(d.state.extensionWidgets ?? []);
@@ -3021,6 +3050,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (agentState?.state) {
           if (agentState.state.isCompacting !== undefined) setIsCompacting(agentState.state.isCompacting);
           if (agentState.state.contextUsage !== undefined) setContextUsage(agentState.state.contextUsage ?? null);
+          if (agentState.state.compactionTrigger !== undefined || agentState.state.compactionKeepRecent !== undefined) {
+            setCompactionLimits({
+              trigger: agentState.state.compactionTrigger ?? null,
+              keepRecentTokens: agentState.state.compactionKeepRecent ?? null,
+            });
+          }
           if (agentState.state.systemPrompt !== undefined) setSystemPrompt(agentState.state.systemPrompt ?? null);
           if (agentState.state.extensionStatuses !== undefined) setExtensionStatuses(agentState.state.extensionStatuses ?? []);
           if (agentState.state.extensionWidgets !== undefined) setExtensionWidgets(agentState.state.extensionWidgets ?? []);
@@ -3244,6 +3279,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     data, loading, error, activeLeafId, messages, activeToolResults, entryIds, historyCursor, hasEarlierMessages, streamingStore,
     agentRunning, modelNames, modelList, modelError, modelScopeWarnings: visibleModelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel,
     retryInfo, contextUsage, systemPrompt, forkingEntryId, retryLoad, dismissModelScopeWarnings,
+    compactionLimits,
     isCompacting, compactError, compactNotice, compactResult, currentModel, displayModel, modelSwitching, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices: noticeState.visible, addNotice, extensionDialog, waitingExtensionDialogCount, extensionCustomUi, waitingExtensionCustomUiCount, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,

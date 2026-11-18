@@ -1587,6 +1587,26 @@ export class AgentSessionWrapper {
           console.warn("[get_state] getContextUsage failed; reporting unknown context usage:", error);
           contextUsage = undefined;
         }
+        // The composer's usage panel says "auto-compacts at N%": it needs the
+        // trigger this session actually resolved, and the SettingsManager handed
+        // to this session is already the policy wrapper, so reading it here
+        // cannot drift from what the SDK will do. An unreadable compaction
+        // setting must not fail the whole state read.
+        let compactionTrigger: number | null = null;
+        let compactionKeepRecent: number | null = null;
+        if (model) {
+          try {
+            const resolved = this.inner.settingsManager.getCompactionSettings(model);
+            const window = (model as { contextWindow?: number }).contextWindow ?? 0;
+            if (window > 0 && resolved.reserveTokens > 0) {
+              compactionTrigger = window - resolved.reserveTokens;
+              compactionKeepRecent = resolved.keepRecentTokens;
+            }
+          } catch {
+            compactionTrigger = null;
+            compactionKeepRecent = null;
+          }
+        }
         return {
           sessionId: this.inner.sessionId,
           sessionFile: this.inner.sessionFile ?? "",
@@ -1610,6 +1630,10 @@ export class AgentSessionWrapper {
           contextUsage: contextUsage
             ? { percent: contextUsage.percent, contextWindow: contextUsage.contextWindow, tokens: contextUsage.tokens }
             : null,
+          // Resolved by this session's SettingsManager (the compaction-policy
+          // wrapper); null when the model or its window is unknown.
+          compactionTrigger,
+          compactionKeepRecent,
           // An exact prompt is projected onto each run by the inline extension. Every other
           // session reports `agent.state.systemPrompt`, which replays the transcript: that is
           // what the model actually saw, including sections a `before_agent_start` handler
