@@ -248,6 +248,10 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, toolSegments, durati
     : [t("chat.processDetails"), `${messageCount} ${t(messageCount === 1 ? "chat.message" : "chat.messages")}`];
   if (!toolSummary && toolCallCount > 0) parts.push(`${toolCallCount} ${t(toolCallCount === 1 ? "chat.toolCall" : "chat.toolCalls")}`);
   if (durationMs !== undefined) parts.push(t("chat.turnDuration", { time: formatTurnDuration(durationMs) }));
+  // The visible title is the verb summary alone (cc-haha's shape); the accessible
+  // name keeps the group's identity first so screen readers — and the e2e suite —
+  // can still find "Process details" now that the counters no longer lead it.
+  const triggerLabel = toolSummary ? `${t("chat.processDetails")} · ${parts.join(" · ")}` : parts.join(" · ");
 
   return (
     <div className="process-details" style={{ marginBottom: 14 }}>
@@ -255,6 +259,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, toolSegments, durati
         className="process-details-trigger"
         type="button"
         aria-expanded={expanded || reveal}
+        aria-label={triggerLabel}
         onClick={() => setExpanded((v) => !v)}
         style={{
           display: "flex",
