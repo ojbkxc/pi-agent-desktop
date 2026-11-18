@@ -10,6 +10,11 @@ const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 /** High-risk red threshold (fixed, Claude-convention). Single accent below it. */
 const CTX_DANGER_PCT = 90;
+/**
+ * Early warning: the ring/bar turn amber from here so a long tier (80% trigger)
+ * has a visible run-up. Visual only — it never starts a compaction by itself.
+ */
+const CTX_WARN_PCT = 60;
 /** Above this the panel's progress bar switches to the danger colour too. */
 const BAR_DANGER_PCT = 90;
 
@@ -84,7 +89,9 @@ export function ContextUsageRing({
     ? "var(--text-dim)"
     : pct >= CTX_DANGER_PCT
       ? "var(--danger)"
-      : "var(--accent)";
+      : pct >= CTX_WARN_PCT
+        ? "var(--warning)"
+        : "var(--accent)";
   const filled = RING_CIRCUMFERENCE * (pct / 100);
 
   const tokens = contextUsage?.tokens ?? sessionStats?.tokens.total ?? null;
@@ -198,7 +205,7 @@ export function ContextUsageRing({
               fontFamily: "var(--font-mono)",
               fontSize: "var(--fs-micro)",
               fontVariantNumeric: "tabular-nums",
-              color: pct >= CTX_DANGER_PCT ? "var(--danger)" : "var(--text-muted)",
+              color: pct >= CTX_DANGER_PCT ? "var(--danger)" : pct >= CTX_WARN_PCT ? "var(--warning)" : "var(--text-muted)",
               lineHeight: 1,
             }}
           >
@@ -235,7 +242,7 @@ export function ContextUsageRing({
           <div className="ctx-usage-bar" aria-hidden="true">
             <span
               className="ctx-usage-bar-fill"
-              style={{ width: `${pct}%`, background: pct >= BAR_DANGER_PCT ? "var(--danger)" : "var(--accent)" }}
+              style={{ width: `${pct}%`, background: pct >= BAR_DANGER_PCT ? "var(--danger)" : pct >= CTX_WARN_PCT ? "var(--warning)" : "var(--accent)" }}
             />
             {triggerPercent !== null && (
               <span className="ctx-usage-bar-mark" style={{ left: `${Math.min(100, triggerPercent)}%` }} />
