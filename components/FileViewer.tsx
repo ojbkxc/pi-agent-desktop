@@ -28,6 +28,7 @@ import { parseUnifiedPatch } from "@/lib/patch";
 import type { GitFileDiffResponse } from "@/lib/git-types";
 import { getFileIcon } from "./FileIcons";
 import { useI18n } from "@/hooks/useI18n";
+import { formatBytes, formatElapsedClock } from "@/lib/format-units";
 import { getDesktopPlatform } from "@/lib/desktop-window";
 import { revealLabelKey } from "@/lib/file-context-menu";
 import { appNotify } from "@/lib/notification-store";
@@ -373,12 +374,6 @@ type DiffLine = {
   newLineNo: number | null;
 };
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 function diffLines(patch: string): DiffLine[] {
   const files = parseUnifiedPatch(patch);
   if (!files) return [];
@@ -633,7 +628,7 @@ function ImageViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
 
   const src = getFileApiUrl(filePath, "read", sourceSessionId, bust ? { v: bust } : undefined);
 
-  const formatSizeStr = size != null ? formatSize(size) : null;
+  const formatSizeStr = size != null ? formatBytes(size) : null;
   const metadata = [
     ext || "image",
     naturalSize ? `${naturalSize.w} × ${naturalSize.h}` : null,
@@ -679,10 +674,7 @@ function ImageViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
 
 function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds)) return "";
-  const totalSeconds = Math.round(seconds);
-  const mins = Math.floor(totalSeconds / 60);
-  const secs = totalSeconds % 60;
-  return `${mins}:${String(secs).padStart(2, "0")}`;
+  return formatElapsedClock(seconds * 1000);
 }
 
 function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Props) {
@@ -767,7 +759,7 @@ function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
   const metadata = [
     ext || "audio",
     duration != null ? formatDuration(duration) : null,
-    size != null ? formatSize(size) : null,
+    size != null ? formatBytes(size) : null,
   ].filter(Boolean).join(" · ");
 
   return (
@@ -906,7 +898,7 @@ function VideoViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Pr
         </span>
         <span style={{ marginLeft: "auto" }}>{ext || "video"}</span>
         {duration != null && <span>{formatDuration(duration)}</span>}
-        {size != null && <span>{formatSize(size)}</span>}
+        {size != null && <span>{formatBytes(size)}</span>}
         <span
           title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
           style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "var(--success)" : "var(--text-dim)" }}
@@ -1045,7 +1037,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, initialPage, watchEnab
 
   const metadata = [
     ext === "docx" ? "DOCX preview" : "PDF",
-    size != null ? formatSize(size) : null,
+    size != null ? formatBytes(size) : null,
   ].filter(Boolean).join(" · ");
 
   return (
@@ -1569,7 +1561,7 @@ function TextFileViewer({
       ];
   const metadata = isDeletedDiff
     ? t("files.deleted")
-    : `${language} · ${lines.length} lines · ${formatSize(data!.size)}`;
+    : `${language} · ${lines.length} lines · ${formatBytes(data!.size)}`;
 
   return (
     <div className="file-viewer-shell" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", position: "relative" }}>
@@ -1744,7 +1736,7 @@ function TextFileViewer({
             fontSize: "var(--fs-micro)",
           }}
         >
-          <span>{formatSize(data.nextOffset)} / {formatSize(data.size)}</span>
+          <span>{formatBytes(data.nextOffset)} / {formatBytes(data.size)}</span>
           <button
             type="button"
             className="file-viewer-mode-button"

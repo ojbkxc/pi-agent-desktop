@@ -11,6 +11,7 @@ import {
   skillSummary as catalogSkillSummary,
   visibleTags as catalogVisibleTags,
 } from "@/lib/skill-market/catalog-locale";
+import { formatBytes as formatBytesUnits } from "@/lib/format-units";
 
 export type MarketSource = "clawhub" | "skillhub";
 export type MarketSourceFilter = MarketSource | "all";
@@ -201,12 +202,9 @@ export function visibleTags(item: Pick<MarketListItem, "tags" | "curated">, loca
   return catalogVisibleTags(item, toCatalogLocale(locale));
 }
 
-/** 字节数的紧凑写法（文件列表用）。 */
+/** 字节数的紧凑写法（文件列表用）；统一走 lib/format-units 的字节口径。 */
 export function formatBytes(size: number): string {
-  if (!Number.isFinite(size) || size <= 0) return "0 B";
-  if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-  if (size >= 1024) return `${Math.round(size / 1024)} KB`;
-  return `${size} B`;
+  return formatBytesUnits(size);
 }
 
 /**

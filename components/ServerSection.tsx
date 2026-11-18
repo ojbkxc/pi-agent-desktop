@@ -6,6 +6,7 @@ import { useI18n } from "@/hooks/useI18n";
 import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import { openExternal } from "@/lib/desktop-native";
 import { formatRelativeTime } from "@/lib/i18n/format";
+import { formatDurationHuman } from "@/lib/format-units";
 import { AppSelect } from "./AppSelect";
 import { ChatConfirmDialog } from "./ChatConfirmDialog";
 import { ConfigButton, ConfigSwitch } from "./SettingsUi";
@@ -131,7 +132,7 @@ function parseDiagnostics(value: unknown): PublicAccessDiagnosticEntry[] {
 }
 
 function formatDuration(ms: number): string {
-  return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`;
+  return formatDurationHuman(ms) ?? "";
 }
 
 interface PublicAccessResponse {

@@ -106,7 +106,7 @@ test("工具函数：下载量 / 字节数 / 徽标色调 / 文件排序", () =>
 
   assert.equal(helpers.formatBytes(0), "0 B");
   assert.equal(helpers.formatBytes(512), "512 B");
-  assert.equal(helpers.formatBytes(2048), "2 KB");
+  assert.equal(helpers.formatBytes(2048), "2.0 KB");
   assert.equal(helpers.formatBytes(5 * 1024 * 1024), "5.0 MB");
 
   assert.equal(helpers.securityBadgeClass("verified"), "is-safe");

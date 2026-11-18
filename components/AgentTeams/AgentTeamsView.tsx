@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { useTeamTimeline } from "@/hooks/useTeamTimeline";
+import { formatElapsedClock } from "@/lib/format-units";
 import {
   layoutSwimlanes,
   EVENT_HEIGHT,
@@ -65,14 +66,9 @@ function roleLabelKey(role: string): string {
   return `teams.role.${role}`;
 }
 
-/** 毫秒 → HH:MM:SS（>1h）或 MM:SS；负值夹到 0（C9 已用时长）。 */
+/** 毫秒 → HH:MM:SS（>1h）或 MM:SS；负值夹到 0。统一走 lib/format-units 的时钟口径。 */
 function formatDuration(valueMs: number): string {
-  const seconds = Math.max(0, Math.round(valueMs / 1000));
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const rest = seconds % 60;
-  const pad = (part: number) => String(part).padStart(2, "0");
-  return hours > 0 ? `${pad(hours)}:${pad(minutes)}:${pad(rest)}` : `${pad(minutes)}:${pad(rest)}`;
+  return formatElapsedClock(valueMs);
 }
 
 /** ISO → 本地 HH:MM:SS（C9 会话时钟）；不可解析回退 --:--:--。 */

@@ -15,12 +15,7 @@ import { useI18n } from "@/hooks/useI18n";
 import { ConfigButton, ConfigSwitch } from "@/components/SettingsUi";
 
 import { useDesktopChrome } from "./useDesktopChrome";
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+import { formatBytes } from "@/lib/format-units";
 
 /**
  * Window, tray and notification behaviour for the packaged desktop app.

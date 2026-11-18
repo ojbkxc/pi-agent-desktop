@@ -21,6 +21,7 @@ import { isThinkingExpandedByDefault, THINKING_EXPANDED_EVENT } from "@/lib/thin
 import { TurnWrittenFiles } from "./TurnWrittenFiles";
 import type { WrittenFile } from "@/lib/turn-written-files";
 import { formatTurnDuration } from "@/lib/turn-duration";
+import { formatBytes } from "@/lib/format-units";
 import { skillExpansionToCommand } from "@/lib/slash-display";
 import { splitAttachedFiles } from "@/lib/chat-attachments";
 import { userImageDisplayText } from "@/lib/user-image-display";
@@ -109,12 +110,6 @@ const thinkingContentCache = new Map<string, Promise<string>>();
 // log dumps) freezes the browser main thread.
 const MAX_MARKDOWN_CHARS = 100_000;
 
-function formatMessageBytes(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)} MB`;
-  if (n >= 1_000) return `${Math.round(n / 1_000)} KB`;
-  return `${n} B`;
-}
-
 /**
  * MarkdownBody with an oversized-content guard: huge messages render as a
  * click-to-reveal plain-text <pre> instead of running the markdown pipeline.
@@ -144,7 +139,7 @@ function SafeMarkdownBody({ children, className, ...props }: React.ComponentProp
           textAlign: "left",
         }}
       >
-        ⚠ {t("i18n.largeMessageReveal", { size: formatMessageBytes(children.length) })}
+        ⚠ {t("i18n.largeMessageReveal", { size: formatBytes(children.length) })}
       </button>
     );
   }
@@ -1116,6 +1111,7 @@ function ToolGroupBlock({ calls, searchTarget, toolResults, isStreaming, toolCal
         className="tool-group-summary"
         aria-expanded={open}
         onClick={() => setExpanded((value) => !value)}
+        aria-label={t(open ? "chat.collapseProcess" : "chat.expandProcess")}
         title={t(open ? "chat.collapseProcess" : "chat.expandProcess")}
       >
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="tool-group-chevron" aria-hidden="true" style={{ transform: open ? "rotate(90deg)" : "none" }}>
