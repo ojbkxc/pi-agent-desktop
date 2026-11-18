@@ -103,14 +103,16 @@ test("first paint renders the master switch and the six governance switches", ()
   ]) {
     assert.match(html, new RegExp(`id="${id}"`), id);
   }
-  assert.match(html, /settings-purge-select/);
+  assert.match(html, /settings-purge-floor/);
   assert.match(html, /Reading counters/);
   assert.match(html, /settings-purge-empty/);
 });
 
-test("uses the shared option control and accessible inputs, never a native select", () => {
-  assert.match(componentSource, /from "\.\/AppSelect"/);
-  assert.match(componentSource, /<AppSelect/);
+test("uses accessible controls, never a native select", () => {
+  // 思考强度是档位选择：五个档位平铺成按钮组，aria-pressed 表达选中态。
+  // 旧的下拉要先展开才知道有哪几档，也看不到相邻档位。
+  assert.match(componentSource, /settings-purge-floor-btn/);
+  assert.match(componentSource, /aria-pressed=\{draft\.reasoning_floor === floor\}/);
   assert.equal(/<select\b|<datalist\b/.test(componentSource), false);
   // Every text/number/textarea control names itself; the rule inputs carry the
   // row number so a screen reader can tell the rows apart.

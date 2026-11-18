@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useId, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
-import { AppSelect } from "./AppSelect";
 import { ConfigButton, ConfigSwitch } from "./SettingsUi";
 
 export type PurgeReasoningFloor = "off" | "low" | "medium" | "high" | "xhigh";
@@ -560,24 +559,21 @@ export function PurgeConsoleSection() {
 
       <section className="settings-general-section">
         <h3 className="settings-general-heading">{t("purge.reasoningHeading")}</h3>
-        <div className="settings-option-list">
-          <div className="settings-option">
-            <span className="settings-option-text">
-              <span className="settings-option-title">{t("purge.reasoningFloor")}</span>
-              <span className="settings-option-hint">{t("purge.reasoningFloorHint")}</span>
-            </span>
-            <AppSelect
-              className="settings-purge-select"
-              aria-label={t("purge.reasoningFloor")}
-              value={draft.reasoning_floor}
+        <p className="settings-general-description">{t("purge.reasoningFloorHint")}</p>
+        {/* 五档全部平铺，一眼看清当前档位与可选档位；旧的下拉要先展开才知道有哪几档。 */}
+        <div className="settings-purge-floor" role="group" aria-label={t("purge.reasoningFloor")}>
+          {PURGE_REASONING_FLOORS.map((floor) => (
+            <button
+              key={floor}
+              type="button"
+              className={`settings-purge-floor-btn${draft.reasoning_floor === floor ? " is-active" : ""}`}
+              aria-pressed={draft.reasoning_floor === floor}
               disabled={disabled}
-              onValueChange={(value) => edit({ reasoning_floor: asReasoningFloor(value) })}
-              options={PURGE_REASONING_FLOORS.map((floor) => ({
-                value: floor,
-                label: t(PURGE_REASONING_FLOOR_LABEL_KEYS[floor]),
-              }))}
-            />
-          </div>
+              onClick={() => edit({ reasoning_floor: floor })}
+            >
+              {t(PURGE_REASONING_FLOOR_LABEL_KEYS[floor])}
+            </button>
+          ))}
         </div>
       </section>
 

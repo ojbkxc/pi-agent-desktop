@@ -202,7 +202,13 @@ export function ServerSection() {
   const [publicAccess, setPublicAccess] = useState<PublicAccessResponse | null>(null);
   const [portDraft, setPortDraft] = useState("");
   const [tokenDraft, setTokenDraft] = useState("");
+  // Token 是长 base64，粘贴后默认不可见；显示切换让用户能核对贴进去的内容。
+  const [tokenVisible, setTokenVisible] = useState(false);
   const [customUrlDraft, setCustomUrlDraft] = useState("");
+  // 模式是**草稿**：旧实现切换下拉时立即 PUT，从 quick 切到 named 时 token
+  // 还没填，服务端直接回「named tunnel needs a token」，用户看到的是一次
+  // 报错的切换。现在切模式只改本地，Token/域名填好后由「保存配置」一起提交。
+  const [modeDraft, setModeDraft] = useState<"quick" | "named">("quick");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -281,6 +287,7 @@ export function ServerSection() {
         if (!initialized.current) {
           initialized.current = true;
           setCustomUrlDraft(next.view.customUrl);
+          setModeDraft(next.view.mode);
         }
         lastLive = LIVE_STATES.has(next.view.state);
         if (lastLive) {
@@ -844,29 +851,24 @@ export function ServerSection() {
             <div className="settings-option">
               <span className="settings-option-text">
                 <span className="settings-option-title">{t("publicAccess.mode")}</span>
-                <span className="settings-option-hint">{view.mode === "quick" ? t("publicAccess.quickHint") : t("publicAccess.namedHint")}</span>
+                <span className="settings-option-hint">{modeDraft === "quick" ? t("publicAccess.quickHint") : t("publicAccess.namedHint")}</span>
               </span>
               <AppSelect
                 aria-label={t("publicAccess.mode")}
-                value={view.mode}
-                onValueChange={(next) => void call("/api/public-access", json({
-                  enabled: view.enabled,
-                  mode: next,
-                  customUrl: next === "named" ? customUrlDraft.trim() : "",
-                  ...(tokenDraft.trim() ? { token: tokenDraft.trim() } : {}),
-                }), "public-access").then((ok) => { if (ok) setTokenDraft(""); })}
+                value={modeDraft}
+                onValueChange={(next) => setModeDraft(next === "named" ? "named" : "quick")}
                 options={MODES.map((mode) => ({ value: mode, label: t(`publicAccess.${mode}`) }))}
                 disabled={busy || !publicAccess?.local}
               />
             </div>
 
-            {view.mode === "named" && (
+            {modeDraft === "named" && (
               <>
                 <label className="remote-access-step">
                   <span className="settings-option-hint">{t("publicAccess.token")}</span>
                   <input
                     className="mcp-add-input"
-                    type="password"
+                    type={tokenVisible ? "text" : "password"}
                     value={tokenDraft}
                     placeholder={view.tokenSet ? t("publicAccess.tokenSaved") : ""}
                     disabled={busy || !publicAccess?.local}
@@ -878,6 +880,15 @@ export function ServerSection() {
                     {view.tunnelId ? t("publicAccess.tokenFound", { id: view.tunnelId }) : t("publicAccess.tokenHint")}
                   </span>
                 </label>
+                {tokenDraft.length > 0 && (
+                  <ConfigButton
+                    variant="ghost"
+                    size="small"
+                    onClick={() => setTokenVisible((visible) => !visible)}
+                  >
+                    {tokenVisible ? t("publicAccess.hideToken") : t("publicAccess.showToken")}
+                  </ConfigButton>
+                )}
                 <label className="remote-access-step">
                   <span className="settings-option-hint">{t("publicAccess.customUrl")}</span>
                   <input
@@ -898,20 +909,27 @@ export function ServerSection() {
                     </span>
                   </div>
                 )}
-                <ConfigButton
-                  variant="ghost"
-                  disabled={busy || !publicAccess?.local}
-                  onClick={() => void call("/api/public-access", json({
-                    enabled: view.enabled,
-                    mode: "named",
-                    customUrl: customUrlDraft.trim(),
-                    ...(tokenDraft.trim() ? { token: tokenDraft.trim() } : {}),
-                  }), "public-access").then((ok) => { if (ok) setTokenDraft(""); })}
-                >
-                  {t("publicAccess.saveConfiguration")}
-                </ConfigButton>
               </>
             )}
+
+            {/* 保存配置始终显示：模式、Token、域名一起提交。模式切换不再
+                立即 PUT，半填的配置（尤其是 named 缺 token）不会先报错。 */}
+            <ConfigButton
+              variant="ghost"
+              disabled={busy || !publicAccess?.local || (modeDraft === "named" && !view.tokenSet && !tokenDraft.trim())}
+              onClick={() => void call("/api/public-access", json({
+                enabled: view.enabled,
+                mode: modeDraft,
+                customUrl: modeDraft === "named" ? customUrlDraft.trim() : "",
+                ...(tokenDraft.trim() ? { token: tokenDraft.trim() } : {}),
+              }), "public-access").then((ok) => {
+                if (!ok) return;
+                setTokenDraft("");
+                setNote(t("publicAccess.savedConfiguration"));
+              })}
+            >
+              {t("publicAccess.saveConfiguration")}
+            </ConfigButton>
 
             <div className="settings-option">
               <span className="settings-option-text">

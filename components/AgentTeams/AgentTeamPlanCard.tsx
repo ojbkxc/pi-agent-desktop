@@ -121,7 +121,9 @@ const S: Record<string, CSSProperties> = {
     zIndex: "var(--z-modal)",
   },
   dialog: {
-    width: "min(920px, 100%)",
+    // 920px 在宽屏上几乎横跨整个窗口，两列编辑器拉得很长；720px 刚好
+    // 容下 280px 成员列 + 432px 详情/任务列，又不至于把弹框铺满。
+    width: "min(720px, 100%)",
     maxHeight: "min(80vh, 720px)",
     overflow: "auto",
     background: "var(--bg-panel)",

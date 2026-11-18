@@ -13957,6 +13957,45 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   min-width: 128px;
 }
 
+/* 思考强度档位：五个档位全部平铺，点一下切换。旧的下拉要先展开才知道
+   有哪几档，也看不到相邻档位与当前档位的关系。 */
+.settings-purge-floor {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-purge-floor-btn {
+  border: var(--hairline) solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  padding: 6px 14px;
+  font-size: var(--fs-caption);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.settings-purge-floor-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.settings-purge-floor-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-purge-floor-btn.is-active {
+  border-color: var(--accent);
+  background: var(--bg-selected);
+  font-weight: var(--fw-semibold);
+}
+
+.settings-purge-floor-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .settings-purge-textarea {
   line-height: 1.5;
   resize: vertical;
