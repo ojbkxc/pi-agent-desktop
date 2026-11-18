@@ -114,10 +114,6 @@ export const PURGE_REASONING_FLOOR_LABEL_KEYS: Record<PurgeReasoningFloor, strin
 export const PURGE_SKILL_INJECT_LIMIT_MIN = 16;
 export const PURGE_SKILL_INJECT_LIMIT_MAX = 20_000;
 
-/** The server caps both lists the same way; the form keeps the same ceiling. */
-const PURGE_RULE_LIMIT = 200;
-const PURGE_PREFIX_LIMIT = 64;
-
 /**
  * What the form shows before the first `GET` answers — and what it falls back to
  * for any field a response leaves out. Every control stays disabled until a load
@@ -136,7 +132,9 @@ export const DEFAULT_PURGE_SETTINGS: PurgeSettings = {
   synonym_pairs: [],
   normalize_strip_prefixes: [],
   skill_dir: "",
-  skill_inject_limit: 1500,
+  // Mirrors `defaultPurgeSettings()` in lib/purge/types.ts, so a malformed or
+  // blank draft falls back to the value the server would store.
+  skill_inject_limit: 2000,
   structured_suffix: "",
 };
 
@@ -179,15 +177,19 @@ export function asReasoningFloor(raw: unknown): PurgeReasoningFloor {
  * input's draft needs (`""`, `"12abc"` and `"1e9"` all have to land somewhere).
  */
 export function clampSkillInjectLimit(raw: unknown): number {
+  // A blank draft is "no value yet", not zero: it falls back to the default
+  // instead of clamping up to the minimum.
+  if (typeof raw === "string" && raw.trim() === "") return DEFAULT_PURGE_SETTINGS.skill_inject_limit;
   const value = typeof raw === "string" ? Number(raw.trim()) : raw;
   if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_PURGE_SETTINGS.skill_inject_limit;
-  return Math.min(PURGE_SKILL_INJECT_LIMIT_MAX, Math.max(PURGE_SKILL_INJECT_LIMIT_MIN, Math.trunc(value)));
+  return Math.min(PURGE_SKILL_INJECT_LIMIT_MAX, Math.max(PURGE_SKILL_INJECT_LIMIT_MIN, Math.round(value)));
 }
 
 /**
- * Trimmed rows, empty-`from` rows dropped, capped — the normalization the API
- * applies before it writes (`normalize()` in the purge admin handler). A row a
- * user added but never filled in therefore never reaches the server.
+ * Trimmed rows with an empty-`from` row dropped — the normalization the API
+ * applies before it writes (`rulesOr` in lib/purge-settings.ts). A row the user
+ * added but never filled in therefore never reaches the server. The list is not
+ * capped: the API keeps every row, so truncating here would lose data.
  */
 export function normalizePurgeRules(raw: unknown): PurgeRule[] {
   if (!Array.isArray(raw)) return [];
@@ -197,12 +199,11 @@ export function normalizePurgeRules(raw: unknown): PurgeRule[] {
     const from = asString(item.from).trim();
     if (from === "") continue;
     rules.push({ from, to: asString(item.to).trim() });
-    if (rules.length >= PURGE_RULE_LIMIT) break;
   }
   return rules;
 }
 
-/** Trimmed non-empty prefixes, capped at the server's ceiling. */
+/** Trimmed non-empty prefixes, like the server's `prefixesOr` (uncapped). */
 export function normalizePrefixList(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   const prefixes: string[] = [];
@@ -211,7 +212,6 @@ export function normalizePrefixList(raw: unknown): string[] {
     const prefix = item.trim();
     if (prefix === "") continue;
     prefixes.push(prefix);
-    if (prefixes.length >= PURGE_PREFIX_LIMIT) break;
   }
   return prefixes;
 }
@@ -237,7 +237,7 @@ export function setPurgeToggle(
 }
 
 export function addPurgeRule(rules: readonly PurgeRule[]): PurgeRule[] {
-  return rules.length >= PURGE_RULE_LIMIT ? [...rules] : [...rules, { from: "", to: "" }];
+  return [...rules, { from: "", to: "" }];
 }
 
 export function patchPurgeRule(

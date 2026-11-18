@@ -2427,3 +2427,144 @@
     }
   }
 }
+
+/* Settings › Purge: the armor-piercing gateway console. Layout only — every
+   control in it reuses the shared General-settings primitives (option rows,
+   switches, AppSelect, chat-control inputs), so the section inherits their
+   theming in both palettes. */
+.settings-purge .settings-option-list {
+  margin-top: 8px;
+}
+
+/* The master switch gates every other one, so its label carries more weight. */
+.settings-purge-toggle.is-master .settings-option-title {
+  font-weight: var(--fw-semibold);
+}
+
+.settings-purge-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 5px;
+}
+
+.settings-purge-section-head .settings-general-heading {
+  margin: 0;
+}
+
+.settings-purge-fields {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  background: var(--bg-panel);
+  border-radius: var(--radius-md);
+}
+
+.settings-purge-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  color: var(--text);
+  font-size: var(--fs-small);
+}
+
+.settings-purge-field + .settings-purge-field {
+  border-top: var(--hairline) solid var(--separator);
+}
+
+.settings-purge-field > label {
+  font-weight: var(--fw-semibold);
+}
+
+.settings-purge-select {
+  flex-shrink: 0;
+  align-self: center;
+  min-width: 128px;
+}
+
+.settings-purge-textarea {
+  line-height: 1.5;
+  resize: vertical;
+}
+
+/* Two equal columns (a rule's source and its replacement) plus a narrow action
+   column; fixed layout keeps both inputs aligned down the whole list. */
+.settings-purge-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--fs-small);
+}
+
+.settings-purge-table th {
+  padding: 0 8px 6px 0;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-regular);
+  text-align: left;
+}
+
+.settings-purge-table td {
+  min-width: 0;
+  padding: 3px 8px 3px 0;
+  vertical-align: middle;
+}
+
+.settings-purge-table th:last-child,
+.settings-purge-table td:last-child {
+  width: 1px;
+  padding-right: 0;
+  white-space: nowrap;
+}
+
+.settings-purge-table-action {
+  text-align: right;
+}
+
+.settings-purge-empty {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+}
+
+.settings-purge-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.settings-purge-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: var(--hairline) solid var(--separator);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+}
+
+.settings-purge-stat dt {
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+}
+
+.settings-purge-stat dd {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  font-weight: var(--fw-semibold);
+  overflow-wrap: anywhere;
+}
+
+.settings-purge-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 30px;
+}
