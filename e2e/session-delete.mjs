@@ -135,9 +135,15 @@ try {
       return (Math.max(foreground,background)+0.05)/(Math.min(foreground,background)+0.05);
     });
     assert.ok(contrast>=4.5,`danger text contrast: ${contrast}`);
-    await page.keyboard.press("Tab");
     const cancel=dialog.getByRole("button",{name:locale==="en"?"Cancel":"取消",exact:true});
     const confirm=dialog.getByRole("button",{name:locale==="en"?"Delete":"删除",exact:true});
+    // The shared modal focus trap takes focus when the dialog opens and lands on
+    // the safe action, so the first Tab is not what reaches it.
+    await page.waitForFunction(
+      (label) => [...document.querySelectorAll(".chat-confirm-dialog .project-trust-footer button")]
+        .some((button) => button.textContent?.trim() === label && button === document.activeElement),
+      locale === "en" ? "Cancel" : "取消",
+    );
     assert.ok(await cancel.evaluate(el=>el===document.activeElement));
     await page.keyboard.press("Shift+Tab");
     assert.ok(await confirm.evaluate(el=>el===document.activeElement));
