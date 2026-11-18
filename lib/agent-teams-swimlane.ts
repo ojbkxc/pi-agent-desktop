@@ -1007,12 +1007,43 @@ export function layoutSwimlanes(snapshot: TeamWorkbenchSnapshot): SwimlaneLayout
   const laneByMember = new Map(lanes.map((lane) => [lane.memberId, lane]));
   const laneByName = new Map(snapshot.members.map((member) => [member.name, laneByMember.get(member.id)]));
 
+  /**
+   * The event on a lane closest to `at`, so a flow leaves and lands at the
+   * point in time it actually happened. Falls back to the lane's last event,
+   * then to the time origin — an event-less lane still gets a usable anchor.
+   */
+  const anchorOf = (lane: LaidOutLane | undefined, at: string): LaidOutEvent | undefined => {
+    if (!lane || lane.events.length === 0) return undefined;
+    const target = Date.parse(at);
+    if (!Number.isFinite(target)) return lane.events[lane.events.length - 1];
+    let best = lane.events[0];
+    let bestDelta = Number.POSITIVE_INFINITY;
+    for (const event of lane.events) {
+      const delta = Math.abs(Date.parse(event.at) - target);
+      if (Number.isFinite(delta) && delta < bestDelta) {
+        best = event;
+        bestDelta = delta;
+      }
+    }
+    return best;
+  };
+
   const flows: LaidOutFlow[] = snapshot.flows.map((flow) => {
     const sender = laneByName.get(flow.from);
     const receiver = laneByName.get(flow.to);
-    const anchor = sender?.events.find((event) => event.at === flow.at) ?? sender?.events[sender.events.length - 1];
-    const fromX = anchor ? anchor.x + anchor.width : TIME_ORIGIN;
+    const fromAnchor = anchorOf(sender, flow.at);
+    const toAnchor = anchorOf(receiver, flow.at);
+    // 起点：发送方在该时刻的事件右缘（没有事件时从时间轴原点出发）。
+    const fromX = fromAnchor ? fromAnchor.x + fromAnchor.width : TIME_ORIGIN;
     const fromY = sender ? sender.y + LANE_HEIGHT / 2 : 0;
+    // 终点：收件方在该时刻的事件左缘。**不能**用 `fromX + EVENT_SPACING`——
+    // 那个值只与发送方有关，收件方在第几列、是否在同一时刻，它一概不知，
+    // 画出来是一小段悬空的弧线，谁也不连（「消息传递/流水线」看不清的真因）。
+    // 收件方没事件时落到该泳道在当前时刻的下一格，至少保证箭头指向收件方。
+    const toX = toAnchor
+      ? toAnchor.x
+      : Math.max(fromX + EVENT_SPACING / 2, TIME_ORIGIN + EVENT_SPACING / 2);
+    const toY = receiver ? receiver.y + LANE_HEIGHT / 2 : fromY;
     return {
       from: flow.from,
       to: flow.to,
@@ -1020,8 +1051,8 @@ export function layoutSwimlanes(snapshot: TeamWorkbenchSnapshot): SwimlaneLayout
       text: flow.text,
       fromX,
       fromY,
-      toX: fromX + EVENT_SPACING,
-      toY: receiver ? receiver.y + LANE_HEIGHT / 2 : fromY,
+      toX,
+      toY,
     };
   });
 

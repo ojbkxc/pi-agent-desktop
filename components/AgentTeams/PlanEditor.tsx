@@ -205,7 +205,7 @@ const S = {
   h4: { fontSize: "var(--fs-caption)", fontWeight: "var(--fw-semibold)", color: "var(--text-muted)", margin: "0 0 6px" },
   field: { display: "flex", flexDirection: "column", gap: 4, minWidth: 0 },
   label: { fontSize: "var(--fs-micro)", color: "var(--text-muted)" },
-  batch: { marginTop: 12, padding: 10, borderRadius: 10, background: "var(--bg-subtle, var(--bg-panel))", display: "flex", flexDirection: "column", gap: 8 },
+  batch: { marginTop: 10, padding: "8px 10px", borderRadius: 10, background: "var(--bg-subtle, var(--bg-panel))", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" },
   taskRow: { display: "grid", gap: 8, gridTemplateColumns: "minmax(0,1fr) minmax(160px, 220px)", alignItems: "start", padding: "6px 0", borderTop: "1px solid var(--border)" },
   taskRowNarrow: { display: "grid", gap: 6, gridTemplateColumns: "minmax(0, 1fr)", alignItems: "start", padding: "6px 0", borderTop: "1px solid var(--border)" },
   footer: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12, flexWrap: "wrap" },
@@ -219,7 +219,10 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
   // dialog 出现横向滚动（interaction.md P2 #4）。与 useIsMobile 的 640 不同——
   // 这里是编辑器网格本身的断点，720 以下是「两列一定不够用」的宽度。
   const columns = planEditorColumns(useNarrowEditorGrid());
-  const catalog = useModelCatalog();
+  // cwd 必须传下去：不带 cwd 时 `/api/models` 退回**进程** cwd（打包版是
+  // `resources/server`，不在文件白名单里）→ 400 → 目录为空，「已选 N 名」旁边的
+  // 模型下拉一个选项都没有。
+  const catalog = useModelCatalog(cwd);
   const [draft, setDraft] = useState(() => draftFromPlan(plan));
   const [activeMemberId, setActiveMemberId] = useState<string | null>(plan.members[0]?.id ?? null);
   const [selected, setSelected] = useState<string[]>([]);
@@ -409,15 +412,22 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
 
           {editable && (
             <div style={S.batch} data-testid="team-plan-batch">
-              <p style={{ ...S.label, margin: 0 }}>{t("teams.plan.selectedCount", { count: selected.length })}</p>
-              <AppSelect
-                aria-label={t("teams.plan.batch")}
-                value={batchRef}
-                onValueChange={setBatchRef}
-                options={[{ value: "", label: t("teams.plan.batchPick") }, ...modelOptions]}
-                disabled={selected.length === 0 || catalog.loading}
-              />
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {/* 单行紧凑布局：原来「已选 N 名」标题占一整行、下拉与三个按钮各占一行，
+                  卡片在 720px 以下要占三行高度。现在计数→下拉→按钮排成一条，宽度不足
+                  时按钮组整体换行。 */}
+              <span style={{ ...S.label, margin: 0, whiteSpace: "nowrap" }}>
+                {t("teams.plan.selectedCount", { count: selected.length })}
+              </span>
+              <div style={{ flex: "1 1 160px", minWidth: 140 }}>
+                <AppSelect
+                  aria-label={t("teams.plan.batch")}
+                  value={batchRef}
+                  onValueChange={setBatchRef}
+                  options={[{ value: "", label: t("teams.plan.batchPick") }, ...modelOptions]}
+                  disabled={selected.length === 0 || catalog.loading}
+                />
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", flex: "0 1 auto" }}>
                 <ConfigButton size="small" disabled={selected.length === 0 || !batchRef} onClick={applyBatch}>
                   {t("teams.plan.applyBatch")}
                 </ConfigButton>

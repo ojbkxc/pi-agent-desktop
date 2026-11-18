@@ -1,8 +1,16 @@
 "use client";
 
-// Fork-owned: the composer's session (gear) menu — manual compaction plus pi 0.86's
-// session automation switches. ChatInput (upstream-owned) keeps the open state and
-// ref (its outside-click handler closes every composer menu) and mounts this.
+// Fork-owned: the composer's session (gear) menu — pi 0.86's session automation
+// switches. ChatInput (upstream-owned) keeps the open state and ref (its
+// outside-click handler closes every composer menu) and mounts this.
+//
+// Manual compaction and the auto-compaction switch live in the context-usage
+// popover instead (`ContextUsageRing`): both answer "what happens to my
+// context", and having a second Compact row here meant two entry points for one
+// action, plus a threshold quoted in the popover that could not be changed
+// where it was shown. The switch stays here too — it is a session-automation
+// setting (`chat.autoCompaction` is fork-owned by this file, see
+// `components/fork-extractions.test.mjs`), so both surfaces toggle one state.
 
 import type { RefObject } from "react";
 import type { SessionAutomation, SessionAutomationChange } from "@/hooks/useSessionAutomation";
@@ -17,14 +25,20 @@ interface SessionAutomationMenuProps {
   /** Known automation values; undefined while a new session has none yet. */
   automation?: SessionAutomation;
   onSetAutomation?: (change: SessionAutomationChange) => void;
-  /** Offered only while a manual compaction can start now. */
+  /** Retained for call-site compatibility; manual compaction now lives in the usage popover. */
   onCompact?: () => void;
 }
 
 export function SessionAutomationMenu({
-  menuRef, open, onOpenChange, alignLeft, automation, onSetAutomation, onCompact,
+  menuRef, open, onOpenChange, alignLeft, automation, onSetAutomation,
 }: SessionAutomationMenuProps) {
   const { t } = useI18n();
+  const hasAnyRow = Boolean(onSetAutomation && automation && (
+    automation.autoCompactionEnabled !== null
+    || automation.autoRetryEnabled !== null
+    || automation.steeringMode !== null
+    || automation.followUpMode !== null
+  ));
   return (
     <div ref={menuRef} style={{ position: "relative" }}>
       <button
@@ -33,6 +47,7 @@ export function SessionAutomationMenu({
         title={t("chat.sessionAutomation")}
         aria-label={t("chat.sessionAutomation")}
         aria-expanded={open}
+        disabled={!hasAnyRow}
         style={{
           display: "flex", alignItems: "center", justifyContent: "center",
           width: 32,
@@ -40,7 +55,8 @@ export function SessionAutomationMenu({
           padding: 0,
           background: open ? "var(--bg-hover)" : "none",
           border: "none", borderRadius: "var(--radius-md)",
-          color: "var(--text-muted)", cursor: "pointer", fontSize: "var(--fs-caption)",
+          color: "var(--text-muted)", cursor: hasAnyRow ? "pointer" : "default",
+          opacity: hasAnyRow ? 1 : 0.45,
           transition: "background var(--dur-fast) var(--ease-native), color var(--dur-fast) var(--ease-native)",
         }}
       >
@@ -49,7 +65,7 @@ export function SessionAutomationMenu({
           <path d="M13 2 4.5 13.5H12L11 22l8.5-11.5H12L13 2Z" />
         </svg>
       </button>
-      {open && (
+      {open && hasAnyRow && (
         <div className="native-popover app-menu" style={{
           position: "absolute",
           bottom: "calc(100% + 6px)",
@@ -58,28 +74,6 @@ export function SessionAutomationMenu({
           borderRadius: "var(--radius-md)", boxShadow: "var(--shadow-popover)",
           padding: "6px 0", minWidth: 230,
         }}>
-          {onCompact && (
-            <div>
-              <button
-                type="button"
-                className="composer-menu-row"
-                title={t("chat.compactContext")}
-                onClick={() => {
-                  onOpenChange(() => false);
-                  onCompact();
-                }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <polyline points="4 14 10 14 10 20" /><polyline points="20 10 14 10 14 4" />
-                  <line x1="10" y1="14" x2="3" y2="21" /><line x1="21" y1="3" x2="14" y2="10" />
-                </svg>
-                <span style={{ flex: 1 }}>{t("chat.compactContext")}</span>
-              </button>
-            </div>
-          )}
-          {onCompact && automation && (
-            <div style={{ height: 0, margin: "5px 0", borderTop: "var(--hairline) solid var(--separator)" }} />
-          )}
           {onSetAutomation && automation && (<>
           {automation.autoCompactionEnabled !== null && (
             <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", fontSize: "var(--fs-caption)", cursor: "pointer" }}>

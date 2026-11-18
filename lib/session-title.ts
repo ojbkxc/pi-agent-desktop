@@ -10,6 +10,7 @@ import {
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { stripAgentTeamRequest } from "./agent-team-request";
 
 const TITLE_TIMEOUT_MS = 90_000;
 const TITLE_MAX_TOKENS = 256;
@@ -185,7 +186,16 @@ function lineForMessage(message: AgentMessage, lastAssistant?: AgentMessage): st
   if (message.role !== "user" && message.role !== "assistant") return undefined;
   const text = textOf(message.content).trim();
   if (!text) return undefined;
-  if (message.role === "user") return `User: ${clip(text, USER_CHARS)}`;
+  if (message.role === "user") {
+    // The composer's Agent Team switch prepends a fixed instruction block to the
+    // turn it is armed for. Title the session after what the user asked, not
+    // after "Use an Agent Team for this request…" — that block is identical in
+    // every armed turn, so without this every team session reads the same.
+    const { content } = stripAgentTeamRequest(text);
+    const asked = content.trim();
+    if (!asked) return undefined;
+    return `User: ${clip(asked, USER_CHARS)}`;
+  }
   return `Assistant: ${clip(text, message === lastAssistant ? LAST_ASSISTANT_CHARS : ASSISTANT_CHARS)}`;
 }
 

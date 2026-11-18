@@ -3300,6 +3300,14 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               onCompact={canCompactNow ? onCompact : undefined}
               onAbortCompaction={onAbortCompaction}
               isCompacting={isCompacting}
+              // The auto-compaction switch moved here from the session menu: the
+              // popover already quotes the threshold it controls.
+              autoCompaction={automation && automation.autoCompactionEnabled !== null && onSetAutomation
+                ? {
+                  enabled: automation.autoCompactionEnabled,
+                  onChange: (next: boolean) => onSetAutomation({ autoCompaction: next }),
+                }
+                : null}
             />
           </div>
 

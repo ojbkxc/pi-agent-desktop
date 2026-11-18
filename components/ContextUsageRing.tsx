@@ -34,6 +34,13 @@ interface ContextUsageRingProps {
   onCompact?: () => void;
   onAbortCompaction?: () => void;
   isCompacting?: boolean;
+  /**
+   * Auto-compaction switch. It lives here rather than in the session-automation
+   * menu because the threshold this popover quotes ("auto-compacts at N%") is
+   * exactly what the switch controls — quoting it somewhere the user cannot
+   * change it was the confusing half of having two compaction entry points.
+   */
+  autoCompaction?: { enabled: boolean; onChange: (next: boolean) => void } | null;
 }
 
 /**
@@ -43,8 +50,9 @@ interface ContextUsageRingProps {
  * The arc shows live context-window fullness in a single accent color and turns
  * red at the high-risk threshold (≥90%). The popover repeats the percentage,
  * shows the token counts, quotes the **trigger this session actually resolved**
- * (the compaction policy's, not a hard-coded share) and offers a manual
- * compaction. Hover keeps the plain title so a glance needs no click.
+ * (the compaction policy's, not a hard-coded share), offers a manual
+ * compaction, and hosts the auto-compaction switch that governs that threshold.
+ * Hover keeps the plain title so a glance needs no click.
  *
  * When there is no context usage yet (no session, or nothing has run), the ring
  * renders dimmed and inert — no dead "Context usage" tooltip.
@@ -57,6 +65,7 @@ export function ContextUsageRing({
   onCompact,
   onAbortCompaction,
   isCompacting = false,
+  autoCompaction = null,
 }: ContextUsageRingProps) {
   const { t } = useI18n();
   const popoverId = useId();
@@ -241,13 +250,27 @@ export function ContextUsageRing({
           </div>
           <div className="ctx-usage-trigger">
             {triggerPercent !== null && trigger !== null
-              ? t("chat.ctxAutoCompactAt", { percent: triggerPercent, tokens: fmtTokens(trigger) })
+              ? autoCompaction && !autoCompaction.enabled
+                // The switch is off: say that, not "auto-compacts at N%" — the
+                // trigger is only a fact while automatic compaction is armed.
+                ? t("chat.ctxAutoCompactOff")
+                : t("chat.ctxAutoCompactAt", { percent: triggerPercent, tokens: fmtTokens(trigger) })
               : t("chat.ctxTriggerUnknown")}
           </div>
           {compactionLimits?.keepRecentTokens ? (
             <div className="ctx-usage-kept">
               {t("chat.ctxKeepRecent", { tokens: fmtTokens(compactionLimits.keepRecentTokens) })}
             </div>
+          ) : null}
+          {autoCompaction ? (
+            <label className="ctx-usage-auto">
+              <input
+                type="checkbox"
+                checked={autoCompaction.enabled}
+                onChange={(event) => autoCompaction.onChange(event.target.checked)}
+              />
+              <span>{t("chat.autoCompaction")}</span>
+            </label>
           ) : null}
           <div className="ctx-usage-actions">
             {onCompact ? (

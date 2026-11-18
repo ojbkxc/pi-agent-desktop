@@ -3116,6 +3116,7 @@ export function AppShell() {
             teamName={openedTeamName ?? undefined}
             initialTeamName={openedTeamName ?? undefined}
             sourceSessionId={selectedSession?.id ?? null}
+            sessionCwd={selectedSession?.cwd ?? null}
             onRequestClose={closeWorkspaceView}
             onOpenSession={(sessionId) => void handleOpenSession(sessionId)}
           />

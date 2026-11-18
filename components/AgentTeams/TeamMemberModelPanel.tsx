@@ -101,6 +101,11 @@ export interface TeamMemberModelPanelProps {
   onClose: () => void;
   /** 至少一个成员成功（applied/saved）后回调，父级可借此刷新。 */
   onApplied?: () => void;
+  /**
+   * 会话 cwd（`/api/models?cwd=` 用）。缺它时路由退回**进程** cwd，而打包版进程 cwd
+   * 是 `resources/server`（不在文件白名单里）→ 400 → 模型目录为空，选择器一个模型都没有。
+   */
+  cwd?: string | null;
 }
 
 /**
@@ -114,9 +119,10 @@ export function TeamMemberModelPanel({
   mode,
   onClose,
   onApplied,
+  cwd = null,
 }: TeamMemberModelPanelProps) {
   const { t } = useI18n();
-  const { catalog, loading, error } = useModelCatalog();
+  const { catalog, loading, error } = useModelCatalog(cwd);
   const panelRef = useRef<HTMLDivElement>(null);
   const [ids, setIds] = useState<string[]>(memberIds);
   const [modelRef, setModelRef] = useState<string | null>(null);

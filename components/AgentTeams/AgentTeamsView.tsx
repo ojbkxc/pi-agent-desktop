@@ -151,6 +151,12 @@ interface Props {
   onRequestClose?: () => void;
   /** 打开某成员会话（可选）。 */
   onOpenSession?: (sessionId: string) => void;
+  /**
+   * 来源会话的 cwd（`/api/models?cwd=` 用）。缺它时路由退回**进程** cwd，而打包版的
+   * 进程 cwd 是 `resources/server`，永远不在文件白名单里 → 400 → 模型目录为空，
+   * 「换模型」下拉里一个模型都没有。
+   */
+  sessionCwd?: string | null;
 }
 
 /**
@@ -163,6 +169,7 @@ export function AgentTeamsView({
   sourceSessionId,
   onRequestClose,
   onOpenSession,
+  sessionCwd,
 }: Props) {
   const { t, locale } = useI18n();
   const [teams, setTeams] = useState<TeamSummary[]>([]);
@@ -615,6 +622,7 @@ export function AgentTeamsView({
                   members={snapshot.members.map((member) => ({ id: member.id, name: member.name }))}
                   memberIds={modelPanel.memberIds}
                   mode={modelPanel.mode}
+                  cwd={sessionCwd ?? null}
                   onClose={() => setModelPanel(null)}
                 />
               )}
@@ -629,13 +637,34 @@ export function AgentTeamsView({
                     style={{ width: layout.width, height: layout.height, minWidth: layout.width }}
                   >
                     <svg className="agent-teams-flows" width={layout.width} height={layout.height} aria-hidden="true">
-                      {layout.flows.map((flow, index) => (
-                        <path
-                          key={`${flow.from}-${flow.to}-${index}`}
-                          className={`agent-teams-flow agent-teams-flow--${flow.kind}`}
-                          d={`M ${flow.fromX} ${flow.fromY} C ${flow.fromX + 40} ${flow.fromY}, ${flow.toX - 40} ${flow.toY}, ${flow.toX} ${flow.toY}`}
-                        />
-                      ))}
+                      {/* 箭头：连线必须有个明确去向，否则「谁发给谁」还得靠颜色猜。
+                          marker 定义在这个 svg 内部，按 kind 各一个，避免跨组件 id 冲突。 */}
+                      <defs>
+                        <marker id="agent-teams-arrow-message" viewBox="0 0 10 10" refX="9" refY="5"
+                          markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                          <path d="M 0 0 L 10 5 L 0 10 z" className="agent-teams-arrow agent-teams-arrow--message" />
+                        </marker>
+                        <marker id="agent-teams-arrow-report" viewBox="0 0 10 10" refX="9" refY="5"
+                          markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                          <path d="M 0 0 L 10 5 L 0 10 z" className="agent-teams-arrow agent-teams-arrow--report" />
+                        </marker>
+                      </defs>
+                      {layout.flows.map((flow, index) => {
+                        // 终点在起点右侧（时间更晚）用四段 S 曲线；终点在左侧时弧线会
+                        // 反折，C 控制点的水平偏移必须跟着换向，否则曲线绕成一个环。
+                        const span = flow.toX - flow.fromX;
+                        const bend = Math.max(24, Math.min(Math.abs(span) / 2, 120));
+                        const c1 = flow.fromX + (span >= 0 ? bend : -bend);
+                        const c2 = flow.toX - (span >= 0 ? bend : -bend);
+                        return (
+                          <path
+                            key={`${flow.from}-${flow.to}-${index}`}
+                            className={`agent-teams-flow agent-teams-flow--${flow.kind}`}
+                            d={`M ${flow.fromX} ${flow.fromY} C ${c1} ${flow.fromY}, ${c2} ${flow.toY}, ${flow.toX} ${flow.toY}`}
+                            markerEnd={`url(#agent-teams-arrow-${flow.kind})`}
+                          />
+                        );
+                      })}
                     </svg>
                     {layout.lanes.map((lane) => (
                       <div key={lane.memberId} className="agent-teams-lane" style={{ top: lane.y, height: lane.height }}>

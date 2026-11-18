@@ -3592,6 +3592,24 @@ html:not(.dark) .session-item.is-selected .session-item-time {
   color: var(--text-dim);
 }
 
+/* Auto-compaction switch. Same row geometry as the hint lines above it, with
+   the checkbox on the left so the popover stays a single reading column. */
+.ctx-usage-auto {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--fs-caption);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.ctx-usage-auto input {
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 .ctx-usage-actions {
   display: flex;
   flex-direction: column;
@@ -11076,9 +11094,30 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   stroke: var(--border);
   stroke-width: 1.5;
   opacity: 0.9;
+  /* 虚线 + 流动：消息/交付是一次「传递」，静止的实线读不出方向与进度。
+     dash 周期与动画时长绑定，改 stroke-dasharray 时同步改 keyframes。 */
+  stroke-dasharray: 6 5;
+  animation: agent-teams-flow-dash 1.6s linear infinite;
 }
 
 .agent-teams-flow--report { stroke: var(--success); }
+
+@keyframes agent-teams-flow-dash {
+  from { stroke-dashoffset: 22; }
+  to { stroke-dashoffset: 0; }
+}
+
+.agent-teams-arrow {
+  fill: var(--border);
+  stroke: none;
+}
+
+.agent-teams-arrow--report { fill: var(--success); }
+
+/* 减少动态效果：不流动，保留方向（虚线仍在，只是静止）。 */
+@media (prefers-reduced-motion: reduce) {
+  .agent-teams-flow { animation: none; stroke-dashoffset: 0; }
+}
 
 .agent-teams-lane {
   position: absolute;
