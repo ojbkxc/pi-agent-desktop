@@ -418,7 +418,9 @@ try {
     assert.equal(processText.split("E2E final reasoning").length - 1, 1);
     assert.ok(!(await finalMessage.last().innerText()).includes("E2E final reasoning"));
     await page.getByText("echo E2E tool output", { exact: true }).waitFor();
-    await page.getByRole("button", { name: /bash.*echo E2E tool output/ }).click();
+    // Tool cards now lead with the localised verb ("Run"), not the raw tool name
+    // (cc-haha's shape), so locate the card by its preview text alone.
+    await page.getByRole("button", { name: /echo E2E tool output/ }).click();
     await page.getByText("E2E tool output", { exact: true }).waitFor();
     await page.goto(`${base}/?session=${COMPACTED}`, { waitUntil: "domcontentloaded" });
     const heading = page.getByRole("heading", { name: "E2E compacted heading", exact: true });
