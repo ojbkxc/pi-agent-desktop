@@ -17,6 +17,7 @@ const FORK_MESSAGE_PATCHES: Record<Locale, {
   "en": {
     "set": {
       "chat.conversationNavigatorHint": "Turn {current} of {total} · hover to preview, click or use ↑↓ to jump",
+      "chat.sessionTitle.label": "Session title",
       "chat.toolPresetName.configured": "Settings default",
       "chat.toolPresetName.chat-only": "Chat only",
       "chat.toolPresetName.read-only": "Read-only",
@@ -1763,6 +1764,7 @@ const FORK_MESSAGE_PATCHES: Record<Locale, {
   "zh-CN": {
     "set": {
       "chat.conversationNavigatorHint": "第 {current} / {total} 轮 · 悬停预览，点击或按 ↑↓ 跳转",
+      "chat.sessionTitle.label": "会话标题",
       "chat.toolPresetName.configured": "跟随设置",
       "chat.toolPresetName.chat-only": "仅聊天",
       "chat.toolPresetName.read-only": "只读",
@@ -3513,6 +3515,7 @@ const FORK_MESSAGE_PATCHES: Record<Locale, {
   "zh-TW": {
     "set": {
       "chat.conversationNavigatorHint": "第 {current} / {total} 輪 · 懸停預覽，點擊或按 ↑↓ 跳轉",
+      "chat.sessionTitle.label": "會話標題",
       "chat.toolPresetName.configured": "跟隨設定",
       "chat.toolPresetName.chat-only": "僅聊天",
       "chat.toolPresetName.read-only": "唯讀",

@@ -18,6 +18,7 @@ import { MarkdownBody } from "./MarkdownBody";
 import { ChatInput, getUserMessageDraftImages, getUserMessageText, type ChatInputHandle } from "./ChatInput";
 import { AgentTeamPlanCard } from "./AgentTeams/AgentTeamPlanCard";
 import { GoalStrip } from "./AgentTeams/GoalStrip";
+import { SessionTitleStrip } from "./AgentTeams/SessionTitleStrip";
 import { OutageBanner } from "./OutageBanner";
 import { useTeamPlan } from "@/hooks/useTeamPlan";
 import { agentTeamScopeKey } from "@/hooks/useAgentTeamsEnabled";
@@ -1489,6 +1490,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
             各自返回 null，不留空位；这里只负责与消息列一致的居中内边距。 */}
         <div style={{ flexShrink: 0, padding: `0 ${CHAT_COLUMN_PADDING}px`, display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ width: "100%", maxWidth: "var(--chat-content-max-width, 820px)", margin: "0 auto" }}>
+            <SessionTitleStrip session={session} compact={isMobile} />
             <GoalStrip goal={goalState.goal} isRunning={sessionRunning} compact={isMobile} />
             {teamStrip}
             <OutageBanner sessionId={session?.id ?? null} />

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type CSSProperties, type Ref } from "react";
+import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
 import { useModalDismiss } from "@/hooks/useModalDismiss";
 import type { TranslationParams } from "@/lib/i18n/types";
@@ -115,9 +116,10 @@ const S: Record<string, CSSProperties> = {
     justifyContent: "center",
     padding: 16,
     // 层叠令牌，不用 literal 60：60 < 顶栏 --z-chrome=90，于是 backdrop 与对话框
-    // 顶带被顶栏盖住，aria-modal 期间顶栏仍可点。卡片挂在聊天列（不在 .scheduled-view
-    // 的 z 30 上下文里，也未被任何祖先 overflow 裁切——overlay 是 inset:0 的 fixed），
-    // 所以无需门户，换成 --z-modal 令牌即与全局对话框同层。
+    // 顶带被顶栏盖住，aria-modal 期间顶栏仍可点。卡片挂载处（ChatWindow 的 composer
+    // 上方包装层）带 overflow 会裁切 fixed 子元素，所以 AgentTeamPlanCard 在 `open`
+    // 时把整棵 modal 树 createPortal 到 document.body（脱掉裁剪上下文），这里只需
+    // 与全局对话框同层。
     zIndex: "var(--z-modal)",
   },
   dialog: {
@@ -456,36 +458,43 @@ export function AgentTeamPlanCard({
           {error}
         </p>
       ) : null}
-      {open
-        ? planModalView(t, plan, {
-            busy,
-            onApprove,
-            onClose: () => setOpen(false),
-            onRequestClose: requestClose,
-            onDiscard: discardAndClose,
-            onCancelDiscard: () => setDiscardPrompt(false),
-            discardPrompt,
-            panelRef,
-            editor: true,
-            cwd,
-            saving,
-            saveError,
-            conflict,
-            dirty,
-            approveError,
-            onDirtyChange: setDirty,
-            ...(onStop
-              ? {
-                  onStop: () => {
-                    setStoppingPlanId(plan.planId);
-                    onStop();
-                  },
-                }
-              : {}),
-            stopping: stoppingPlanId === plan.planId,
-            ...(onSave ? { onSave } : {}),
-            ...(onReload ? { onReload } : {}),
-          })
+      {open && typeof document !== "undefined"
+        ? // Portal 到 body：卡片挂在 composer 上方的包装层里，那一层带
+          // `overflow-y: auto`（ChatWindow 限高 45dvh/440px），fixed 遮罩会被它
+          // 裁切——遮罩只盖住那条窄带、对话框被切掉大半。脱到 body 才与全屏
+          // 对话框同层（--z-modal），遮罩覆盖全视口、弹框完整居中。
+          createPortal(
+            planModalView(t, plan, {
+              busy,
+              onApprove,
+              onClose: () => setOpen(false),
+              onRequestClose: requestClose,
+              onDiscard: discardAndClose,
+              onCancelDiscard: () => setDiscardPrompt(false),
+              discardPrompt,
+              panelRef,
+              editor: true,
+              cwd,
+              saving,
+              saveError,
+              conflict,
+              dirty,
+              approveError,
+              onDirtyChange: setDirty,
+              ...(onStop
+                ? {
+                    onStop: () => {
+                      setStoppingPlanId(plan.planId);
+                      onStop();
+                    },
+                  }
+                : {}),
+              stopping: stoppingPlanId === plan.planId,
+              ...(onSave ? { onSave } : {}),
+              ...(onReload ? { onReload } : {}),
+            }),
+            document.body,
+          )
         : null}
     </section>
   );
