@@ -436,7 +436,7 @@ function ProviderDetail({ name, editingName, provider, onChange, onEditingNameCh
         )}
       </Field>
 
-      <Field label="Base URL">
+      <Field label={t("models.fieldBaseUrl")}>
         <TextInput value={provider.baseUrl ?? ""} onChange={(v) => set("baseUrl", v || undefined)}
           placeholder="https://api.example.com/v1" mono />
         <span style={{ fontSize: "var(--fs-micro)", color: "var(--text-dim)", marginTop: 2 }}>
@@ -444,19 +444,21 @@ function ProviderDetail({ name, editingName, provider, onChange, onEditingNameCh
         </span>
       </Field>
 
-      <Field label="API Key">
+      <Field label={t("models.fieldApiKey")}>
         <SecretTextInput value={provider.apiKey ?? ""} onChange={(v) => set("apiKey", v || undefined)}
           placeholder="ENV_VAR_NAME, !shell-command, or literal key" mono />
         <span style={{ fontSize: "var(--fs-micro)", color: "var(--text-dim)", marginTop: 2 }}>
-          Prefix with <code style={{ fontFamily: "var(--font-mono)" }}>!</code> to run a shell command, or use an env var name
+          {t("models.apiKeyHintBefore")}
+          <code style={{ fontFamily: "var(--font-mono)" }}>!</code>
+          {t("models.apiKeyHintAfter")}
         </span>
       </Field>
 
-      <Field label="API">
-        <Select label="API" value={provider.api ?? "openai-completions"} onChange={(v) => set("api", v)} options={API_OPTIONS} required />
+      <Field label={t("models.fieldApi")}>
+        <Select label={t("models.fieldApi")} value={provider.api ?? "openai-completions"} onChange={(v) => set("api", v)} options={API_OPTIONS} required />
       </Field>
 
-      <Field label="Headers">
+      <Field label={t("models.fieldHeaders")}>
         <HeaderListEditor
           headers={provider.headers}
           onChange={(headers) => set("headers", headers)}
@@ -1173,8 +1175,8 @@ function ModelDetail({
       </ConfigDetailHeader>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <Field label="ID *"><TextInput value={model.id} onChange={(v) => set("id", v)} placeholder="model-id" mono /></Field>
-        <Field label="Name"><TextInput value={model.name ?? ""} onChange={(v) => set("name", v || undefined)} placeholder="Display name" /></Field>
+        <Field label={`${t("models.fieldId")} *`}><TextInput value={model.id} onChange={(v) => set("id", v)} placeholder="model-id" mono /></Field>
+        <Field label={t("models.fieldName")}><TextInput value={model.name ?? ""} onChange={(v) => set("name", v || undefined)} placeholder={t("models.fieldName")} /></Field>
       </div>
 
       <div style={{ padding: "2px 0" }}>
