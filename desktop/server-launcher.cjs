@@ -232,17 +232,23 @@ if (typeof process.dlopen === "function") {
 // (chalk, undici, …) are a normal npm layout and are deliberately left alone.
 try {
   const scopeDir = path.join(__dirname, "node_modules", "@earendil-works");
-  for (const pkg of fs.readdirSync(scopeDir, { withFileTypes: true })) {
-    if (!pkg.isDirectory()) continue;
-    const nestedScopeDir = path.join(scopeDir, pkg.name, "node_modules", "@earendil-works");
-    if (!fs.existsSync(nestedScopeDir)) continue;
-    for (const entry of fs.readdirSync(nestedScopeDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      fs.rmSync(path.join(nestedScopeDir, entry.name), { recursive: true, force: true });
-      console.error(
-        `[Pi Agent] removed stale ${pkg.name}/node_modules/@earendil-works/${entry.name} ` +
-          `left behind by an overwrite install (see issue #72)`,
-      );
+  // An in-progress or partial install can leave node_modules incomplete (the
+  // launcher then dies on its own "Cannot find module" anyway). A missing
+  // scope dir means there is nothing to clean, not a cleanup failure — probe
+  // before readdir so that case stays quiet instead of logging ENOENT noise.
+  if (fs.existsSync(scopeDir)) {
+    for (const pkg of fs.readdirSync(scopeDir, { withFileTypes: true })) {
+      if (!pkg.isDirectory()) continue;
+      const nestedScopeDir = path.join(scopeDir, pkg.name, "node_modules", "@earendil-works");
+      if (!fs.existsSync(nestedScopeDir)) continue;
+      for (const entry of fs.readdirSync(nestedScopeDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        fs.rmSync(path.join(nestedScopeDir, entry.name), { recursive: true, force: true });
+        console.error(
+          `[Pi Agent] removed stale ${pkg.name}/node_modules/@earendil-works/${entry.name} ` +
+            `left behind by an overwrite install (see issue #72)`,
+        );
+      }
     }
   }
 } catch (cleanupError) {

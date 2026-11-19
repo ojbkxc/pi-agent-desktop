@@ -52,3 +52,22 @@ test("the launcher logs the first request, its response and event-loop stalls", 
   // Only the first request is reported.
   assert.equal(log.match(/first request/g).length, 1);
 });
+
+// #72 cleanup must stay quiet when there is nothing to clean. A partial or
+// in-progress install leaves no node_modules/@earendil-works at all; that is
+// not a cleanup failure, and logging ENOENT there drowned real server errors
+// in the startup log.
+test("the stale-dependency cleanup stays quiet when the scope directory is absent", async (t) => {
+  const dir = await mkdtemp(join(os.tmpdir(), "pi-launcher-cleanup-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await copyFile(join(rootDir, "desktop", "server-launcher.cjs"), join(dir, "desktop-server.cjs"));
+  await writeFile(join(dir, "server.js"), "setTimeout(() => process.exit(0), 50);\n");
+
+  const result = spawnSync(process.execPath, [join(dir, "desktop-server.cjs")], {
+    env: { ...process.env, PI_WEB_PARENT_PID: String(process.pid) },
+    encoding: "utf8",
+    timeout: 15_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /stale-dependency cleanup failed/);
+});
