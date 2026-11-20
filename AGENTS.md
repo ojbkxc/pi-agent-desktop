@@ -238,6 +238,11 @@ hooks/
                            prompt, `save()` PATCHes member/task edits (409 → reload prompt)
   useGoalState.ts          /goal strip data: 2s poll while the goal is active, paused while the
                            tab is hidden, refreshed once per new message otherwise
+
+scripts/
+  sync-purge-presets.mjs   build gate for the purge preset library: reads the sibling `jailbreaks`
+                           checkout and rebuilds `assets/purge-presets/**` + `lib/purge/preset-catalog.ts`;
+                           `--check` is the idempotency gate (see docs/agents/fork-purge-presets.md)
 ```
 
 ---
