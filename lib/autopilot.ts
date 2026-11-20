@@ -10,7 +10,7 @@ import { getPiWebSettingsPath, readStored, updatePiWebSettings } from "./artifac
  * reader see one source of truth.
  */
 export interface AutopilotSettings {
-  /** Master switch. Off by default: unattended work spends tokens and changes files. */
+  /** Master switch. On by default per the user's request. */
   enabled: boolean;
   /** Auto-approve a team plan the autopilot itself started. Manual sessions still review. */
   autoApproveTeamPlans: boolean;
@@ -21,7 +21,7 @@ export interface AutopilotSettings {
 }
 
 export const AUTOPILOT_DEFAULTS: AutopilotSettings = {
-  enabled: false,
+  enabled: true,
   autoApproveTeamPlans: true,
   autoFixFailedRuns: true,
   maxAutoFixRounds: 12,
@@ -39,7 +39,8 @@ export function readAutopilotSettings(settingsPath = getPiWebSettingsPath()): Au
   try {
     stored = readStored(settingsPath);
   } catch {
-    // An unreadable settings file must not turn unattended work on by accident.
+    // An unreadable settings file keeps the default (on), so unattended work
+    // does not silently stop because the file is mid-write.
     return settings;
   }
   const raw = stored.autopilot;

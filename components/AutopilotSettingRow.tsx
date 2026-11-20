@@ -18,7 +18,7 @@ export function AutopilotSettingRow() {
       label={t("settings.autopilot")}
       hint={t("settings.autopilotHint")}
       failedHint={t("settings.autopilotFailed")}
-      defaultEnabled={false}
+      defaultEnabled={true}
     />
   );
 }
