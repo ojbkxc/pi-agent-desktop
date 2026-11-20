@@ -60,6 +60,19 @@ export function isLeadIdentity(value: string, snapshot: TeamWorkbenchSnapshot): 
   return resolveMember(snapshot, value).isLead;
 }
 
+/**
+ * 参与者名字可点开的判据与回调：只有父级提供了 `onOpenMember`、且该参与者解析到
+ * roster 里的成员、且该成员有 `sessionId` 时，才返回打开它的处理器；否则返回
+ * undefined（保持纯文本，行为与未接入时一致）。
+ */
+export function memberOpenHandler(
+  member: WorkbenchMember | null | undefined,
+  onOpenMember?: (member: WorkbenchMember) => void,
+): (() => void) | undefined {
+  if (!onOpenMember || !member || !member.sessionId) return undefined;
+  return () => onOpenMember(member);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 正文解析
 // ─────────────────────────────────────────────────────────────────────────────

@@ -17,14 +17,15 @@ const jiti = createJiti(import.meta.url, {
   tsconfigPaths: true,
 });
 const { AgentTeamsCommunicationFeed } = await jiti.import("./AgentTeamsCommunicationFeed.tsx");
+const { memberOpenHandler } = await jiti.import("./agent-teams-feed-model.ts");
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 
-const render = (snapshot) => renderToStaticMarkup(React.createElement(
+const render = (snapshot, extraProps = {}) => renderToStaticMarkup(React.createElement(
   I18nProvider,
   { initialLocale: "en" },
-  React.createElement(AgentTeamsCommunicationFeed, { snapshot }),
+  React.createElement(AgentTeamsCommunicationFeed, { snapshot, ...extraProps }),
 ));
 
 function member(id, overrides = {}) {
@@ -48,7 +49,7 @@ function member(id, overrides = {}) {
 }
 
 /** 通信流只读 messages 与 members，其余字段给最小合法值。 */
-function snapshot(messages, members) {
+function snapshot(messages, members, overrides = {}) {
   return {
     version: 1,
     generatedAt: "2026-11-05T03:00:00.000Z",
@@ -69,6 +70,8 @@ function snapshot(messages, members) {
     tasks: [],
     receipts: [],
     messages,
+    messagesTruncated: false,
+    ...overrides,
   };
 }
 
@@ -160,3 +163,70 @@ test("消息时间跟随应用语言：en 与 zh-CN 渲染出的时间戳来自�
   assert.match(source, /feedRowFindText\(row, t, locale\)/);
   assert.match(source, /locale=\{locale\}/);
 });
+
+// ── 截断提示：messagesTruncated 时在过滤器行下方显示一条低调提示 ─────────────────
+test("截断提示：messagesTruncated=true 时渲染提示行，false 时不渲染", () => {
+  const truncated = render(snapshot(baseMessages(), [LEAD, W1, W2], { messagesTruncated: true }));
+  assert.match(truncated, /data-testid="agent-teams-truncated"/, "截断时应有提示行");
+  // 提示行位于过滤器组之后（过滤器行下方），而不是挤在标题行里。
+  const filterIdx = truncated.indexOf('agent-teams-filter-system');
+  const truncIdx = truncated.indexOf('agent-teams-truncated');
+  assert.ok(truncIdx > filterIdx, "截断提示应在过滤器行之后");
+
+  const full = render(snapshot(baseMessages(), [LEAD, W1, W2], { messagesTruncated: false }));
+  assert.doesNotMatch(full, /data-testid="agent-teams-truncated"/, "未截断时不应有提示行");
+});
+
+// ── 参与者可点：解析到 roster 成员且有 sessionId 时渲染为按钮 ───────────────────
+function routeMessage(from, to) {
+  return [{ id: "mm", from, to, recipients: [to], kind: "direct", text: "正文", timestamp: "2026-11-05T01:00:00.000Z" }];
+}
+
+test("参与者可点：可解析且有 sessionId 的发送者名字渲染成带 aria-label 的按钮", () => {
+  const html = render(
+    snapshot(routeMessage("team-lead", "w1"), [LEAD, W1]),
+    { onOpenMember: () => {} },
+  );
+  // 发送者 team-lead 能解析到 LEAD（sessionId=lead-session）→ button。
+  assert.match(html, /<button[^>]*data-testid="agent-teams-message-mm-from"/, "可解析的发送者应渲染成按钮");
+  assert.match(html, /data-testid="agent-teams-message-mm-from"[^>]*aria-label="Open team-lead"/, "按钮带 openMember aria-label");
+  // 接收者 w1 能解析到 W1 → 也是按钮。
+  assert.match(html, /<button[^>]*data-testid="agent-teams-message-mm-to"/, "可解析的接收者应渲染成按钮");
+  assert.match(html, /data-testid="agent-teams-message-mm-to"[^>]*aria-label="Open w1"/);
+});
+
+test("参与者不可点：onOpenMember 缺省时名字保持纯文本（无按钮）", () => {
+  const html = render(snapshot(routeMessage("team-lead", "w1"), [LEAD, W1]));
+  assert.doesNotMatch(html, /<button[^>]*data-testid="agent-teams-message-mm-from"/, "未传 onOpenMember 时不渲染按钮");
+  assert.doesNotMatch(html, /<button[^>]*data-testid="agent-teams-message-mm-to"/);
+  // 名字仍在（span），结构不丢。
+  assert.match(html, /data-testid="agent-teams-message-mm-from"/);
+});
+
+test("参与者不可点：无法解析到 roster 的发送者即使传了 onOpenMember 也不渲染按钮", () => {
+  const html = render(
+    snapshot(routeMessage("ghost-sender", "w1"), [LEAD, W1]),
+    { onOpenMember: () => {} },
+  );
+  assert.doesNotMatch(html, /<button[^>]*data-testid="agent-teams-message-mm-from"/, "未知发送者不渲染按钮");
+  assert.match(html, /data-testid="agent-teams-message-mm-from"/, "未知发送者名字仍以纯文本渲染");
+  // 接收者 w1 仍可点。
+  assert.match(html, /<button[^>]*data-testid="agent-teams-message-mm-to"/);
+});
+
+// ── memberOpenHandler：点击时以正确成员回调；无回调/无成员/无 sessionId 时 undefined ──
+test("memberOpenHandler：点击以正确成员回调", () => {
+  const calls = [];
+  const handler = memberOpenHandler(W1, (member) => calls.push(member));
+  assert.equal(typeof handler, "function");
+  handler();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].id, "w1", "回调参数应为解析到的成员实例");
+});
+
+test("memberOpenHandler：无回调、无成员、成员无 sessionId 时返回 undefined", () => {
+  assert.equal(memberOpenHandler(W1, undefined), undefined, "无 onOpenMember → undefined");
+  assert.equal(memberOpenHandler(null, () => {}), undefined, "成员为 null → undefined");
+  assert.equal(memberOpenHandler({ ...W1, sessionId: null }, () => {}), undefined, "无 sessionId → undefined");
+});
+

@@ -5,12 +5,13 @@ import { useI18n } from "@/hooks/useI18n";
 import { MarkdownBody } from "@/components/MarkdownBody";
 import { useProgressiveReveal } from "@/hooks/useProgressiveReveal";
 import { useTranscriptFind } from "@/hooks/useTranscriptFind";
-import type { TeamWorkbenchSnapshot, WorkbenchMessage } from "@/lib/agent-teams-swimlane";
+import type { TeamWorkbenchSnapshot, WorkbenchMember, WorkbenchMessage } from "@/lib/agent-teams-swimlane";
 import { formatUpdatedTime } from "@/lib/i18n/format";
 import type { Locale } from "@/lib/i18n/types";
 import {
   classifyMessage,
   isCompactRow,
+  memberOpenHandler,
   parseMessageBody,
   resolveMember,
   rowDisplayText,
@@ -141,7 +142,7 @@ function transportIcon(kind: WorkbenchMessage["kind"]) {
 // 参与方头像（本仓无 PNG 头像资源，用首字圆 + 强调色下划线，与会话团队条一致）
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Participant = { name: string; initial: string; accent: string };
+type Participant = { name: string; initial: string; accent: string; member: WorkbenchMember | null };
 
 function resolveParticipant(value: string, snapshot: TeamWorkbenchSnapshot): Participant {
   const { member } = resolveMember(snapshot, value);
@@ -149,6 +150,7 @@ function resolveParticipant(value: string, snapshot: TeamWorkbenchSnapshot): Par
     name: value,
     initial: initialOf(member?.name ?? value),
     accent: member ? memberAccent(member.color) : "var(--text-dim)",
+    member,
   };
 }
 
@@ -157,11 +159,17 @@ function ParticipantFigure({
   name,
   nameTestId,
   avatarTestId,
+  onOpen,
+  openLabel,
 }: {
   participant: Participant;
   name: string;
   nameTestId: string;
   avatarTestId: string;
+  /** 解析到 roster 成员且该成员有 sessionId 时改为可点按钮。 */
+  onOpen?: () => void;
+  /** 按钮的 aria-label（形如 "Open {name}"）。 */
+  openLabel?: string;
 }) {
   return (
     <span className="inline-flex min-w-0 flex-1 items-center gap-1.5" title={name}>
@@ -173,9 +181,21 @@ function ParticipantFigure({
       >
         {participant.initial}
       </span>
-      <span data-testid={nameTestId} className="min-w-0 truncate font-mono text-[11px] font-medium text-[var(--text-muted)]">
-        {name}
-      </span>
+      {onOpen ? (
+        <button
+          type="button"
+          data-testid={nameTestId}
+          onClick={onOpen}
+          aria-label={openLabel ?? name}
+          className="min-w-0 truncate rounded text-left font-mono text-[11px] font-medium text-[var(--text-muted)] outline-none hover:text-[var(--text)] hover:underline focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+        >
+          {name}
+        </button>
+      ) : (
+        <span data-testid={nameTestId} className="min-w-0 truncate font-mono text-[11px] font-medium text-[var(--text-muted)]">
+          {name}
+        </span>
+      )}
     </span>
   );
 }
@@ -190,6 +210,11 @@ interface Props {
   fill?: boolean;
   /** 悬停某行时点亮画布上对应任务（复用其 focus 通道）。 */
   onFocusTask?: (taskId: string | null) => void;
+  /**
+   * 点击参与者名字打开其成员面板（仅在解析到 roster 成员且有 sessionId 时生效）。
+   * 可选：不传时参与者名字保持纯文本，行为与原实现一致。
+   */
+  onOpenMember?: (member: WorkbenchMember) => void;
 }
 
 /**
@@ -202,7 +227,7 @@ interface Props {
  * - 悬停行 → `onFocusTask(taskId)` 通知父级高亮画布对应任务（离开 → null）；
  * - 空态文案。
  */
-export function AgentTeamsCommunicationFeed({ snapshot, fill = false, onFocusTask }: Props) {
+export function AgentTeamsCommunicationFeed({ snapshot, fill = false, onFocusTask, onOpenMember }: Props) {
   const { t, locale } = useI18n();
   const [filter, setFilter] = useState<FeedFilter>("all");
 
@@ -314,6 +339,15 @@ export function AgentTeamsCommunicationFeed({ snapshot, fill = false, onFocusTas
             );
           })}
         </div>
+
+        {snapshot.messagesTruncated ? (
+          <p
+            data-testid="agent-teams-truncated"
+            className="mt-2 text-[11px] leading-[1.4] text-[var(--text-dim)]"
+          >
+            {t("teams.communication.truncated", { count: snapshot.messages.length })}
+          </p>
+        ) : null}
       </div>
 
       <div ref={reveal.scrollRootRef} className="min-h-0 flex-1 overflow-y-auto">
@@ -336,6 +370,7 @@ export function AgentTeamsCommunicationFeed({ snapshot, fill = false, onFocusTas
                 isLatest={index === 0}
                 snapshot={snapshot}
                 onFocusTask={onFocusTask}
+                onOpenMember={onOpenMember}
                 t={t}
                 locale={locale}
               />
@@ -374,6 +409,7 @@ const FeedRow = memo(function FeedRow({
   isLatest,
   snapshot,
   onFocusTask,
+  onOpenMember,
   t,
   locale,
 }: {
@@ -385,6 +421,7 @@ const FeedRow = memo(function FeedRow({
   isLatest: boolean;
   snapshot: TeamWorkbenchSnapshot;
   onFocusTask?: (taskId: string | null) => void;
+  onOpenMember?: (member: WorkbenchMember) => void;
   t: TranslationFn;
   /** 应用语言（不是 OS locale）：时间戳按它格式化（A-9）。 */
   locale: Locale;
@@ -486,6 +523,8 @@ const FeedRow = memo(function FeedRow({
           name={message.from}
           nameTestId={`agent-teams-message-${message.id}-from`}
           avatarTestId={`agent-teams-message-${message.id}-from-avatar`}
+          onOpen={memberOpenHandler(senderParticipant.member, onOpenMember)}
+          openLabel={t("teams.communication.openMember", { name: message.from })}
         />
         <span className="shrink-0 text-[var(--text-dim)]">{ArrowRightIcon}</span>
         {recipientParticipant ? (
@@ -494,6 +533,8 @@ const FeedRow = memo(function FeedRow({
             name={recipient}
             nameTestId={`agent-teams-message-${message.id}-to`}
             avatarTestId={`agent-teams-message-${message.id}-to-avatar`}
+            onOpen={memberOpenHandler(recipientParticipant.member, onOpenMember)}
+            openLabel={t("teams.communication.openMember", { name: recipient })}
           />
         ) : (
           <span
