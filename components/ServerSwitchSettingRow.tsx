@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { useI18n } from "@/hooks/useI18n";
 import { ConfigSwitch } from "./SettingsUi";
 
 /**
@@ -25,10 +26,17 @@ export function ServerSwitchSettingRow({
   className?: string;
 }) {
   const hintId = useId();
+  const { t } = useI18n();
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const read = (data: { enabled?: unknown }) => (typeof data.enabled === "boolean" ? data.enabled : defaultEnabled);
+
+  useEffect(() => () => {
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -51,13 +59,19 @@ export function ServerSwitchSettingRow({
     setEnabled(next);
     setSaving(true);
     setFailed(false);
+    if (savedTimer.current) { clearTimeout(savedTimer.current); savedTimer.current = null; }
+    setSaved(false);
     fetch(endpoint, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: next }),
     })
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
-      .then((data: { enabled?: unknown }) => setEnabled(read(data)))
+      .then((data: { enabled?: unknown }) => {
+        setEnabled(read(data));
+        setSaved(true);
+        savedTimer.current = setTimeout(() => setSaved(false), 2000);
+      })
       .catch(() => {
         setEnabled(previous);
         setFailed(true);
@@ -69,8 +83,8 @@ export function ServerSwitchSettingRow({
     <div className={`settings-chat-option settings-chat-switch-option artifacts-setting-row${className ? ` ${className}` : ""}`}>
       <span className="artifacts-setting-text">
         <span>{label}</span>
-        <span id={hintId} className="artifacts-setting-hint">
-          {failed ? failedHint : hint}
+        <span id={hintId} className="artifacts-setting-hint" role="status" aria-live="polite">
+          {failed ? failedHint : saved ? t("settings.saved") : hint}
         </span>
       </span>
       <ConfigSwitch
