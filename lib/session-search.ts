@@ -1,5 +1,6 @@
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
+import { getProjectDisplayNames } from "./project-display.ts";
 import type { SessionInfo } from "./types";
 
 const MAX_FILES = 500;
@@ -15,11 +16,48 @@ export interface SessionSearchResult {
   before: string;
   match: string;
   after: string;
+  /** Short project label, derived from the session's project root. Optional:
+   *  absent when the caller passed a SessionInfo without a projectRoot (e.g. a
+   *  client-built transient session). */
+  projectName?: string;
 }
 
 export interface SessionSearchResponse {
   results: SessionSearchResult[];
   truncated: boolean;
+}
+
+/** Escape every regex operator so each needle stays a literal substring match. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Split a query into literal needles. Whitespace separates words (all of which
+ * must match, AND); a double-quoted run is kept together as one phrase, spaces
+ * included. Quotes are delimiters, never part of the needle. An unbalanced
+ * leading quote keeps its remainder as a phrase.
+ */
+export function tokenizeSearchQuery(query: string): string[] {
+  const needles: string[] = [];
+  let index = 0;
+  while (index < query.length) {
+    while (index < query.length && /\s/.test(query[index])) index += 1;
+    if (index >= query.length) break;
+    if (query[index] === '"') {
+      index += 1;
+      const start = index;
+      while (index < query.length && query[index] !== '"') index += 1;
+      const phrase = query.slice(start, index).trim();
+      if (index < query.length) index += 1; // consume the closing quote
+      if (phrase) needles.push(phrase);
+    } else {
+      const start = index;
+      while (index < query.length && !/\s/.test(query[index])) index += 1;
+      needles.push(query.slice(start, index));
+    }
+  }
+  return needles;
 }
 
 // ponytail: scan recent files without an index; add indexing if measured latency warrants it.
@@ -32,8 +70,12 @@ export async function searchSessionContents(
   const needle = query.trim();
   if (!needle) return response;
   if (needle.length > 200) throw new RangeError("Search query exceeds 200 characters");
-  // Escape every operator: this is literal search, with offsets in the original text.
-  const matcher = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+  // Tokenize first, then escape every token: literal search, offsets in the original text.
+  const matchers = tokenizeSearchQuery(needle).map((token) => new RegExp(escapeRegExp(token), "i"));
+  if (matchers.length === 0) return response;
+  const projectNames = getProjectDisplayNames(
+    [...new Set(sessions.flatMap((session) => (session.projectRoot ? [session.projectRoot] : [])))],
+  );
   const deadline = Date.now() + TIME_BUDGET_MS;
   const timeout = AbortSignal.timeout(TIME_BUDGET_MS);
   const signal = requestSignal ? AbortSignal.any([requestSignal, timeout]) : timeout;
@@ -66,7 +108,18 @@ export async function searchSessionContents(
         const blocks = typeof content === "string" ? [{ type: "text", text: content }] : Array.isArray(content) ? content : [];
         const textBlocks = blocks.flatMap((block, blockIndex) => block?.type === "text" && typeof block.text === "string" ? [{ text: block.text as string, blockIndex }] : []);
         const text = textBlocks.map((block) => block.text).join("\n");
-        const match = matcher.exec(text);
+        // AND semantics: every needle must occur in this entry. Anchor the
+        // snippet on the earliest occurrence so the snippet stays where the
+        // user's first word appeared.
+        let match: RegExpExecArray | null = null;
+        for (const matcher of matchers) {
+          const candidate = matcher.exec(text);
+          if (!candidate) {
+            match = null;
+            break;
+          }
+          if (!match || candidate.index < match.index) match = candidate;
+        }
         if (!match) continue;
         const start = match.index;
         const end = start + match[0].length;
@@ -76,6 +129,7 @@ export async function searchSessionContents(
           blockOffset = blockEnd + 1;
           return start <= blockEnd;
         });
+        const projectName = session.projectRoot ? projectNames.get(session.projectRoot) : undefined;
         response.results.push({
           session,
           ...(typeof entry.id === "string" ? { entryId: entry.id } : {}),
@@ -83,6 +137,7 @@ export async function searchSessionContents(
           before: (start > 80 ? "..." : "") + text.slice(Math.max(0, start - 80), start).replace(/\s+/g, " ").trimStart(),
           match: match[0].replace(/\s+/g, " "),
           after: text.slice(end, end + 80).replace(/\s+/g, " ").trimEnd() + (end + 80 < text.length ? "..." : ""),
+          ...(projectName ? { projectName } : {}),
         });
         found = true;
         break;

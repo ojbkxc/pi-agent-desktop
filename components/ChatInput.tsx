@@ -3354,13 +3354,12 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 onOpenSettings={onOpenSettings ? () => onOpenSettings() : undefined}
               />
             )}
-            {/* Model selector — visible always, disabled during streaming */}
+            {/* Model selector — always usable; a switch during a run applies from the run's next request (busy only while a switch is pending) */}
             {(modelOptions.length > 0 || model || modelError) && onModelChange && (
               <ModelSelector
                 options={modelOptions}
                 value={model}
                 onChange={onModelChange}
-                disabled={isStreaming}
                 busy={modelSwitching}
                 isAutoSelection={isAutoModelSelection}
                 defaultValue={defaultModel}

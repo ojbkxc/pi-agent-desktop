@@ -30,9 +30,19 @@ test("session reloads cannot clear an in-flight optimistic model", () => {
   );
 });
 
-test("a completed model switch reloads canonical session state and reports failures", () => {
-  assert.match(switchSource, /modelSwitchPendingRef\.current = false;\s*await loadSession\(sid\)/);
-  assert.match(switchSource, /setCurrentModelOverride\(previousOverride\)[\s\S]*?await loadSession\(sid, false, true\)/);
+test("a completed model switch reloads (idle) or live-syncs (mid-run) and reports failures", () => {
+  // A switch during a run must not reload the session file — that would replace
+  // the run's streaming messages. It takes the model and level from the live
+  // state instead; an idle switch reloads the canonical session as before.
+  assert.match(switchSource, /const midRun = agentRunningRef\.current \|\| bashRunningRef\.current/);
+  assert.match(
+    switchSource,
+    /if \(midRun\) \{[\s\S]*?setCurrentModelOverride\(null\);[\s\S]*?await syncLiveState\(\);[\s\S]*?\} else \{[\s\S]*?await loadSession\(sid\)/,
+  );
+  assert.match(
+    switchSource,
+    /setCurrentModelOverride\(previousOverride\)[\s\S]*?if \(midRun\) await syncLiveState\(\);\s*else await loadSession\(sid, false, true\)/,
+  );
   assert.match(switchSource, /setCurrentModelOverride\(previousOverride\)/);
   assert.match(switchSource, /Failed to switch model:/);
 });

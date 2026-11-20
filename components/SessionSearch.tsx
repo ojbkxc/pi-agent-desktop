@@ -53,7 +53,7 @@ export function SessionSearch({ open, query, children, selectedSessionId, onSele
       {response?.truncated && (
         <div role="status" className="px-3 pb-2 text-xs text-text-muted">{t("sidebar.sessionSearchPartial")}</div>
       )}
-      {response?.results.map(({ session, entryId, blockIndex, before, match, after }) => (
+      {response?.results.map(({ session, entryId, blockIndex, before, match, after, projectName }) => (
         <button
           key={session.id}
           type="button"
@@ -67,7 +67,7 @@ export function SessionSearch({ open, query, children, selectedSessionId, onSele
               className="min-w-0 flex-1 truncate"
               title={session.workspaceKind === "chat" ? t("sidebar.chats") : session.cwd}
             >
-              {session.workspaceKind === "chat" ? t("sidebar.chats") : session.cwd}
+              {session.workspaceKind === "chat" ? t("sidebar.chats") : projectName ?? session.cwd}
             </span>
             <span className="shrink-0">{formatRelativeTime(session.modified, locale)}</span>
           </span>
