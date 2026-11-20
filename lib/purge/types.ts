@@ -18,6 +18,17 @@ export interface PurgeRewriteRule {
   to: string;
 }
 
+/**
+ * One named structured template: the text `structured_prompt` appends when it is
+ * the active one. Presets land here as `{ name: title, text: body }`; the name
+ * is the identity, so applying the same preset twice overwrites rather than
+ * appends.
+ */
+export interface PurgeTemplate {
+  name: string;
+  text: string;
+}
+
 export interface PurgeSettings {
   /** Master switch. Off means the data plane leaves the request untouched. */
   enabled: boolean;
@@ -47,6 +58,16 @@ export interface PurgeSettings {
   skill_inject_limit: number;
   /** Text appended by `structured_prompt`; an empty string disables the append. */
   structured_suffix: string;
+  /**
+   * Named templates the operator can switch between. A preset applied from the
+   * library lands here; the body is kept verbatim.
+   */
+  structured_templates: PurgeTemplate[];
+  /**
+   * Name of the template `structured_prompt` uses. An empty string (or a name
+   * that no longer exists) falls back to `structured_suffix`.
+   */
+  active_template: string;
 }
 
 export interface PurgeLimits {
@@ -111,5 +132,7 @@ export function defaultPurgeSettings(): PurgeSettings {
     skill_dir: DEFAULT_PURGE_SKILL_DIR,
     skill_inject_limit: 2_000,
     structured_suffix: DEFAULT_STRUCTURED_SUFFIX,
+    structured_templates: [],
+    active_template: "",
   };
 }

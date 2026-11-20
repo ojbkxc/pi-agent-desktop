@@ -118,6 +118,7 @@ app/api/
   artifacts/route.ts              GET ?q= artifacts across all sessions (Artifacts page)
   artifacts/item/route.ts         GET ?session=&identifier= one artifact with every version
   artifacts/file/route.ts         GET ?path= one written/edited file's calls | ?session=&toolCallId= a write's content
+  purge/presets/**                GET the built-in preset list (?q=&vendor=&limit=), GET [id] detail incl. the full body, POST [id]/apply (two landing points; see docs/agents/fork-purge-presets.md)
 
 lib/
   agent-client.ts      typed fetch helper for /api/agent commands
@@ -145,6 +146,11 @@ lib/
   npx.ts               npx runner used by skill install
   pi-types.ts          local structural types for pi SDK objects
   plugin-marketplace.ts  pi-extensions catalog: parse/validate + source mapping (fixed URL, see app/api/plugins/marketplace)
+  purge/presets.ts     built-in purge presets: search (q/vendor/limit + vendor facet), detail, and apply to two
+                      landing points — `structured_template` (in-memory upsert, the caller saves) vs `skill_file`
+                      (writes `<skill_dir>/<id>/SKILL.md`; see docs/agents/fork-purge-presets.md)
+  purge/preset-catalog.ts  generated preset catalog (53 bodies inlined as string constants; server-only import,
+                      do not hand-edit — rebuild and verify with `node scripts/sync-purge-presets.mjs` / `--check`)
   skill-market/       skill market: the two registries' providers, the bundled editorial
                       catalog snapshot (catalog/ + catalog.ts + catalog-locale.ts), the
                       merge/TTL-cache layer, and install/uninstall (temp dir + sha256 +
@@ -187,6 +193,8 @@ components/
   EnabledModelsSection.tsx  model switches inside ModelsConfig, backed by enabledModels
   AgentsConfig.tsx    built-in subagent toggle + agent profile editor
   PluginsConfig.tsx   modal for installed package plugins
+  PurgePresetLibrary.tsx  Settings › Purge preset library: debounced search, vendor chips with counts, read-only
+                      preview, and the three actions (set as template / copy / write SKILL.md; see fork-purge-presets.md)
   SkillsConfig.tsx    modal for loaded/search/installable skills
   skill-market/       the skill market page (filter bar + category chips with counts,
                       infinite-scroll card grid, detail with file preview + security reports,
@@ -268,6 +276,7 @@ Fork notes:
 - [fork-network-proxy.md](docs/agents/fork-network-proxy.md): the session-traffic proxy (Settings › General › Network proxy) — why node's `fetch` ignores the system proxy, the direct / system / manual semantics (`direct` means `NO_PROXY=*`, not "just clear the vars"), the Windows registry and macOS `scutil` probes, the immediate apply by re-installing the undici dispatcher (`close()`, never `destroy()`, so a live model stream survives), and what it deliberately does not cover (the Tauri updater, per-provider overrides). Files: `lib/network-proxy.ts`, `lib/http-dispatcher.ts`, `app/api/network-proxy/route.ts`, `components/NetworkProxySection.tsx`, `instrumentation-node.ts`.
 - [agent-teams-design.md](docs/agent-teams-design.md): the agent-teams feature end to end — the sources it borrows from (PI-Desktop Session Orchestrator, cc-haha swarm, DeepSeek dsh-superagent, the `pi-team` extension), the module split (`lib/pi-extension-builtins.ts` registers the three cross-end extensions — `pi-lsp`, `pi-team`, `pi-purge` — as `builtin:` names; `lib/pi-team-host.ts` adapts the existing subagent runtime onto the `TeamHost` seam so the extension never spawns sessions itself), the ten `team_*` tools and four `/team-*` commands, the file layer under `~/.pi/agent/teams/`, the swimlane projection and its `app/api/teams/**` routes, the concurrency limits (§8: 8 per team / 32 global, rejected with a `LIMIT_EXCEEDED` message that names which limit was hit), and the Phase 1–5 rollout with what each phase actually shipped. Files: `lib/pi-extension-names.ts`, `lib/pi-extension-builtins.ts`, `lib/pi-team-host.ts`, `lib/agent-teams-swimlane.ts`, `lib/agent-teams-swimlane-store.ts`, `components/AgentTeams/**`, `app/api/teams/**`, `public/lane-diagram.html`, and the `pi-team` package itself.
 - [agent-teams-upstream-defects.md](docs/agents/agent-teams-upstream-defects.md): the pi-team 0.2.0 review. Two categories, each defect in「现象 / 复现路径 / 证据(dist 行号) / 影响+修复方向」form: **package-internal** (only an upstream fix can root-cause) — `getLifecycle`'s side effect plus `release` swallowing `host.stop` (the "stopped successfully" illusion), the roster-based quota count, `team_delete` orphaning live sessions, `team_cancel`'s double stop, `dropLifecycle`/`dropBus` not root-exported, no team-level stop; **host↔extension contract gaps** (the desktop can work around) — `PI_SESSION_ID` never set so `leadSessionId` is always `unknown-session` and cross-session isolation is void, the config-only roster hiding plan-only members from the tools, the raw-name vs directory-name `PI_TEAM_NAME` trap, and the desktop model change that never updates `plan.approvedSnapshot`. Evidence line numbers are for pi-team 0.2.0.
+- [fork-purge-presets.md](docs/agents/fork-purge-presets.md): the built-in purge preset library — 53 third-party prompt files vendored verbatim from a sibling `jailbreaks` checkout (52 non-empty `.md` + 1 `.txt`; the root `README.md` and one empty upstream file are excluded), the generator and its `--check` idempotency gate, the generated inline catalog (server-only import), search/detail/apply and the two landing points (`structured_template` = in-memory draft the console saves, `skill_file` = `<skill_dir>/<id>/SKILL.md`), the three `/api/purge/presets` routes with their 403/415/400/404/500 gates, and the panel's three actions with 31 `purge.preset*` keys in three locales. Files: `scripts/sync-purge-presets.mjs`, `assets/purge-presets/**`, `lib/purge/preset-catalog.ts`, `lib/purge/presets.ts`, `app/api/purge/presets/**`, `components/PurgePresetLibrary.tsx`.
 
 ### AgentSession lifecycle (`lib/rpc-manager.ts`)
 - One `AgentSessionWrapper` per session id, keyed in `globalThis.__piSessions`

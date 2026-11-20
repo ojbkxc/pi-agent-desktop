@@ -5,6 +5,7 @@ import {
   defaultPurgeSettings,
   type PurgeRewriteRule,
   type PurgeSettings,
+  type PurgeTemplate,
   type PurgeThinkingFloor,
 } from "./purge/types";
 
@@ -76,6 +77,33 @@ function suffixOr(value: unknown, fallback: string): string {
   return typeof value === "string" ? value.trim() : fallback;
 }
 
+/**
+ * Named structured templates. A template needs a non-empty trimmed name; its
+ * text is kept verbatim (a preset body starts with a newline or a `#` often
+ * enough that trimming it here would silently change the prompt). A duplicate
+ * name is folded onto the first one — the name is the identity, so the later
+ * row wins, matching the upsert the preset action performs.
+ */
+function templatesOr(value: unknown, fallback: PurgeTemplate[]): PurgeTemplate[] {
+  if (!Array.isArray(value)) return fallback;
+  const templates: PurgeTemplate[] = [];
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.name !== "string") continue;
+    const name = item.name.trim();
+    if (!name) continue;
+    const text = typeof item.text === "string" ? item.text : "";
+    const existing = templates.findIndex((template) => template.name === name);
+    if (existing >= 0) templates[existing] = { name, text };
+    else templates.push({ name, text });
+  }
+  return templates;
+}
+
+/** The active template name; anything but a string reads as "no active template". */
+function activeTemplateOr(value: unknown, fallback: string): string {
+  return typeof value === "string" ? value.trim() : fallback;
+}
+
 function skillInjectLimitOr(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   const { min, max } = PURGE_LIMITS.skill_inject_limit;
@@ -105,6 +133,8 @@ export function normalizePurgeSettings(input: unknown): PurgeSettings {
     skill_dir: skillDirOr(input.skill_dir, defaults.skill_dir),
     skill_inject_limit: skillInjectLimitOr(input.skill_inject_limit, defaults.skill_inject_limit),
     structured_suffix: suffixOr(input.structured_suffix, defaults.structured_suffix),
+    structured_templates: templatesOr(input.structured_templates, defaults.structured_templates),
+    active_template: activeTemplateOr(input.active_template, defaults.active_template),
   };
 }
 

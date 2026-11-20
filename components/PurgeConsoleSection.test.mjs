@@ -57,6 +57,8 @@ const CONTRACT_FIELDS = [
   "skill_dir",
   "skill_inject_limit",
   "structured_suffix",
+  "structured_templates",
+  "active_template",
 ];
 
 test("declares exactly the seven governance switches of the settings contract", () => {

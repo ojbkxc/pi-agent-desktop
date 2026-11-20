@@ -105,8 +105,14 @@ function normalizeSystemText(text: string, prefixes: readonly string[]): string 
   return kept.join("\n");
 }
 
-/** `~/…` and `~\\…` expand against the current user's home; anything else is used as-is. */
-function expandHome(dir: string): string {
+/**
+ * `~/…` and `~\\…` expand against the current user's home; anything else is used as-is.
+ *
+ * Exported so the preset library's `skill_file` target resolves `skill_dir` exactly
+ * the way skill injection scans it — two copies of this rule drift the day one side
+ * learns a new form (env override, Windows separator).
+ */
+export function expandHome(dir: string): string {
   const trimmed = dir.trim();
   if (trimmed === "~") return homedir();
   if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) return join(homedir(), trimmed.slice(2));
@@ -252,6 +258,21 @@ export function governSystemText(text: string, settings: PurgeSettings): Governe
 }
 
 /**
+ * The text `structured_prompt` appends: the active template's body when the
+ * console (or a preset) activated one, otherwise the free-form suffix.
+ *
+ * A name that no longer matches a template falls back to the suffix rather than
+ * appending nothing: the operator's suffix is the documented default, and a
+ * dangling template name must not silently turn the feature off.
+ */
+export function resolveStructuredSuffix(settings: PurgeSettings): string {
+  const name = typeof settings.active_template === "string" ? settings.active_template.trim() : "";
+  if (!name) return settings.structured_suffix;
+  const template = settings.structured_templates.find((item) => item.name === name);
+  return template ? template.text : settings.structured_suffix;
+}
+
+/**
  * Govern the user's last text: literal rewrite → synonym → structured suffix →
  * skill injection.
  *
@@ -277,7 +298,7 @@ export function governUserText(text: string, settings: PurgeSettings): GovernedU
     synonymHits = synonym.hits;
   }
   const structured = settings.structured_prompt
-    ? appendStructuredSuffix(out, settings.structured_suffix)
+    ? appendStructuredSuffix(out, resolveStructuredSuffix(settings))
     : { text: out, appended: false };
   out = structured.text;
   const skill = settings.skill_inject ? injectSkill(out, settings) : { text: out, hits: 0 };

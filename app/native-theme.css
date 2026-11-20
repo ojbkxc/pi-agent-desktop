@@ -1890,7 +1890,6 @@ pre, code {
 .session-running-spinner {
   animation: spin 0.9s linear infinite;
 }
-
 .session-unread-ring {
   transform-box: fill-box;
   transform-origin: center;
@@ -1915,7 +1914,11 @@ pre, code {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .session-running-spinner,
+  /* running spinner 不跟随 reduced-motion 关停：它是「这条 run 还活着」唯一的
+     持续线索，停下来的弧线读起来就是「卡住了」。Windows 关掉「动画效果」
+     (SPI_GETCLIENTAREAANIMATION=false) 时 Chromium 直接上报 reduce，这类机器上
+     整片侧栏会变成死图标；同理 agent 面板里 `.animate-spin` 的图标不受此守卫
+     影响，两条路径本该一致。呼吸点/未读环保持静态：状态由颜色和圆点本身表达。 */
   .session-unread-ring,
   .session-awaiting-dot { animation: none; }
 }
@@ -14140,6 +14143,238 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   align-items: center;
   gap: 10px;
   margin-top: 30px;
+}
+
+/* Settings › Purge › preset library. Layout only: the rows reuse the shared
+   chat-control input and ConfigButton primitives so both palettes come along. */
+.settings-preset {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 授权边界常驻可见：正文是第三方公开 prompt 原文，只搬不改。 */
+.settings-preset-notice {
+  margin: 0;
+  padding: 8px 10px;
+  border: var(--hairline) solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+  line-height: 1.6;
+}
+
+.settings-preset-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-preset-search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.settings-preset-search > input {
+  width: 100%;
+}
+
+.settings-preset-total {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-preset-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-preset-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: var(--hairline) solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  padding: 4px 12px;
+  font-size: var(--fs-caption);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.settings-preset-chip:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.settings-preset-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-preset-chip.is-active {
+  border-color: var(--accent);
+  background: var(--bg-selected);
+  font-weight: var(--fw-semibold);
+}
+
+.settings-preset-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-preset-chip-count {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-preset-empty {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+}
+
+.settings-preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 460px;
+  overflow-y: auto;
+}
+
+.settings-preset-row {
+  min-width: 0;
+}
+
+.settings-preset-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 12px;
+  border: var(--hairline) solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-preset-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.settings-preset-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-preset-item.is-active {
+  border-color: var(--accent);
+  background: var(--bg-selected);
+}
+
+.settings-preset-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-preset-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-preset-item-title {
+  font-weight: var(--fw-semibold);
+  overflow-wrap: anywhere;
+}
+
+.settings-preset-item-meta {
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+}
+
+.settings-preset-item-side {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+}
+
+.settings-preset-item-bytes {
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-preset-item-sha {
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+}
+
+.settings-preset-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 12px;
+}
+
+.settings-preset-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.settings-preset-tag {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+}
+
+.settings-preset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The body is third-party text: monospace, read-only, and capped so a long
+   prompt cannot push the save button off the page. */
+.settings-preset-preview {
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: var(--hairline) solid var(--separator);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.settings-preset-status {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
 }
 
 /* Composer attachments: a pasted-text chip opens its content and can turn

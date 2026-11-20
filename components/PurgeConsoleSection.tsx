@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { PurgePresetLibrary, upsertPresetTemplate } from "./PurgePresetLibrary";
 import { ConfigButton, ConfigSwitch } from "./SettingsUi";
 
 export type PurgeReasoningFloor = "off" | "low" | "medium" | "high" | "xhigh";
@@ -10,6 +11,12 @@ export type PurgeReasoningFloor = "off" | "low" | "medium" | "high" | "xhigh";
 export interface PurgeRule {
   from: string;
   to: string;
+}
+
+/** One named structured template; a preset lands here as `{ name: title, text: body }`. */
+export interface PurgeTemplate {
+  name: string;
+  text: string;
 }
 
 /**
@@ -36,6 +43,10 @@ export interface PurgeSettings {
   skill_dir: string;
   skill_inject_limit: number;
   structured_suffix: string;
+  /** Named templates the preset library can drop into; the name is the identity. */
+  structured_templates: PurgeTemplate[];
+  /** Template `structured_prompt` appends; empty means `structured_suffix`. */
+  active_template: string;
 }
 
 /** Counter snapshot: cumulative since the process started, never reset per request. */
@@ -135,6 +146,8 @@ export const DEFAULT_PURGE_SETTINGS: PurgeSettings = {
   // blank draft falls back to the value the server would store.
   skill_inject_limit: 2000,
   structured_suffix: "",
+  structured_templates: [],
+  active_template: "",
 };
 
 /** Counter rows of the read-only block, in render order. */
@@ -215,6 +228,26 @@ export function normalizePrefixList(raw: unknown): string[] {
   return prefixes;
 }
 
+/**
+ * Named structured templates, trimmed names and duplicate-folded (the same rule
+ * as `templatesOr` in lib/purge-settings.ts). The body is kept verbatim: a preset
+ * starting with a blank line or a `#` would otherwise be silently reworded.
+ */
+export function normalizePurgeTemplates(raw: unknown): PurgeTemplate[] {
+  if (!Array.isArray(raw)) return [];
+  const templates: PurgeTemplate[] = [];
+  for (const item of raw) {
+    if (!isRecord(item)) continue;
+    const name = asString(item.name).trim();
+    if (name === "") continue;
+    const text = asString(item.text);
+    const existing = templates.findIndex((template) => template.name === name);
+    if (existing >= 0) templates[existing] = { name, text };
+    else templates.push({ name, text });
+  }
+  return templates;
+}
+
 /** The comma/whitespace separated input mirror of `normalize_strip_prefixes`. */
 export function splitPurgePrefixes(value: string): string[] {
   return normalizePrefixList(value.split(/[,，\s]+/));
@@ -288,6 +321,8 @@ export function asPurgeSettings(raw: unknown): PurgeSettings | null {
     skill_dir: asString(raw.skill_dir).trim(),
     skill_inject_limit: clampSkillInjectLimit(raw.skill_inject_limit),
     structured_suffix: asString(raw.structured_suffix),
+    structured_templates: normalizePurgeTemplates(raw.structured_templates),
+    active_template: asString(raw.active_template).trim(),
   };
 }
 
@@ -332,6 +367,8 @@ export function purgeSavePayload(draft: PurgeSettings): PurgeSettings {
     skill_dir: asString(draft.skill_dir).trim(),
     skill_inject_limit: clampSkillInjectLimit(draft.skill_inject_limit),
     structured_suffix: asString(draft.structured_suffix),
+    structured_templates: normalizePurgeTemplates(draft.structured_templates),
+    active_template: asString(draft.active_template).trim(),
   };
 }
 
@@ -516,6 +553,23 @@ export function PurgeConsoleSection() {
       .finally(() => setSaving(false));
   }, [applySettings, draft, limitDraft, prefixDraft]);
 
+  /**
+   * Drop a preset body onto the structured-template draft. No PUT: the operator
+   * reviews the draft and hits Save, so a preset can never half-save behind them.
+   */
+  const applyPresetTemplate = useCallback((name: string, text: string) => {
+    edit({ structured_templates: upsertPresetTemplate(draft.structured_templates, name, text) });
+  }, [draft.structured_templates, edit]);
+
+  const removeTemplate = useCallback((name: string) => {
+    edit({
+      structured_templates: draft.structured_templates.filter((template) => template.name !== name),
+      // Removing the active one falls back to the default suffix rather than
+      // leaving a dangling name that would silently disable the append.
+      active_template: draft.active_template === name ? "" : draft.active_template,
+    });
+  }, [draft.active_template, draft.structured_templates, edit]);
+
   const number = (value: number) => new Intl.NumberFormat(locale).format(value);
   const parsedLimit = limitDraft.trim() === "" ? Number.NaN : Number(limitDraft);
   const limitInvalid = !Number.isFinite(parsedLimit);
@@ -654,6 +708,65 @@ export function PurgeConsoleSection() {
           </div>
         </div>
       </section>
+
+      <section className="settings-general-section">
+        <h3 className="settings-general-heading">{t("purge.presetsTemplatesHeading")}</h3>
+        <p className="settings-general-description">{t("purge.presetsActiveTemplateHint")}</p>
+        {draft.structured_templates.length === 0 ? (
+          <p className="settings-purge-empty">{t("purge.presetsTemplatesEmpty")}</p>
+        ) : (
+          <>
+            {/* 平铺成按钮组而不是原生下拉：与思考强度档位一致，一眼看清当前模板与全部候选。 */}
+            <div className="settings-purge-floor" role="group" aria-label={t("purge.presetsActiveTemplate")}>
+              <button
+                type="button"
+                className={`settings-purge-floor-btn${draft.active_template === "" ? " is-active" : ""}`}
+                aria-pressed={draft.active_template === ""}
+                disabled={disabled}
+                onClick={() => edit({ active_template: "" })}
+              >
+                {t("purge.presetsDefaultSuffix")}
+              </button>
+              {draft.structured_templates.map((template) => (
+                <button
+                  key={template.name}
+                  type="button"
+                  className={`settings-purge-floor-btn${draft.active_template === template.name ? " is-active" : ""}`}
+                  aria-pressed={draft.active_template === template.name}
+                  disabled={disabled}
+                  onClick={() => edit({ active_template: template.name })}
+                >
+                  {template.name}
+                </button>
+              ))}
+            </div>
+            <div className="settings-option-list">
+              {draft.structured_templates.map((template) => (
+                <div key={template.name} className="settings-option">
+                  <span className="settings-option-text">
+                    <span className="settings-option-title">{template.name}</span>
+                    <span className="settings-option-hint">
+                      {t("purge.presetsTemplateChars", { count: number(template.text.length) })}
+                    </span>
+                  </span>
+                  <ConfigButton
+                    variant="ghost"
+                    size="small"
+                    disabled={disabled}
+                    aria-label={`${t("purge.presetsRemoveTemplate")} ${template.name}`}
+                    onClick={() => removeTemplate(template.name)}
+                  >
+                    {t("purge.presetsRemoveTemplate")}
+                  </ConfigButton>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </section>
+
+      {/* 预设库：浏览第三方公开 prompt 原文，一键落到模板草稿或技能目录。 */}
+      <PurgePresetLibrary onApplyTemplate={applyPresetTemplate} />
 
       <PurgeRulesTable
         heading={t("purge.rewriteRulesHeading")}
