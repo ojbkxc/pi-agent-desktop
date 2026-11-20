@@ -937,6 +937,16 @@
   border-top: var(--hairline) solid var(--separator);
 }
 
+/* A labelled subgroup inside one General section (e.g. Chat: session behavior
+   vs server switches). Smaller than the section heading so the hierarchy reads. */
+.settings-general-subheading {
+  margin: 16px 0 6px;
+  color: var(--text-muted);
+  font-size: var(--fs-small);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.02em;
+}
+
 /* The Send key choice does not shrink (its labels are nowrap), so on a phone
    it ran past the card's right edge. Let it drop under its label instead. */
 .settings-chat-switch-option:has(.settings-send-mode-options) {

@@ -198,6 +198,7 @@ function GeneralSettings({
 
           <section className="settings-general-section">
             <h3 className="settings-general-heading">{t("settings.chat")}</h3>
+            <h4 className="settings-general-subheading">{t("settings.chatSessionBehavior")}</h4>
             <div className="settings-chat-options">
               <div className="settings-chat-option settings-chat-switch-option">
                 <span>{t("settings.thinkingExpandedDefault")}</span>
@@ -282,12 +283,6 @@ function GeneralSettings({
                   onChange={(enabled) => { if (enabled !== soundEnabled) onSoundToggle(); }}
                 />
               </div>
-              <AgentTeamsSettingRow />
-              <LeanModeSettingRow />
-              <AutopilotSettingRow />
-              <ArtifactsSettingRow />
-              <AgentGuideSettingRow />
-              <AutoTitleSettingRow />
               <div className="settings-chat-option settings-chat-switch-option" role="radiogroup" aria-label={t("settings.enterSendMode")}>
                 <span>{t("settings.enterSendMode")}</span>
                 <div className="settings-send-mode-options">
@@ -338,6 +333,15 @@ function GeneralSettings({
                   </button>
                 </div>
               </div>
+            </div>
+            <h4 className="settings-general-subheading">{t("settings.chatServerSwitches")}</h4>
+            <div className="settings-chat-options">
+              <AgentTeamsSettingRow />
+              <LeanModeSettingRow />
+              <AutopilotSettingRow />
+              <ArtifactsSettingRow />
+              <AgentGuideSettingRow />
+              <AutoTitleSettingRow />
             </div>
           </section>
           <CompactionSettingsSection />
