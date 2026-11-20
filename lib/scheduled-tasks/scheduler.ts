@@ -1,4 +1,5 @@
 import { existsSync, statSync } from "fs";
+import { join } from "path";
 import { randomUUID } from "crypto";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { decideSlot } from "./catch-up";
@@ -339,6 +340,9 @@ export class Scheduler {
           ...(outcome.errorParams ? { errorParams: outcome.errorParams } : {}),
         }), this.agentDir) ?? { ...record, status: outcome.status };
         const autoPaused = this.recordOutcome(task.id, outcome);
+        // Autopilot: a failed run in a repo with a verify command gets a repair
+        // task. Fire-and-forget so the run record finishes first.
+        void this.maybeAutoFix(task, outcome, runId);
         announce(finished);
         emitScheduledTaskEvent({
           type: "run_finished",
@@ -387,5 +391,42 @@ export class Scheduler {
       return { ...task, consecutiveFailures: failures };
     }, this.agentDir);
     return paused;
+  }
+
+  /**
+   * Autopilot: turn a failed scheduled run into an autofix task when the
+   * session's folder is a git repo with a detectable verify command.
+   *
+   * Strictly opt-in (`autopilot.enabled` + `autoFixFailedRuns`), idempotent per
+   * run (the marker inside the task text), and never throws into the run path.
+   */
+  private async maybeAutoFix(task: ScheduledTask, outcome: RunOutcome, runId: string): Promise<void> {
+    if (outcome.status !== "failed" || !outcome.countsAsFailure) return;
+    try {
+      const { readAutopilotSettings } = await import("../autopilot");
+      const settings = readAutopilotSettings(join(this.agentDir, "pi-web", "settings.json"));
+      if (!settings.enabled || !settings.autoFixFailedRuns) return;
+      if (!existsSync(task.cwd) || !statSync(task.cwd).isDirectory()) return;
+      // Only repositories: an autofix without a diff/commit context cannot be reviewed.
+      if (!existsSync(join(task.cwd, ".git"))) return;
+      const { detectVerifyCommand } = await import("../autofix/detect");
+      const verifyCommand = detectVerifyCommand(task.cwd);
+      if (!verifyCommand) return;
+      const { createAutofixTask, listAutofixTasks } = await import("../autofix/store");
+      const marker = `[scheduled:${task.id}:${runId}]`;
+      if (listAutofixTasks(this.agentDir).some((item) => item.task.includes(marker))) return;
+      const prompt = task.prompt.length > 4000 ? `${task.prompt.slice(0, 4000)}…` : task.prompt;
+      const created = createAutofixTask({
+        task: `${marker}\n定时任务「${task.name}」失败，自动修复。\n\n失败原因：${outcome.error ?? "unknown"}\n\n任务要求：\n${prompt}`,
+        cwd: task.cwd,
+        verifyCommand,
+        maxRounds: settings.maxAutoFixRounds,
+      }, this.agentDir);
+      const { startAutofixTask } = await import("../autofix/runner");
+      void startAutofixTask(created.id, { agentDir: this.agentDir });
+      console.warn(`[pi-web] autopilot: scheduled run ${runId} failed; started autofix ${created.id}`);
+    } catch (error) {
+      console.warn("[pi-web] autopilot: could not start an autofix for the failed run:", error instanceof Error ? error.message : error);
+    }
   }
 }

@@ -1,0 +1,75 @@
+import { readAutopilotSettings, type AutopilotSettings } from "./autopilot";
+import { buildUserApprovalPrompt, checkPlanIdentity } from "./agent-teams-plan";
+import { readTeamPlanView } from "./agent-teams-plan-store";
+import { findTeamBySession, resolveTeamLeadSession } from "./agent-teams-swimlane-store";
+import { defaultDeliver } from "./agent-teams-unattended-runtime";
+
+/**
+ * Unattended team approval.
+ *
+ * A desktop session may only auto-approve a plan when it was itself started by
+ * unattended work (a scheduled run or an autofix task) and the autopilot switch
+ * is on. Manual sessions keep the mandatory human review.
+ */
+export const AUTOPILOT_SESSION_MARKERS = ["pi-web:scheduled-run", "pi-web:autofix"] as const;
+
+/** In-process idempotency: one delivery per plan revision. */
+const delivered = new Set<string>();
+
+export function isAutopilotOriginatedSession(customTypes: readonly string[]): boolean {
+  return customTypes.some((type) => (AUTOPILOT_SESSION_MARKERS as readonly string[]).includes(type));
+}
+
+/** Pure gate: both the master switch and the per-feature flag must be on. */
+export function shouldAutoApprove(settings: AutopilotSettings, customTypes: readonly string[]): boolean {
+  return settings.enabled && settings.autoApproveTeamPlans && isAutopilotOriginatedSession(customTypes);
+}
+
+export interface AutoApproveResult {
+  approved: boolean;
+  reason?: string;
+}
+
+/**
+ * Deliver the approval prompt to a team's lead when the settled session is an
+ * autopilot session and its team has a plan awaiting review.
+ *
+ * The actual approve + launch is still done by the lead through `team_plan`
+ * (the desktop never writes `plan.json`); this only removes the human click.
+ */
+export async function autoApproveTeamPlanForSession(input: {
+  sessionId: string;
+  customTypes: readonly string[];
+  settingsPath?: string;
+}): Promise<AutoApproveResult> {
+  const settings = readAutopilotSettings(input.settingsPath);
+  if (!shouldAutoApprove(settings, input.customTypes)) return { approved: false, reason: "disabled" };
+
+  const team = await findTeamBySession(input.sessionId);
+  if (!team) return { approved: false, reason: "no-team" };
+  const plan = await readTeamPlanView(team);
+  if (!plan) return { approved: false, reason: "no-plan" };
+  if (plan.state !== "review_pending") return { approved: false, reason: `state ${plan.state}` };
+
+  const key = `${input.sessionId}:${plan.planId}:${plan.revision}`;
+  if (delivered.has(key)) return { approved: false, reason: "already-delivered" };
+
+  const identity = checkPlanIdentity(plan, {
+    planId: plan.planId,
+    sessionId: plan.sessionId,
+    incarnationId: plan.incarnationId,
+    expectedRevision: plan.revision,
+  });
+  if (!identity.ok) return { approved: false, reason: identity.reason };
+
+  const leadSessionId = await resolveTeamLeadSession(team).catch(() => null);
+  const deliverTo = leadSessionId ?? plan.sessionId;
+  const result = await defaultDeliver(deliverTo, buildUserApprovalPrompt(plan));
+  if (!result.ok) return { approved: false, reason: result.reason ?? "delivery failed" };
+
+  delivered.add(key);
+  // The set only guards retries within this process; keep it from growing forever.
+  if (delivered.size > 200) delivered.clear();
+  console.warn(`[pi-web] autopilot: auto-approved plan ${plan.planId} r${plan.revision} for team ${team}`);
+  return { approved: true };
+}

@@ -795,6 +795,7 @@ export class AgentSessionWrapper {
     this.lastFinishedRun = { outcome: this.lastRunOutcome, finishedAt: Date.now() };
     if (this.suppressCompletionNotifications) return;
     this.autoTitleAfterRun();
+    this.autoApproveTeamAfterRun();
     recordRecentRunOutcome(this.sessionId, this.lastFinishedRun);
     try {
       this.onAgentRunComplete?.(this.sessionId, this.lastRunOutcome);
@@ -831,6 +832,25 @@ export class AgentSessionWrapper {
         this.autoTitleSettled = false;
         console.warn("[pi-web] automatic session title failed:", error instanceof Error ? error.message : error);
       });
+  }
+
+  /**
+   * Autopilot: once this session settles, approve a team plan that is awaiting
+   * review — only when the session was started by unattended work (a scheduled
+   * run or an autofix task). Manual sessions keep the human review gate.
+   */
+  private autoApproveTeamAfterRun(): void {
+    void (async () => {
+      try {
+        const entries = this.inner.sessionManager.getEntries() as unknown as Array<{ type?: string; customType?: string }>;
+        const customTypes = entries.flatMap((entry) =>
+          entry.type === "custom" && typeof entry.customType === "string" ? [entry.customType] : []);
+        const { autoApproveTeamPlanForSession } = await import("./agent-teams-autopilot");
+        await autoApproveTeamPlanForSession({ sessionId: this.sessionId, customTypes });
+      } catch (error) {
+        console.warn("[pi-web] autopilot: team auto-approve failed:", error instanceof Error ? error.message : error);
+      }
+    })();
   }
 
   getTaskSnapshot(): AgentTaskSnapshot {

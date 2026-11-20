@@ -41,6 +41,7 @@ import { ConfigButton, ConfigSwitch } from "./SettingsUi";
 import { AgentGuideSettingRow, ArtifactsSettingRow, AutoTitleSettingRow } from "./ArtifactsSettingRow";
 import { AgentTeamsSettingRow } from "./AgentTeamsSettingRow";
 import { LeanModeSettingRow } from "./LeanModeSettingRow";
+import { AutopilotSettingRow } from "./AutopilotSettingRow";
 import { RemoteAccessSection } from "./RemoteAccessSection";
 import { ServerSection } from "./ServerSection";
 import { NetworkProxySection } from "./NetworkProxySection";
@@ -283,6 +284,7 @@ function GeneralSettings({
               </div>
               <AgentTeamsSettingRow />
               <LeanModeSettingRow />
+              <AutopilotSettingRow />
               <ArtifactsSettingRow />
               <AgentGuideSettingRow />
               <AutoTitleSettingRow />
