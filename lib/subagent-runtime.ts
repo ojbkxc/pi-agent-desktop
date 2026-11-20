@@ -603,7 +603,25 @@ export function createSubagentController(
     const existing = await get(request.sessionId);
     if (!existing) throw new Error(`Subagent not found: ${request.sessionId}`);
     if (existing.parentSessionId !== parentSessionId) throw new Error("Subagent does not belong to this parent session");
-    if (existing.status === "running" || existing.status === "queued") throw new Error("Subagent is already running");
+    // pi-team parks a member through `host.stop`, but the desktop run record can
+    // stay at active/running when the wrapper was already gone (its `prompt()`
+    // never settles). Every later revive would then be refused as "already
+    // running". Refuse only when the session is genuinely running now; otherwise
+    // settle the stale entry so the revive can proceed.
+    const staleRun = getSubagentRuns().get(request.sessionId);
+    const wrapperBefore = dependencies.getSession(request.sessionId);
+    const genuinelyRunning = Boolean(wrapperBefore?.isAlive() && wrapperBefore.isRunning());
+    if ((existing.status === "running" || existing.status === "queued") && genuinelyRunning) {
+      throw new Error("Subagent is already running");
+    }
+    if (staleRun && !genuinelyRunning) {
+      staleRun.abortRequested = true;
+      staleRun.active = false;
+      staleRun.run = settleOrphanedRun(staleRun.run);
+      if (getSubagentRuns().get(request.sessionId) === staleRun) {
+        getSubagentRuns().delete(request.sessionId);
+      }
+    }
     const parent = dependencies.getSession(parentSessionId);
     if (!parent?.isAlive()) throw new Error("Parent session is no longer available");
     const sessionPath = existing.sessionPath || await dependencies.resolveSessionPath(request.sessionId);
@@ -631,12 +649,18 @@ export function createSubagentController(
     const completion = new Promise<SubagentRunInfo>((resolve) => { resolveCompletion = resolve; });
     const stored: StoredSubagentExecution = { run: initialRun, completion, abortRequested: false, active: true };
     getSubagentRuns().set(request.sessionId, stored);
+    // Only drop our own entry: a stale previous run's `finally` must not delete a
+    // newer execution that a revive installed for the same session id.
+    const forgetStored = (): void => {
+      const registry = getSubagentRuns();
+      if (registry.get(request.sessionId) === stored) registry.delete(request.sessionId);
+    };
     try {
       request.onUpdate?.(initialRun);
       dependencies.invalidateSessionList();
     } catch (error) {
       // D3-1：入表后的同步失败（onUpdate/列表缓存失效）必须删表，否则条目僵尸化。
-      getSubagentRuns().delete(request.sessionId);
+      forgetStored();
       throw error;
     }
     const handleParentAbort = () => {
@@ -651,7 +675,7 @@ export function createSubagentController(
         const result: SubagentRunInfo = { ...initialRun, status: "aborted", completedAt: new Date().toISOString() };
         manager.appendCustomEntry(SUBAGENT_RESULT_TYPE, { version: 1, status: "aborted", completedAt: result.completedAt });
         stored.run = result;
-        getSubagentRuns().delete(request.sessionId);
+        forgetStored();
         resolveCompletion(result);
         return result;
       }
@@ -689,7 +713,7 @@ export function createSubagentController(
       });
       stored.run = result;
       request.onUpdate?.(result);
-      getSubagentRuns().delete(request.sessionId);
+      forgetStored();
       dependencies.invalidateSessionList();
       return result;
     };
@@ -699,7 +723,7 @@ export function createSubagentController(
       manager.appendCustomEntry(SUBAGENT_RESULT_TYPE, { version: 1, status: "aborted", completedAt: result.completedAt });
       stored.run = result;
       request.onUpdate?.(result);
-      getSubagentRuns().delete(request.sessionId);
+      forgetStored();
       dependencies.invalidateSessionList();
       resolveCompletion(result);
     };
@@ -710,7 +734,7 @@ export function createSubagentController(
         return await executeOnce();
       } finally {
         stored.active = false;
-        getSubagentRuns().delete(request.sessionId);
+        forgetStored();
       }
     };
     const finishQueuedAbort = (): void => {
@@ -718,7 +742,7 @@ export function createSubagentController(
         finishQueuedAbortOnce();
       } finally {
         stored.active = false;
-        getSubagentRuns().delete(request.sessionId);
+        forgetStored();
       }
     };
     let queued: EnqueuedSubagent<SubagentRunInfo>;
@@ -731,13 +755,13 @@ export function createSubagentController(
       }, finishQueuedAbort);
     } catch (error) {
       // D3-1：enqueue 先 onState 后 pump，onState 抛错时 execute 尚未运行，删表后原样上抛。
-      getSubagentRuns().delete(request.sessionId);
+      forgetStored();
       throw error;
     }
     stored.cancelQueued = queued.cancel;
     void queued.promise.then(resolveCompletion, (error) => {
       // D3-1：execute/取消的异常退出经 queue reject 到这里；正常终态已在 execute 内删表，此处幂等。
-      getSubagentRuns().delete(request.sessionId);
+      forgetStored();
       resolveCompletion({ ...initialRun, status: "failed", completedAt: new Date().toISOString(), error: error instanceof Error ? error.message : String(error) });
     });
     return { run: stored.run, completion };
@@ -810,7 +834,19 @@ export function createSubagentController(
       if (!stored.cancelQueued?.()) throw new Error("Subagent is no longer queued");
       return;
     }
-    if (!wrapper?.isAlive() || !wrapper.isRunning()) throw new Error("Subagent is not running");
+    if (!wrapper?.isAlive() || !wrapper.isRunning()) {
+      // pi-team parks a member through host.stop. The wrapper is often already
+      // gone by then, so there is nothing to abort — but the run record must not
+      // stay active/running, or every later revive is refused as "already
+      // running". Settle it here and make stop idempotent.
+      if (stored) {
+        stored.abortRequested = true;
+        stored.active = false;
+        stored.run = settleOrphanedRun(stored.run);
+        if (getSubagentRuns().get(sessionId) === stored) getSubagentRuns().delete(sessionId);
+      }
+      return;
+    }
     if (stored) stored.abortRequested = true;
     await wrapper.inner.abort();
   }
