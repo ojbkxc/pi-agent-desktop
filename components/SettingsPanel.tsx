@@ -38,6 +38,7 @@ import { AppUpdatesSection } from "./AppUpdatesSection";
 import { DesktopAppSection } from "./desktop";
 import { McpConfig } from "./McpConfig";
 import { ConfigButton, ConfigSwitch } from "./SettingsUi";
+import { ConfirmDangerButton } from "./ConfirmDangerButton";
 import { AgentGuideSettingRow, ArtifactsSettingRow, AutoTitleSettingRow } from "./ArtifactsSettingRow";
 import { AgentTeamsSettingRow } from "./AgentTeamsSettingRow";
 import { LeanModeSettingRow } from "./LeanModeSettingRow";
@@ -411,12 +412,14 @@ function GeneralSettings({
 
           {webAuthEnabled && (
             <section className="settings-general-section">
-              <ConfigButton variant="secondary" disabled={loggingOut} onClick={() => void logOut()}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M10 17l5-5-5-5M15 12H3M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
-                </svg>
-                {loggingOut ? t("auth.loggingOut") : t("auth.logOut")}
-              </ConfigButton>
+              <ConfirmDangerButton
+                label={t("auth.logOut")}
+                confirmLabel={t("settings.confirmLogout")}
+                busyLabel={t("auth.loggingOut")}
+                busy={loggingOut}
+                className="config-button config-button-danger config-button-small"
+                onConfirm={() => void logOut()}
+              />
               {logoutError && <p role="alert" className="settings-general-error">{logoutError}</p>}
             </section>
           )}

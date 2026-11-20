@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { AppSelect } from "./AppSelect";
 import { ConfigButton } from "./SettingsUi";
+import { ConfirmDangerButton } from "./ConfirmDangerButton";
 
 /**
  * Settings › General › Always on —— 常驻会话（pin）与 Router 角色。
@@ -175,9 +176,14 @@ export function PinnedSessionsSettings() {
               </span>
               {entry.note && <span className="settings-option-hint">{entry.note}</span>}
             </span>
-            <ConfigButton disabled={busy} onClick={() => void unpin(entry.sessionId)}>
-              {t("resident.unpin")}
-            </ConfigButton>
+            <ConfirmDangerButton
+              label={t("resident.unpin")}
+              confirmLabel={t("settings.confirmUnpin")}
+              busyLabel={t("i18n.saving")}
+              busy={busy}
+              className="config-button config-button-danger config-button-small"
+              onConfirm={() => void unpin(entry.sessionId)}
+            />
           </div>
         ))}
       </div>

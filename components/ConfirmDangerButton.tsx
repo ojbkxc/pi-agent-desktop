@@ -4,10 +4,14 @@ import { useEffect, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 
 /** Destructive-action button that arms on first click and confirms on the second. */
-export function ConfirmDangerButton({ label, busyLabel, busy, onConfirm, className, style }: {
+export function ConfirmDangerButton({ label, confirmLabel, busyLabel, busy, disabled, onConfirm, className, style }: {
   label: string;
+  /** Shown on the armed second click. Defaults to the shared "Confirm delete?". */
+  confirmLabel?: string;
   busyLabel?: string;
   busy?: boolean;
+  /** Disable without swapping to the busy label (e.g. a remote-only action); defaults to `busy`. */
+  disabled?: boolean;
   onConfirm: () => void;
   className?: string;
   style?: React.CSSProperties;
@@ -24,7 +28,7 @@ export function ConfirmDangerButton({ label, busyLabel, busy, onConfirm, classNa
   return (
     <button
       className={className ?? "native-button native-button-compact native-button-danger"}
-      disabled={busy}
+      disabled={disabled ?? busy}
       aria-live="polite"
       style={armed ? { ...style, background: "var(--danger)", borderColor: "var(--danger)", color: "#fff" } : style}
       onClick={() => {
@@ -37,7 +41,7 @@ export function ConfirmDangerButton({ label, busyLabel, busy, onConfirm, classNa
       }}
       onBlur={() => setArmed(false)}
     >
-      {busy && busyLabel ? busyLabel : armed ? t("common.confirmDelete") : label}
+      {busy && busyLabel ? busyLabel : armed ? (confirmLabel ?? t("common.confirmDelete")) : label}
     </button>
   );
 }

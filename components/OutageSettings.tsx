@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { AppSelect } from "./AppSelect";
-import { ConfigButton, ConfigSwitch } from "./SettingsUi";
+import { ConfigSwitch } from "./SettingsUi";
+import { ConfirmDangerButton } from "./ConfirmDangerButton";
 
 /**
  * Settings › General › Provider outage recovery —— 模型 API 连续不可用（几分钟到
@@ -145,11 +146,14 @@ export function OutageSettings() {
             <span className="settings-option-hint">{t("outage.capHint")}</span>
           </span>
           {status && status.waiting > 0 && (
-            <ConfigButton
-              variant="secondary"
-              size="small"
+            <ConfirmDangerButton
+              label={t("outage.cancelAll")}
+              confirmLabel={t("settings.confirmCancelAll")}
+              busyLabel={t("i18n.saving")}
+              busy={busy}
               disabled={busy || !local}
-              onClick={() => {
+              className="config-button config-button-danger config-button-small"
+              onConfirm={() => {
                 setBusy(true);
                 void fetch("/api/outage", {
                   method: "POST",
@@ -160,9 +164,7 @@ export function OutageSettings() {
                   .catch(() => setFailed(true))
                   .finally(() => setBusy(false));
               }}
-            >
-              {t("outage.cancelAll")}
-            </ConfigButton>
+            />
           )}
         </div>
       </div>
