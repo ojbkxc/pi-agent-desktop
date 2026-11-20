@@ -114,10 +114,16 @@ jobs:
           tagName: v__VERSION__
           releaseName: pi-agent-desktop v__VERSION__
           releaseBody: |
-            ## Pi Agent Desktop 0.8.6 (fork)
+            ## Pi Agent Desktop 0.8.8 (fork)
 
-            **2026-11-18 覆盖式重发 / re-release.** Same version number; this build replaces the previous v0.8.6 artifacts.
-            基于全仓细节巡检重新打包（126 文件），并在其上叠加当日的会话页对齐、压缩修复与破甲控制台：
+            **2026-11-21 发布 / release.** 在 0.8.7 基础上的本轮改动：
+
+            - **无人值守闭环 / unattended loop.** autopilot 默认开启：定时任务失败自动创建并启动修复任务（仅 .git 仓库 + 可探测验证命令）、团队计划自动批准（仅限 `pi-web:scheduled-run` / `pi-web:autofix` 发起的会话）、阻塞扩展对话框（含 `custom` 覆盖层）120s 无人应答后取安全默认值、失败/中止的定时运行与修复结果进入「Needs you」收件箱。
+            - **Agent Teams 通讯流对齐 cc-haha / communication feed.** 消息行参与者可点直达成员检查器、超长历史截断提示、检查器重做（身份别名收发匹配、协议叙述不再倾倒 JSON、方向箭头、执行中/等待依赖/等待收尾/卡住等状态推导、任务按运行中/未开始/已完成分组）。
+            - **设置面板 / settings.** 登出、取消常驻、取消全部等待加二次确认；服务端开关保存即时反馈；压缩保留量/对话指令加未保存状态；Chat 区按「会话行为 / 服务端开关」分组；清理重复文案。
+            - **测试 / tests.** 无人值守链路进程内端到端（失败 → 自动修复、计划自动批准判定 → 投递）；对话框策略双路径源码断言；人工验收清单见 `docs/agents/autopilot-verification.md`。
+
+            以下为历史发布说明。
 
             - **本次重发新增 / what this re-release adds.** cc-haha 风格的工具调用聚合行（默认收起、回合尾动词摘要 `读取 2 个文件、运行 1 条命令`）、团队状态条从顶栏移到消息列上方整宽横幅、上下文环方形用量面板（含本会话真实压缩触发点与立即压缩）、压缩阈值回归档位占比（均衡 50% / 长上下文 80%，压缩后不再贴线重触发）、团队会话标题剥离 `<agent-team-request>` 指令块、团队模型下拉修复（cwd 未传导致目录为空）、配置横条改单行短版、泳道连线终点锚定收件方 + 箭头与流动虚线、破甲控制台（请求治理网关：提示词归一化 / 措辞改写 / 技能注入 / 思考预算封顶，设置 › 破甲控制台）。
 
