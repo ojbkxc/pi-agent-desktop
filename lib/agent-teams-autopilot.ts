@@ -1,4 +1,8 @@
-import { readAutopilotSettings, type AutopilotSettings } from "./autopilot";
+import {
+  readAutopilotSettings,
+  isAutopilotOriginatedSession,
+  type AutopilotSettings,
+} from "./autopilot";
 import { buildUserApprovalPrompt, checkPlanIdentity } from "./agent-teams-plan";
 import { readTeamPlanView } from "./agent-teams-plan-store";
 import { findTeamBySession, resolveTeamLeadSession } from "./agent-teams-swimlane-store";
@@ -10,15 +14,14 @@ import { defaultDeliver } from "./agent-teams-unattended-runtime";
  * A desktop session may only auto-approve a plan when it was itself started by
  * unattended work (a scheduled run or an autofix task) and the autopilot switch
  * is on. Manual sessions keep the mandatory human review.
+ *
+ * The marker list itself lives in `lib/autopilot.ts` so `lib/rpc-manager.ts`
+ * can share it without pulling this module (and the delivery seam) in.
  */
-export const AUTOPILOT_SESSION_MARKERS = ["pi-web:scheduled-run", "pi-web:autofix"] as const;
+export { AUTOPILOT_SESSION_MARKERS, isAutopilotOriginatedSession } from "./autopilot";
 
 /** In-process idempotency: one delivery per plan revision. */
 const delivered = new Set<string>();
-
-export function isAutopilotOriginatedSession(customTypes: readonly string[]): boolean {
-  return customTypes.some((type) => (AUTOPILOT_SESSION_MARKERS as readonly string[]).includes(type));
-}
 
 /** Pure gate: both the master switch and the per-feature flag must be on. */
 export function shouldAutoApprove(settings: AutopilotSettings, customTypes: readonly string[]): boolean {

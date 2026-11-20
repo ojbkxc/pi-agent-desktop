@@ -86,3 +86,35 @@ export function writeAutopilotSettings(
 export function isAutopilotEnabled(settingsPath = getPiWebSettingsPath()): boolean {
   return readAutopilotSettings(settingsPath).enabled;
 }
+
+/**
+ * Sessions started by unattended work, recognised by the custom entries their
+ * runners write. A manual session never carries one of these.
+ */
+export const AUTOPILOT_SESSION_MARKERS = ["pi-web:scheduled-run", "pi-web:autofix"] as const;
+
+export function isAutopilotOriginatedSession(customTypes: readonly string[]): boolean {
+  return customTypes.some((type) => (AUTOPILOT_SESSION_MARKERS as readonly string[]).includes(type));
+}
+
+/**
+ * How long a blocking dialog in an unattended session waits for a person before
+ * it takes the safe default (cancel / "no"). Two minutes: long enough for the
+ * phone notification to reach someone, short enough that a forgotten run does
+ * not sit parked all night.
+ */
+export const AUTOPILOT_DIALOG_TIMEOUT_MS = 120_000;
+
+/**
+ * The timeout a blocking dialog gets, or `undefined` for "wait forever".
+ * An extension's own timeout always wins; otherwise only autopilot sessions
+ * with the master switch on are auto-answered.
+ */
+export function resolveAutopilotDialogTimeout(input: {
+  requested?: number;
+  autopilotSession: boolean;
+  settings: AutopilotSettings;
+}): number | undefined {
+  if (input.requested) return input.requested;
+  return input.autopilotSession && input.settings.enabled ? AUTOPILOT_DIALOG_TIMEOUT_MS : undefined;
+}

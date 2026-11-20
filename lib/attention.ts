@@ -10,6 +10,7 @@
  */
 import type { AgentTaskSnapshot, SessionInfo } from "./types";
 import type { AttentionItem, AttentionSnapshot } from "./attention-types";
+import type { AutofixStatus } from "./autofix/types";
 import { skillExpansionToCommand } from "./slash-display";
 
 /** Most completed rows the endpoint returns (the mobile home screen's "recent" cap). */
@@ -17,6 +18,15 @@ export const ATTENTION_COMPLETED_LIMIT = 20;
 /** Titles and previews are bounded so a pasted document cannot bloat every poll. */
 export const ATTENTION_TITLE_MAX = 120;
 export const ATTENTION_PREVIEW_MAX = 200;
+/**
+ * Autofix outcomes merged into `completed` per snapshot. They are the rows a
+ * person is most likely to act on, so they come first, and a burst of failed
+ * runs must not push every ordinary session out of the inbox.
+ */
+export const ATTENTION_AUTOFIX_LIMIT = 10;
+
+/** Terminal autofix outcomes worth a row; `succeeded` needs none. */
+const INBOX_AUTOFIX_STATUSES: ReadonlySet<AutofixStatus> = new Set(["failed", "exhausted", "stopped"]);
 
 /**
  * Rows the sidebar never shows belong in no inbox either: subagent runs report
@@ -48,13 +58,17 @@ export function attentionTitle(session: SessionInfo): string {
   return truncate(title, ATTENTION_TITLE_MAX);
 }
 
-/** The project folder's name; a chat has none. */
-export function attentionProjectName(session: SessionInfo): string | undefined {
-  if (session.workspaceKind === "chat") return undefined;
-  const root = session.projectRoot || session.cwd || "";
+/** The project folder's name for a filesystem path; `undefined` for an empty root. */
+function projectNameFromRoot(root: string | undefined): string | undefined {
   if (!root) return undefined;
   const trimmed = root.replace(/[\\/]+$/, "");
   return trimmed.split(/[\\/]/).pop() || root;
+}
+
+/** The project folder's name; a chat has none. */
+export function attentionProjectName(session: SessionInfo): string | undefined {
+  if (session.workspaceKind === "chat") return undefined;
+  return projectNameFromRoot(session.projectRoot || session.cwd);
 }
 
 /**
@@ -75,6 +89,54 @@ function waitingPreview(snapshot: AgentTaskSnapshot | undefined): string | undef
   return preview || undefined;
 }
 
+/** The slice of an autofix task the inbox needs (the full record lives in `lib/autofix/types.ts`). */
+export interface AttentionAutofixTask {
+  id: string;
+  task: string;
+  cwd: string;
+  status: AutofixStatus;
+  /** The repair session; a task that never started one has nothing to open. */
+  sessionId: string | null;
+  updatedAt: number;
+  finishedAt: number | null;
+}
+
+/**
+ * Terminal autofix outcomes as inbox rows. A failed / exhausted / stopped
+ * repair is exactly what "Needs you" is for, but its session is a scheduled
+ * kind the session list hides, so it would never surface from `sessions`
+ * alone. Rows without a session are skipped: the deep link could open nothing,
+ * and the task stays visible on the Autofix page.
+ */
+export function attentionItemsForAutofix(
+  tasks: readonly AttentionAutofixTask[],
+  now = Date.now(),
+): AttentionItem[] {
+  const bySession = new Map<string, AttentionItem>();
+  for (const task of tasks) {
+    if (!INBOX_AUTOFIX_STATUSES.has(task.status)) continue;
+    const sessionId = task.sessionId;
+    if (!sessionId) continue;
+    const stamp = task.finishedAt ?? task.updatedAt;
+    const updatedAt = Number.isFinite(stamp) && stamp > 0 ? stamp : now;
+    const projectName = projectNameFromRoot(task.cwd);
+    const item: AttentionItem = {
+      sessionId,
+      title: truncate(collapseWhitespace(task.task) || sessionId.slice(0, 12), ATTENTION_TITLE_MAX),
+      workspaceKind: "project",
+      ...(projectName ? { projectName } : {}),
+      kind: "completed",
+      updatedAt,
+    };
+    // One session can be the subject of several tasks; the newest outcome wins.
+    const existing = bySession.get(sessionId);
+    if (!existing || existing.updatedAt < item.updatedAt) bySession.set(sessionId, item);
+  }
+  return [...bySession.values()]
+    .sort((a, b) => b.updatedAt - a.updatedAt || a.sessionId.localeCompare(b.sessionId))
+    .slice(0, ATTENTION_AUTOFIX_LIMIT);
+}
+
 export interface BuildAttentionInput {
   /** Every session the sidebar knows about (already merged and project-annotated). */
   sessions: readonly SessionInfo[];
@@ -82,6 +144,8 @@ export interface BuildAttentionInput {
   awaitingSessionIds: readonly string[];
   /** Live per-session snapshots (`getRpcTaskSnapshots()`), for wait time and prompt. */
   taskSnapshots?: readonly AgentTaskSnapshot[];
+  /** Terminal autofix outcomes; merged above the ordinary completed rows. */
+  autofixTasks?: readonly AttentionAutofixTask[];
   /** Clock injection point; defaults to now. */
   now?: number;
   completedLimit?: number;
@@ -99,6 +163,7 @@ export function buildAttentionSnapshot({
   sessions,
   awaitingSessionIds,
   taskSnapshots = [],
+  autofixTasks = [],
   now = Date.now(),
   completedLimit = ATTENTION_COMPLETED_LIMIT,
 }: BuildAttentionInput): AttentionSnapshot {
@@ -155,8 +220,15 @@ export function buildAttentionSnapshot({
     || a.sessionId.localeCompare(b.sessionId)
   ));
 
+  // Autofix outcomes lead the completed list; their sessions would otherwise
+  // arrive as anonymous "completed" rows (or not at all, while running). A
+  // session parked on a dialog stays in `awaiting` only — it is still waiting.
+  const autofixItems = attentionItemsForAutofix(autofixTasks, now)
+    .filter((item) => !awaiting.has(item.sessionId));
+  const autofixIds = new Set(autofixItems.map((item) => item.sessionId));
+
   const completed = eligible
-    .filter((session) => !awaiting.has(session.id))
+    .filter((session) => !awaiting.has(session.id) && !autofixIds.has(session.id))
     .map((session): AttentionItem => {
       const projectName = attentionProjectName(session);
       return {
@@ -169,9 +241,9 @@ export function buildAttentionSnapshot({
       };
     })
     .sort((a, b) => b.updatedAt - a.updatedAt || a.sessionId.localeCompare(b.sessionId))
-    .slice(0, Math.max(0, completedLimit));
+    .slice(0, Math.max(0, completedLimit - autofixItems.length));
 
-  return { awaiting: awaitingItems, completed, generatedAt: now };
+  return { awaiting: awaitingItems, completed: [...autofixItems, ...completed], generatedAt: now };
 }
 
 /**
@@ -183,15 +255,17 @@ export function buildAttentionSnapshot({
  * serves, so the inbox poll adds no extra directory scan.
  */
 export async function loadAttentionSnapshot(now = Date.now()): Promise<AttentionSnapshot> {
-  const [sessionReader, rpcManager] = await Promise.all([
+  const [sessionReader, rpcManager, autofixStore] = await Promise.all([
     import("./session-reader"),
     import("./rpc-manager"),
+    import("./autofix/store"),
   ]);
   const sessions = await sessionReader.listAllSessions();
   return buildAttentionSnapshot({
     sessions,
     awaitingSessionIds: rpcManager.getAwaitingInputRpcSessionIds(),
     taskSnapshots: rpcManager.getRpcTaskSnapshots(),
+    autofixTasks: autofixStore.listAutofixTasks(),
     now,
   });
 }

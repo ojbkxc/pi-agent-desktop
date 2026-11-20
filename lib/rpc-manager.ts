@@ -114,6 +114,7 @@ import {
 } from "./chat-workspace-policy";
 import { ComposerQueue } from "./composer-queue";
 import { isBlockingExtensionUiRequest } from "./browser-notifications";
+import { isAutopilotOriginatedSession, readAutopilotSettings, resolveAutopilotDialogTimeout } from "./autopilot";
 import type { PendingComposerMessage } from "./composer-queue-types";
 
 // ============================================================================
@@ -836,21 +837,36 @@ export class AgentSessionWrapper {
 
   /**
    * Autopilot: once this session settles, approve a team plan that is awaiting
-   * review — only when the session was started by unattended work (a scheduled
-   * run or an autofix task). Manual sessions keep the human review gate.
+   * review — only when unattended work (a scheduled run or an autofix task)
+   * started this session and the autopilot switch is on. Manual sessions keep
+   * the human review gate. The delivery is fire-and-forget: settling a run must
+   * never wait on it.
    */
   private autoApproveTeamAfterRun(): void {
     void (async () => {
       try {
-        const entries = this.inner.sessionManager.getEntries() as unknown as Array<{ type?: string; customType?: string }>;
-        const customTypes = entries.flatMap((entry) =>
-          entry.type === "custom" && typeof entry.customType === "string" ? [entry.customType] : []);
         const { autoApproveTeamPlanForSession } = await import("./agent-teams-autopilot");
-        await autoApproveTeamPlanForSession({ sessionId: this.sessionId, customTypes });
+        await autoApproveTeamPlanForSession({ sessionId: this.sessionId, customTypes: this.customEntryTypes() });
       } catch (error) {
         console.warn("[pi-web] autopilot: team auto-approve failed:", error instanceof Error ? error.message : error);
       }
     })();
+  }
+
+  /** The custom entry types this session's file carries (`pi-web:scheduled-run`, `pi-web:autofix`, …). */
+  private customEntryTypes(): string[] {
+    try {
+      const entries = this.inner.sessionManager.getEntries() as unknown as Array<{ type?: string; customType?: string }>;
+      return entries.flatMap((entry) =>
+        entry.type === "custom" && typeof entry.customType === "string" ? [entry.customType] : []);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Autopilot: was this session started by unattended work? */
+  private isAutopilotSession(): boolean {
+    return isAutopilotOriginatedSession(this.customEntryTypes());
   }
 
   getTaskSnapshot(): AgentTaskSnapshot {
@@ -2599,11 +2615,19 @@ export class AgentSessionWrapper {
     const abortSignal = signal ? AbortSignal.any([signal, stopSignal]) : stopSignal;
 
     const id = randomUUID();
+    // Autopilot: nobody is watching an unattended session's dialogs. After the
+    // wait the dialog takes the safe default (cancel / "no" / empty) instead of
+    // parking the run forever. An extension's own timeout always wins.
+    const effectiveTimeout = resolveAutopilotDialogTimeout({
+      requested: timeout,
+      autopilotSession: this.isAutopilotSession(),
+      settings: readAutopilotSettings(),
+    });
     const fullRequest = {
       type: "extension_ui_request",
       id,
       ...request,
-      ...(timeout ? { timeout, expiresAt: Date.now() + timeout } : {}),
+      ...(effectiveTimeout ? { timeout: effectiveTimeout, expiresAt: Date.now() + effectiveTimeout } : {}),
     };
 
     return new Promise((resolve, reject) => {
@@ -2625,7 +2649,7 @@ export class AgentSessionWrapper {
       };
       const onAbort = () => settle(defaultValue);
 
-      if (timeout) timeoutId = setTimeout(() => settle(defaultValue), timeout);
+      if (effectiveTimeout) timeoutId = setTimeout(() => settle(defaultValue), effectiveTimeout);
       abortSignal.addEventListener("abort", onAbort, { once: true });
 
       this.pendingUiRequests.set(id, fullRequest as AgentEvent);
