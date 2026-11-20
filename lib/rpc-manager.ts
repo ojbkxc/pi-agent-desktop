@@ -2535,6 +2535,7 @@ export class AgentSessionWrapper {
 
     return new Promise<T>((resolve, reject) => {
       let completed = false;
+      let closeTimer: ReturnType<typeof setTimeout> | undefined;
       const tui = createHeadlessCustomUiTui(
         () => {
           const custom = this.activeCustomUis.get(id);
@@ -2545,6 +2546,7 @@ export class AgentSessionWrapper {
       const finish = (value: T) => {
         if (completed) return;
         completed = true;
+        if (closeTimer) clearTimeout(closeTimer);
         stopSignal.removeEventListener("abort", onStop);
         if (stopSignal.aborted) reject(stopSignal.reason);
         else resolve(value);
@@ -2558,6 +2560,22 @@ export class AgentSessionWrapper {
       };
       const onStop = () => done(undefined as T);
       stopSignal.addEventListener("abort", onStop, { once: true });
+
+      // Autopilot: nobody is watching an unattended session's custom overlay, so it
+      // would otherwise hang until maxDurationMin. Reuse the same dialog policy as
+      // select/confirm/input/editor — after the wait it closes itself with no answer.
+      const closeAfter = resolveAutopilotDialogTimeout({
+        autopilotSession: this.isAutopilotSession(),
+        settings: readAutopilotSettings(),
+      });
+      if (closeAfter) {
+        closeTimer = setTimeout(() => {
+          console.warn(`[autopilot] auto-closed an unattended session's custom UI overlay after ${closeAfter} ms with no response`);
+          done(undefined as T);
+        }, closeAfter);
+        // The overlay lasts only as long as the session; never let this timer hold the process open.
+        (closeTimer as unknown as { unref?: () => void }).unref?.();
+      }
 
       Promise.resolve()
         .then(() => completed ? undefined : factory(tui, PLAIN_TEXT_THEME, CUSTOM_UI_KEYBINDINGS, done))
