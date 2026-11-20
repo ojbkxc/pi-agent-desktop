@@ -124,11 +124,11 @@ const S: Record<string, CSSProperties> = {
     zIndex: "var(--z-modal)",
   },
   dialog: {
-    // 920px 在宽屏上几乎横跨整个窗口，两列编辑器拉得很长；720px 刚好
-    // 容下 280px 成员列 + 432px 详情/任务列，又不至于把弹框铺满。
+    // 与下面 composer 的内容宽（--chat-content-max-width，默认 820px）对齐：
+    // 弹框看起来就是输入框的放大版，而不是另起一套宽度。
     // `boxSizing: border-box` 必须保留：content-box 下 width 不含 padding/border，
     // 100% 宽时每侧会多出 16px，弹框在窄窗口里左右各溢出一截。
-    width: "min(720px, 100%)",
+    width: "min(var(--chat-content-max-width, 820px), 100%)",
     maxWidth: "100%",
     boxSizing: "border-box",
     maxHeight: "min(78vh, 640px)",

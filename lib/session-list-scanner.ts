@@ -19,6 +19,7 @@ import { basename, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { writePrivateFileAtomicSync } from "./atomic-file";
 import { attachmentAwareTitle } from "./chat-attachments";
+import { stripAgentTeamRequest } from "./agent-team-request";
 import { userImageDisplayText, userMessageImageCount } from "./user-image-display";
 
 export interface ScannedSessionInfo {
@@ -271,8 +272,13 @@ function foldEntry(totals: ScanTotals, entry: RawEntry): void {
 	if (message.role !== "user") return;
 	const textContent = extractTextContent(message);
 	if (!textContent) return;
+	// The composer's Agent Team switch prepends a fixed instruction block to the
+	// turn it is armed for (same tags as cc-haha). The title must read what the
+	// user actually typed, not that block — otherwise every team session shows
+	// the identical English instruction. A block-only message keeps the raw text.
+	const asked = stripAgentTeamRequest(textContent).content.trim() || textContent.trim();
 	totals.firstMessage = attachmentAwareTitle(
-		userImageDisplayText(textContent, userMessageImageCount(message.content)),
+		userImageDisplayText(asked, userMessageImageCount(message.content)),
 	);
 }
 

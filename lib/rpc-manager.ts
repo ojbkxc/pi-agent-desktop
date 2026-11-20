@@ -6,6 +6,7 @@ import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 
 import { join, resolve } from "path";
 import { validateAgentImages } from "./image-attachments";
 import { splitAttachedFiles } from "./chat-attachments";
+import { stripAgentTeamRequest } from "./agent-team-request";
 import { llamaCppExtension } from "./pi-sdk-internals";
 import { userImageDisplayText, userMessageImageCount } from "./user-image-display";
 import { invalidateModelsCache } from "./models-cache";
@@ -3189,6 +3190,12 @@ export function getRpcSessionInfos(options: { includeTransient?: boolean } = {})
       if (activityMs !== undefined) lastActivityMs = Math.max(lastActivityMs, activityMs);
     }
 
+    // The Agent Team switch prepends a fixed instruction block to the turn it is
+    // armed for; the session title should read the user's own words instead.
+    const firstMessageText = firstUserMessage
+      ? runtimeMessageText(firstUserMessage)
+      : (pendingPrompt?.text ?? "");
+    const askedFirst = stripAgentTeamRequest(firstMessageText).content.trim() || firstMessageText.trim();
     sessions.push({
       path: sessionFile ?? "",
       id: header?.id ?? session.sessionId,
@@ -3198,8 +3205,8 @@ export function getRpcSessionInfos(options: { includeTransient?: boolean } = {})
       modified: new Date(lastActivityMs).toISOString(),
       messageCount: messages.length,
       firstMessage: (firstUserMessage
-        ? userImageDisplayText(runtimeMessageText(firstUserMessage), userMessageImageCount("content" in firstUserMessage.message ? firstUserMessage.message.content : undefined))
-        : pendingPrompt?.text) || "(no messages)",
+        ? userImageDisplayText(askedFirst, userMessageImageCount("content" in firstUserMessage.message ? firstUserMessage.message.content : undefined))
+        : askedFirst) || "(no messages)",
       ...(subagent ? {
         parentSessionId: subagent.parentSessionId,
         relation: {
