@@ -61,3 +61,23 @@ test("不得把 i18n 键原文渲染到界面", () => {
   const html = render(React.createElement(SessionTitleStrip, { session: session() }));
   assert.doesNotMatch(html, /chat\.sessionTitle\.label|chat\.untitledSession/);
 });
+
+test("传 onRenamed 才渲染改名入口；不传保持只读", () => {
+  const editable = render(React.createElement(SessionTitleStrip, { session: session(), onRenamed: () => {} }));
+  assert.match(editable, /data-testid="session-title-rename"/, "可改名时有铅笔入口");
+  assert.match(editable, /Rename session/, "入口文案走 i18n");
+  assert.doesNotMatch(editable, /chat\.sessionTitle\./, "不得渲染 i18n 键原文");
+
+  const readOnly = render(React.createElement(SessionTitleStrip, { session: session() }));
+  assert.doesNotMatch(readOnly, /data-testid="session-title-rename"/, "无回调时不出现编辑入口");
+});
+
+test("未命名会话也可改名：不渲染裸 id，保留入口", () => {
+  const html = render(React.createElement(SessionTitleStrip, {
+    session: session({ name: "  ", firstMessage: "" }),
+    onRenamed: () => {},
+  }));
+  assert.match(html, /Untitled session/);
+  assert.doesNotMatch(html, /s-1/);
+  assert.match(html, /data-testid="session-title-rename"/);
+});

@@ -276,6 +276,11 @@ export function AppShell() {
       return refreshed ? mergeCatalogRow(current, refreshed) : current;
     });
   }, []);
+  // 标题条就地改名：乐观更新选中会话与列表行，避免等下一次列表拉取。
+  const handleSessionRenamed = useCallback((id: string, name: string) => {
+    setSelectedSession((current) => (current?.id === id ? { ...current, name } : current));
+    setSessionCatalog((list) => list.map((session) => (session.id === id ? { ...session, name } : session)));
+  }, []);
   const sessionsWithSelection = useMemo(() => {
     if (!selectedSession) return sessionCatalog;
     return [
@@ -3020,6 +3025,7 @@ export function AppShell() {
               newSessionCwd={effectiveNewSessionCwd}
               newSessionDraftKey={newSessionDraftKey}
               onAgentEnd={handleAgentEnd}
+              onSessionRenamed={handleSessionRenamed}
               onAttentionNeeded={handleAttentionNeeded}
               onSessionCreated={handleSessionCreated}
               onSessionForked={handleSessionForked}
