@@ -36,6 +36,14 @@ export interface SchedulerOptions {
   /** Test seam; defaults to a real liveness probe. */
   isPidAlive?: (pid: number) => boolean;
   now?: () => Date;
+  /**
+   * Test seam for the failed-run → autofix chain. When provided, the injected
+   * starter receives the created autofix task id instead of the scheduler
+   * driving the real repair engine (which spawns a session and runs the verify
+   * command). Omitted, the default lazy-loads `../autofix/runner` exactly as
+   * before, so production behaviour is unchanged.
+   */
+  autofixStart?: (taskId: string) => Promise<void> | void;
 }
 
 export class RunRejectedError extends Error {
@@ -422,8 +430,14 @@ export class Scheduler {
         verifyCommand,
         maxRounds: settings.maxAutoFixRounds,
       }, this.agentDir);
-      const { startAutofixTask } = await import("../autofix/runner");
-      void startAutofixTask(created.id, { agentDir: this.agentDir });
+      const injected = this.options.autofixStart;
+      if (injected) {
+        // Test seam: hand off the created id; do not spin up a real repair session.
+        await injected(created.id);
+      } else {
+        const { startAutofixTask } = await import("../autofix/runner");
+        void startAutofixTask(created.id, { agentDir: this.agentDir });
+      }
       console.warn(`[pi-web] autopilot: scheduled run ${runId} failed; started autofix ${created.id}`);
     } catch (error) {
       console.warn("[pi-web] autopilot: could not start an autofix for the failed run:", error instanceof Error ? error.message : error);

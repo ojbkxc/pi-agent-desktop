@@ -6,7 +6,7 @@ import {
 import { buildUserApprovalPrompt, checkPlanIdentity } from "./agent-teams-plan";
 import { readTeamPlanView } from "./agent-teams-plan-store";
 import { findTeamBySession, resolveTeamLeadSession } from "./agent-teams-swimlane-store";
-import { defaultDeliver } from "./agent-teams-unattended-runtime";
+import { defaultDeliver, type DeliveryResult } from "./agent-teams-unattended-runtime";
 
 /**
  * Unattended team approval.
@@ -44,6 +44,12 @@ export async function autoApproveTeamPlanForSession(input: {
   sessionId: string;
   customTypes: readonly string[];
   settingsPath?: string;
+  /**
+   * Test seam: how the approval prompt reaches the lead session. Omitted, the
+   * real `defaultDeliver` (send to the live lead, or revive it) is used, so
+   * production behaviour is unchanged.
+   */
+  deliver?: (sessionId: string, message: string) => Promise<DeliveryResult>;
 }): Promise<AutoApproveResult> {
   const settings = readAutopilotSettings(input.settingsPath);
   if (!shouldAutoApprove(settings, input.customTypes)) return { approved: false, reason: "disabled" };
@@ -67,7 +73,8 @@ export async function autoApproveTeamPlanForSession(input: {
 
   const leadSessionId = await resolveTeamLeadSession(team).catch(() => null);
   const deliverTo = leadSessionId ?? plan.sessionId;
-  const result = await defaultDeliver(deliverTo, buildUserApprovalPrompt(plan));
+  const deliver = input.deliver ?? defaultDeliver;
+  const result = await deliver(deliverTo, buildUserApprovalPrompt(plan));
   if (!result.ok) return { approved: false, reason: result.reason ?? "delivery failed" };
 
   delivered.add(key);
