@@ -18,7 +18,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function parseSettings(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {};
-  const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+  // As pi's SettingsManager reads it: an empty file is no settings, and a
+  // byte-order mark (Notepad, Windows PowerShell 5.1's UTF-8) is not JSON.
+  const text = readFileSync(path, "utf8").replace(/^\uFEFF/, "");
+  if (!text) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    // The path is in the message, because the parser's text alone does not
+    // say which file is broken. The error stays a `SyntaxError`, and the file
+    // stays where it is: pi reads and writes the same file, and it refuses
+    // every write until the user repairs it by hand.
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new SyntaxError(`${path}: ${reason}`);
+  }
   if (!isRecord(parsed)) throw new Error("Invalid settings.json: expected an object");
   return parsed;
 }

@@ -5,6 +5,8 @@ import { randomUUID } from "crypto";
 import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
 import { validateAgentImages } from "./image-attachments";
+import { splitAttachedFiles } from "./chat-attachments";
+import { llamaCppExtension } from "./pi-sdk-internals";
 import { userImageDisplayText, userMessageImageCount } from "./user-image-display";
 import { invalidateModelsCache } from "./models-cache";
 import { invalidateModelRuntimeWithExtensions } from "./model-runtime";
@@ -961,6 +963,9 @@ export class AgentSessionWrapper {
     try {
       await this.inner.prompt(entry.message, {
         ...(entry.images?.length ? { images: entry.images } : {}),
+        // A parked submission must retain the same literal-text treatment as
+        // initial admission; otherwise compaction could re-enable /commands.
+        ...(splitAttachedFiles(entry.message).files.length > 0 ? { expandPromptTemplates: false } : {}),
         source: "rpc",
         streamingBehavior: entry.streamingBehavior ?? "steer",
         preflightResult: (result) => {
@@ -1472,6 +1477,11 @@ export class AgentSessionWrapper {
             prompt = this.inner.prompt(command.message as string, {
               ...(promptImages?.length ? { images: promptImages } : {}),
               ...(streamingBehavior ? { streamingBehavior } : {}),
+              // Files are serialized as text, but the whole submission is model
+              // input. Use the SDK's option to suppress /extension dispatch and
+              // skill/template expansion, including outbox deliveries. Plain
+              // commands retain the SDK default; input hooks still run normally.
+              ...(splitAttachedFiles(command.message as string).files.length > 0 ? { expandPromptTemplates: false } : {}),
               source: "rpc",
               // Match pi's RPC contract: acknowledge only after synchronous prompt
               // validation and extension preflight have accepted the submission.
@@ -1821,12 +1831,22 @@ export class AgentSessionWrapper {
       }
 
       case "steer": {
+        // Legacy queue commands also use prompt admission for file-bearing
+        // submissions: steer()/followUp() always expand templates in the SDK.
+        if (splitAttachedFiles(command.message as string).files.length > 0) {
+          await this.send({ ...command, type: "prompt", streamingBehavior: "steer" });
+          return null;
+        }
         const steerImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
         await this.inner.steer(command.message as string, steerImages?.length ? steerImages : undefined);
         return null;
       }
 
       case "follow_up": {
+        if (splitAttachedFiles(command.message as string).files.length > 0) {
+          await this.send({ ...command, type: "prompt", streamingBehavior: "followUp" });
+          return null;
+        }
         const followImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
         await this.inner.followUp(command.message as string, followImages?.length ? followImages : undefined);
         return null;
@@ -3559,15 +3579,13 @@ export async function startRpcSession(
             // MCP 策略）。builtins 为 undefined 时（chat-only 子会话、或早于成员扩展的
             // 老快照）保持原样；压缩策略是隐藏扩展、不注册工具，老快照为此单独放宽守卫
             // （lean 快照除外，它按「不加载扩展」整体收窄）。
-            ...(builtins || usesExactSystemPrompt || compactionEnabled
-              ? {
-                  extensionFactories: [
-                    ...(builtins?.extensions ?? []),
-                    ...(usesExactSystemPrompt ? [exactSystemPromptExtension] : []),
-                    ...(compactionEnabled ? [createCompactionModelExtension()] : []),
-                  ],
-                }
-              : {}),
+            // llama.cpp provider 与上游一致：成员会话也注册（只是一个 provider）。
+            extensionFactories: [
+              llamaCppExtension,
+              ...(builtins?.extensions ?? []),
+              ...(usesExactSystemPrompt ? [exactSystemPromptExtension] : []),
+              ...(compactionEnabled ? [createCompactionModelExtension()] : []),
+            ],
           }
         : chatWorkspace
           ? {
@@ -3615,6 +3633,7 @@ export async function startRpcSession(
             // 普通会话：把 cc-haha 的用户级技能根一并加载（技能已启用，故传 true）。
             additionalSkillPaths: additionalForkSkillPaths(true),
             extensionFactories: [
+              llamaCppExtension,
               ...(builtins?.extensions ?? []),
               createReadOnlyMcpPolicyExtension(),
               createArtifactGuideExtension(),
