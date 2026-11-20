@@ -24,9 +24,18 @@ export const ATTENTION_PREVIEW_MAX = 200;
  * runs must not push every ordinary session out of the inbox.
  */
 export const ATTENTION_AUTOFIX_LIMIT = 10;
+/**
+ * Scheduled run outcomes (failed / aborted) merged into `completed` per
+ * snapshot — the same treatment autofix gets: capped so a burst of broken cron
+ * runs cannot flush every ordinary session out of the inbox.
+ */
+export const ATTENTION_SCHEDULED_LIMIT = 10;
 
 /** Terminal autofix outcomes worth a row; `succeeded` needs none. */
 const INBOX_AUTOFIX_STATUSES: ReadonlySet<AutofixStatus> = new Set(["failed", "exhausted", "stopped"]);
+
+/** Terminal scheduled outcomes worth a row; a run that did not fail needs none. */
+const INBOX_SCHEDULED_STATUSES: ReadonlySet<string> = new Set(["failed", "aborted"]);
 
 /**
  * Rows the sidebar never shows belong in no inbox either: subagent runs report
@@ -137,6 +146,65 @@ export function attentionItemsForAutofix(
     .slice(0, ATTENTION_AUTOFIX_LIMIT);
 }
 
+/** The slice of a scheduled run the inbox needs (the full record lives in `lib/scheduled-tasks/types.ts`). */
+export interface AttentionScheduledRun {
+  taskId: string;
+  status: "running" | "succeeded" | "failed" | "aborted" | "skipped";
+  /** The run's own session; a run that never started one has nothing to open. */
+  sessionId?: string;
+  endedAt?: string;
+  startedAt?: string;
+}
+
+/** The slice of a scheduled task the inbox needs: the taskId → name / cwd lookup. */
+export interface AttentionScheduledTask {
+  id: string;
+  name: string;
+  cwd: string;
+}
+
+/**
+ * Terminal scheduled-run outcomes as inbox rows. A failed / aborted run is
+ * exactly what "Needs you" is for, but its session is a `scheduled` kind the
+ * session list hides, so it would never surface from `sessions` alone — the
+ * same gap `attentionItemsForAutofix` fills. Rows without a session are
+ * skipped (the deep link could open nothing; the run stays on the Scheduled
+ * page). The title is the owning task's name, falling back to `#<taskId[:8]>`
+ * when the task is gone; a run reused by one session keeps the newest outcome.
+ */
+export function attentionItemsForScheduledRuns(
+  runs: readonly AttentionScheduledRun[],
+  tasks: readonly AttentionScheduledTask[],
+  now = Date.now(),
+): AttentionItem[] {
+  const taskById = new Map(tasks.map((task) => [task.id, task]));
+  const bySession = new Map<string, AttentionItem>();
+  for (const run of runs) {
+    if (!INBOX_SCHEDULED_STATUSES.has(run.status)) continue;
+    const sessionId = run.sessionId;
+    if (!sessionId) continue;
+    const task = taskById.get(run.taskId);
+    const parsed = Date.parse(run.endedAt ?? run.startedAt ?? "");
+    const updatedAt = Number.isFinite(parsed) && parsed > 0 ? parsed : now;
+    const projectName = projectNameFromRoot(task?.cwd);
+    const label = collapseWhitespace(task?.name ?? "") || `#${run.taskId.slice(0, 8)}`;
+    const item: AttentionItem = {
+      sessionId,
+      title: truncate(label, ATTENTION_TITLE_MAX),
+      workspaceKind: "project",
+      ...(projectName ? { projectName } : {}),
+      kind: "completed",
+      updatedAt,
+    };
+    // One session can back several runs; the newest outcome wins.
+    const existing = bySession.get(sessionId);
+    if (!existing || existing.updatedAt < item.updatedAt) bySession.set(sessionId, item);
+  }
+  return [...bySession.values()]
+    .sort((a, b) => b.updatedAt - a.updatedAt || a.sessionId.localeCompare(b.sessionId))
+    .slice(0, ATTENTION_SCHEDULED_LIMIT);
+}
+
 export interface BuildAttentionInput {
   /** Every session the sidebar knows about (already merged and project-annotated). */
   sessions: readonly SessionInfo[];
@@ -146,6 +214,10 @@ export interface BuildAttentionInput {
   taskSnapshots?: readonly AgentTaskSnapshot[];
   /** Terminal autofix outcomes; merged above the ordinary completed rows. */
   autofixTasks?: readonly AttentionAutofixTask[];
+  /** Terminal scheduled-run outcomes (failed / aborted); merged with autofix rows. */
+  scheduledRuns?: readonly AttentionScheduledRun[];
+  /** Scheduled tasks, for the run's taskId → title / cwd lookup. */
+  scheduledTasks?: readonly AttentionScheduledTask[];
   /** Clock injection point; defaults to now. */
   now?: number;
   completedLimit?: number;
@@ -164,6 +236,8 @@ export function buildAttentionSnapshot({
   awaitingSessionIds,
   taskSnapshots = [],
   autofixTasks = [],
+  scheduledRuns = [],
+  scheduledTasks = [],
   now = Date.now(),
   completedLimit = ATTENTION_COMPLETED_LIMIT,
 }: BuildAttentionInput): AttentionSnapshot {
@@ -220,15 +294,31 @@ export function buildAttentionSnapshot({
     || a.sessionId.localeCompare(b.sessionId)
   ));
 
-  // Autofix outcomes lead the completed list; their sessions would otherwise
-  // arrive as anonymous "completed" rows (or not at all, while running). A
-  // session parked on a dialog stays in `awaiting` only — it is still waiting.
-  const autofixItems = attentionItemsForAutofix(autofixTasks, now)
-    .filter((item) => !awaiting.has(item.sessionId));
-  const autofixIds = new Set(autofixItems.map((item) => item.sessionId));
+  // Unattended outcomes (autofix repairs + failed scheduled runs) lead the
+  // completed list; their sessions would otherwise arrive as anonymous
+  // "completed" rows (or not at all, while running). Each source is capped on
+  // its own so neither can swamp the other; a session parked on a dialog stays
+  // in `awaiting` only — it is still waiting.
+  const unattended = [
+    ...attentionItemsForAutofix(autofixTasks, now),
+    ...attentionItemsForScheduledRuns(scheduledRuns, scheduledTasks, now),
+  ].filter((item) => !awaiting.has(item.sessionId));
+
+  // A session backing both an autofix task and a scheduled run (or several of
+  // either) keeps the newest outcome; then the group is ordered newest-first and
+  // bounded by the same completed cap as everything else.
+  const unattendedBySession = new Map<string, AttentionItem>();
+  for (const item of unattended) {
+    const existing = unattendedBySession.get(item.sessionId);
+    if (!existing || existing.updatedAt < item.updatedAt) unattendedBySession.set(item.sessionId, item);
+  }
+  const unattendedItems = [...unattendedBySession.values()]
+    .sort((a, b) => b.updatedAt - a.updatedAt || a.sessionId.localeCompare(b.sessionId))
+    .slice(0, Math.max(0, completedLimit));
+  const unattendedIds = new Set(unattendedItems.map((item) => item.sessionId));
 
   const completed = eligible
-    .filter((session) => !awaiting.has(session.id) && !autofixIds.has(session.id))
+    .filter((session) => !awaiting.has(session.id) && !unattendedIds.has(session.id))
     .map((session): AttentionItem => {
       const projectName = attentionProjectName(session);
       return {
@@ -241,9 +331,9 @@ export function buildAttentionSnapshot({
       };
     })
     .sort((a, b) => b.updatedAt - a.updatedAt || a.sessionId.localeCompare(b.sessionId))
-    .slice(0, Math.max(0, completedLimit - autofixItems.length));
+    .slice(0, Math.max(0, completedLimit - unattendedItems.length));
 
-  return { awaiting: awaitingItems, completed: [...autofixItems, ...completed], generatedAt: now };
+  return { awaiting: awaitingItems, completed: [...unattendedItems, ...completed], generatedAt: now };
 }
 
 /**
@@ -255,17 +345,31 @@ export function buildAttentionSnapshot({
  * serves, so the inbox poll adds no extra directory scan.
  */
 export async function loadAttentionSnapshot(now = Date.now()): Promise<AttentionSnapshot> {
-  const [sessionReader, rpcManager, autofixStore] = await Promise.all([
+  const [sessionReader, rpcManager, autofixStore, scheduledStore] = await Promise.all([
     import("./session-reader"),
     import("./rpc-manager"),
     import("./autofix/store"),
+    import("./scheduled-tasks/store"),
   ]);
   const sessions = await sessionReader.listAllSessions();
+  // The scheduled store is a plain synchronous JSON read; a corrupt or missing
+  // file must degrade to "no scheduled rows", never take the inbox down (500).
+  let scheduledRuns: AttentionScheduledRun[] = [];
+  let scheduledTasks: AttentionScheduledTask[] = [];
+  try {
+    scheduledRuns = scheduledStore.listAllRuns();
+    scheduledTasks = scheduledStore.listTasks();
+  } catch {
+    scheduledRuns = [];
+    scheduledTasks = [];
+  }
   return buildAttentionSnapshot({
     sessions,
     awaitingSessionIds: rpcManager.getAwaitingInputRpcSessionIds(),
     taskSnapshots: rpcManager.getRpcTaskSnapshots(),
     autofixTasks: autofixStore.listAutofixTasks(),
+    scheduledRuns,
+    scheduledTasks,
     now,
   });
 }
