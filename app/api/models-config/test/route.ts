@@ -5,6 +5,7 @@ import { join } from "path";
 import { randomUUID } from "crypto";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { readModelsConfig } from "@/lib/models-config-store";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
@@ -51,9 +52,23 @@ export async function POST(req: Request) {
 
     tempDir = mkdtempSync(join(tmpdir(), "pi-web-model-test-"));
     const modelsPath = join(tempDir, "models.json");
+    // `GET /api/models-config` redacts stored literal apiKeys, so a provider the
+    // user edited without touching the key reaches us with no apiKey. Without
+    // this fallback the probe authenticates with nothing and fails until the key
+    // is re-entered — the exact "only works after re-adding the key" symptom.
+    // `!command` / `$ENV` references stay visible and pass through as-is; a key
+    // stored in auth.json is resolved by the runtime itself.
+    let storedProvider: Record<string, unknown> = {};
+    try {
+      const stored = readModelsConfig() as { providers?: Record<string, Record<string, unknown>> };
+      storedProvider = stored.providers?.[providerName] ?? {};
+    } catch {
+      // Unreadable models.json: the runtime still resolves auth.json credentials.
+    }
     writeFileSync(modelsPath, JSON.stringify({
       providers: {
         [providerName]: {
+          ...storedProvider,
           ...body.provider,
           models: [{ ...body.model, id: modelId }],
         },

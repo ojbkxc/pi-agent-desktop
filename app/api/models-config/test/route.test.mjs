@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -71,8 +71,8 @@ test("Test model prepares the probe like a chat request: auth and models.json he
 });
 
 test("Test model runs a `!command` key once", { skip: process.platform === "win32" }, async (t) => {
-  const counter = join(testAgentDir, "key-command-runs");
   t.mock.method(globalThis, "fetch", async () => completionStream());
+  const counter = join(testAgentDir, "key-command-runs");
   const response = await POST(new Request("http://localhost/api/models-config/test", {
     method: "POST",
     headers: { "Content-Type": "application/json", Host: "localhost" },
@@ -89,4 +89,38 @@ test("Test model runs a `!command` key once", { skip: process.platform === "win3
   const result = await response.json();
   assert.equal(result.ok, true, result.error);
   assert.equal(await readFile(counter, "utf8"), "x");
+});
+
+test("Test model falls back to the stored literal apiKey when the editor omits it", async (t) => {
+  // GET /api/models-config redacts literal apiKeys, so the editor sends the
+  // provider without one. The probe must still authenticate with the stored key.
+  await writeFile(join(testAgentDir, "models.json"), JSON.stringify({
+    providers: {
+      "stored-key": {
+        baseUrl: "https://example.test/v1",
+        api: "openai-completions",
+        apiKey: "sk_stored_literal",
+      },
+    },
+  }, null, 2), "utf8");
+
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async (input, init) => {
+    requests.push(new Request(input, init));
+    return completionStream();
+  });
+
+  const response = await POST(new Request("http://localhost/api/models-config/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Host: "localhost" },
+    body: JSON.stringify({
+      providerName: "stored-key",
+      provider: { baseUrl: "https://example.test/v1", api: "openai-completions" },
+      model: { id: "m", api: "openai-completions", input: ["text"] },
+    }),
+  }));
+
+  const result = await response.json();
+  assert.equal(result.ok, true, result.error);
+  assert.equal(requests[0].headers.get("authorization"), "Bearer sk_stored_literal");
 });
