@@ -192,7 +192,6 @@ function GeneralSettings({
         <div className="settings-general-col">
           <section className="settings-general-section settings-general-intro settings-general-overview">
             <p className="settings-general-tagline">{t("appSettings.tagline", { product: PRODUCT_NAME })}</p>
-            <p className="settings-general-tagline">{t("appSettings.taglineDetails")}</p>
           </section>
           <AppUpdatesSection onBusyChange={onBusyChange} />
 
