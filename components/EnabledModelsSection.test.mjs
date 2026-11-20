@@ -196,7 +196,7 @@ test("the section is mounted for built-in and api-key providers", () => {
   );
   assert.match(
     modelsConfigSource,
-    /provider\.configured && <EnabledModelsSection providerId=\{provider\.id\} controller=\{enabledModels\} \/>/,
+    /provider\.configured && \(\s*<EnabledModelsSection\s+providerId=\{provider\.id\}\s+controller=\{enabledModels\}\s+emptyCatalogHint=\{llama \? t\("models\.llamaEmptyCatalog"\) : undefined\}\s*\/>/,
   );
   assert.match(modelsConfigSource, /<EnabledModelsBanner controller=\{enabledModels\} \/>/);
   // A models.json provider gets the header switch instead of a section.

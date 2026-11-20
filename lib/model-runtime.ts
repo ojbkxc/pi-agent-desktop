@@ -7,6 +7,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { serializeByKey } from "./key-serializer";
+import { llamaCppExtension } from "./pi-sdk-internals";
 
 /**
  * ModelRuntime that also includes providers registered by extensions (an
@@ -35,7 +36,7 @@ export async function createModelRuntimeWithExtensions(
     cwd: agentDir,
     agentDir,
     modelRuntime: runtime,
-    resourceLoaderOptions: { noPromptTemplates: true, noThemes: true },
+    resourceLoaderOptions: { noPromptTemplates: true, noThemes: true, extensionFactories: [llamaCppExtension] },
   });
   return services.modelRuntime;
 }

@@ -43,7 +43,7 @@ test("a group switch sends one request for its scope's packages", () => {
   assert.match(source, /setBusyKey\(`bulk:\$\{scope\}`\)/);
   // The open package's controls wait for the bulk run like for their own
   // action — and for a check-all/update-all sweep too (d5-30: bulkRunning).
-  assert.match(source, /const busy = \(\(busyKey\?\.endsWith\(key\) \|\| busyKey\?\.startsWith\("bulk:"\)\) \?\? false\) \|\| bulkRunning;/);
+  assert.match(source, /const busy = \(\(busyKey\?\.endsWith\(key\) \|\| busyKey\?\.startsWith\("bulk:"\) \|\| busyKey\?\.startsWith\("install:"\)\) \?\? false\) \|\| bulkRunning;/);
   assert.match(source, /disabled=\{footerBusy\}\s+loading=\{busyKey === `bulk:\$\{group\.scope\}`\}/);
 });
 
@@ -161,7 +161,7 @@ test("row actions stand down while a bulk sweep runs (d5-30)", () => {
   // 并发互写 setData。
   assert.match(
     source,
-    /const busy = \(\(busyKey\?\.endsWith\(key\) \|\| busyKey\?\.startsWith\("bulk:"\)\) \?\? false\) \|\| bulkRunning;/,
+    /const busy = \(\(busyKey\?\.endsWith\(key\) \|\| busyKey\?\.startsWith\("bulk:"\) \|\| busyKey\?\.startsWith\("install:"\)\) \?\? false\) \|\| bulkRunning;/,
   );
   assert.match(source, /const reloadBusy = busyKey === "reload" \|\| bulkRunning;/);
   // 调用方必须传 bulkRunning，且取的是两个批量 in-flight 标志的并。

@@ -2,6 +2,7 @@
 
 import { AppSelect } from "./AppSelect";
 
+import { LLAMA_CPP_PROVIDER_ID } from "@/lib/provider-listing";
 import { useState, useEffect, useCallback, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
@@ -16,9 +17,13 @@ import {
   hasModelCostDraftValue,
   modelCostToDraft,
   parseCompleteModelCost,
+  providerRuntimeName,
+  providerSidebarLabel,
   savedModelIds,
+  savedProviderNames,
   serializeHeaderRows,
   setCompatBool,
+  setProviderDisplayName,
   trackAddedModels,
   collectModelRenames,
   createGenerationGuard,
@@ -112,6 +117,7 @@ interface ModelEntry {
 }
 
 interface ProviderEntry {
+  name?: string;
   baseUrl?: string;
   api?: string;
   apiKey?: string;
@@ -317,8 +323,8 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 // ── Provider detail ───────────────────────────────────────────────────────────
 
-function ProviderDetail({ name, editingName, provider, onChange, onEditingNameChange, onRename, onDelete, onAddModels, enabledModels }: {
-  name: string; editingName: string; provider: ProviderEntry;
+function ProviderDetail({ name, editingName, fallbackLabel, provider, onChange, onEditingNameChange, onRename, onDelete, onAddModels, enabledModels }: {
+  name: string; editingName: string; fallbackLabel: string; provider: ProviderEntry;
   onChange: (p: ProviderEntry) => void; onEditingNameChange: (n: string) => void;
   onRename: (n: string) => void; onDelete: () => void;
   onAddModels: (models: DiscoveredModel[]) => void; enabledModels: EnabledModelsController;
@@ -426,14 +432,20 @@ function ProviderDetail({ name, editingName, provider, onChange, onEditingNameCh
         <EnabledModelsProviderSwitchNote providerId={name} controller={enabledModels} id={switchNoteId} />
       </div>
 
-       <Field label={t("i18n.providerName")}>
-        <TextInput value={editingName} onChange={onEditingNameChange} placeholder="provider-name" mono />
+       <Field label={t("i18n.providerId")}>
+        <TextInput value={editingName} onChange={onEditingNameChange} placeholder="provider-id" mono />
         {editingName !== name && editingName.trim() && (
           <button onClick={() => onRename(editingName.trim())}
             style={{ marginTop: 4, padding: "3px 10px", background: "var(--accent)", border: "none", borderRadius: "var(--radius-xs)", color: "var(--accent-contrast)", cursor: "pointer", fontSize: "var(--fs-micro)", alignSelf: "flex-start" }}>
              {t("i18n.rename")}
           </button>
         )}
+      </Field>
+
+      {/* models.json `name`: the label the sidebar and the selector show (#1567). */}
+      <Field label={t("models.providerDisplayName")}>
+        <TextInput value={provider.name ?? ""} onChange={(v) => onChange(setProviderDisplayName(provider, v))}
+          placeholder={fallbackLabel} />
       </Field>
 
       <Field label={t("models.fieldBaseUrl")}>
@@ -776,6 +788,7 @@ function HeaderListEditor({ headers, onChange }: {
   const [rows, setRows] = useState<HeaderRow[]>(() => Object.entries(headers ?? {}).map(
     ([name, value], id) => ({ id, name, value }),
   ));
+  const { t } = useI18n();
   const nextRowIdRef = useRef(rows.length);
 
   const applyRows = (next: HeaderRow[]): void => {
@@ -803,10 +816,10 @@ function HeaderListEditor({ headers, onChange }: {
       {rows.map((row) => (
         <div key={row.id} style={{ display: "flex", gap: 6 }}>
           <input value={row.name} onChange={(e) => setEntry(row.id, { name: e.target.value })}
-            placeholder="Header-Name" style={{ ...inputStyle, fontFamily: "var(--font-mono)", flex: 1 }} />
+            aria-label={t("models.headerName")} placeholder="Header-Name" style={{ ...inputStyle, fontFamily: "var(--font-mono)", flex: 1 }} />
           <input value={row.value} onChange={(e) => setEntry(row.id, { value: e.target.value })}
-            placeholder="value" style={{ ...inputStyle, fontFamily: "var(--font-mono)", flex: 1 }} />
-          <button onClick={() => removeEntry(row.id)} style={rowBtnStyle}>✕</button>
+            aria-label={t("models.headerValue")} placeholder="value" style={{ ...inputStyle, fontFamily: "var(--font-mono)", flex: 1 }} />
+          <button aria-label={t("models.removeHeader")} onClick={() => removeEntry(row.id)} style={rowBtnStyle}>✕</button>
         </div>
       ))}
       <button onClick={() => setRows((current) => [
@@ -1669,27 +1682,26 @@ function OAuthDetail({ provider, onRefresh, enabledModels }: {
 
 // ── API Key detail ────────────────────────────────────────────────────────────
 
+// pi's default router address (`/login llama.cpp`, docs/llama-cpp.md).
+const DEFAULT_LLAMA_ROUTER_URL = "http://127.0.0.1:8080";
+
 function ApiKeyDetail({ provider, onRefresh, enabledModels }: {
   provider: ApiKeyProvider; onRefresh: () => void; enabledModels: EnabledModelsController;
 }) {
+  const llama = provider.id === LLAMA_CPP_PROVIDER_ID;
+  const [serverUrl, setServerUrl] = useState(llama && !provider.configured ? DEFAULT_LLAMA_ROUTER_URL : "");
   const [apiKey, setApiKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedOk, setSavedOk] = useState(false);
   const { t } = useI18n();
+  const canSave = Boolean(llama ? serverUrl.trim() : apiKey.trim());
 
-  // Reset state when provider changes
-  useEffect(() => {
-    setApiKey("");
-    setError(null);
-    setSavedOk(false);
-  }, [provider.id]);
-
-  const handleSave = useCallback(async () => {
+  async function handleSave() {
     // The Save button is disabled while saving, but the Enter path bypassed it:
     // two quick Enters produced two POSTs.
-    if (!apiKey.trim() || saving) return;
+    if (!canSave || saving) return;
     setSaving(true);
     setError(null);
     setSavedOk(false);
@@ -1697,13 +1709,18 @@ function ApiKeyDetail({ provider, onRefresh, enabledModels }: {
       const res = await fetch(`/api/auth/api-key/${encodeURIComponent(provider.id)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: apiKey.trim() }),
+        body: JSON.stringify({ apiKey: apiKey.trim(), ...(llama ? { serverUrl: serverUrl.trim() } : {}) }),
       });
-      const d = await res.json() as { success?: boolean; error?: string };
+      const d = await res.json() as { error?: string; catalog?: { completed: boolean; reason?: string } };
       if (!res.ok || d.error) {
         setError(d.error ?? `HTTP ${res.status}`);
       } else {
         setApiKey("");
+        if (llama) {
+          setServerUrl("");
+          enabledModels.refresh();
+          if (!d.catalog?.completed) setError(t(d.catalog?.reason === "offline" ? "models.catalogOffline" : "models.catalogUnreachable"));
+        }
         setSavedOk(true);
         setTimeout(() => setSavedOk(false), 2000);
         onRefresh();
@@ -1713,7 +1730,7 @@ function ApiKeyDetail({ provider, onRefresh, enabledModels }: {
     } finally {
       setSaving(false);
     }
-  }, [apiKey, provider.id, onRefresh, saving]);
+  }
 
   const handleRemove = useCallback(async () => {
     setRemoving(true);
@@ -1734,7 +1751,7 @@ function ApiKeyDetail({ provider, onRefresh, enabledModels }: {
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <ConfigDetailHeader>
         <ConfigDetailHeaderInfo>
-          <SectionTitle>API Key</SectionTitle>
+          <SectionTitle>{llama ? provider.displayName : "API Key"}</SectionTitle>
         </ConfigDetailHeaderInfo>
         <ConfigDetailActions>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -1756,9 +1773,17 @@ function ApiKeyDetail({ provider, onRefresh, enabledModels }: {
         </ConfigDetailActions>
       </ConfigDetailHeader>
 
-      {!provider.configured && (
+      {llama && (
+        <Field label={t("models.llamaRouterUrl")}>
+          <input type="url" style={{ ...inputStyle, fontFamily: "var(--font-mono)" }} value={serverUrl} placeholder={DEFAULT_LLAMA_ROUTER_URL}
+            onChange={(event) => setServerUrl(event.target.value)} spellCheck={false} />
+        </Field>
+      )}
+      {!llama && !provider.configured && (
         <p style={{ margin: 0, fontSize: "var(--fs-caption)", color: "var(--text-muted)", lineHeight: 1.5 }}>
-          Enter your {provider.displayName} API key to enable {provider.modelCount} model{provider.modelCount !== 1 ? "s" : ""}.
+          {provider.modelCount === 1
+            ? t("models.apiKeyEnableOne", { provider: provider.displayName })
+            : t("models.apiKeyEnable", { provider: provider.displayName, count: provider.modelCount })}
         </p>
       )}
 
@@ -1766,8 +1791,8 @@ function ApiKeyDetail({ provider, onRefresh, enabledModels }: {
         <SecretTextInput
           value={apiKey}
           onChange={setApiKey}
-          onKeyDown={(e) => { if (e.key === "Enter" && apiKey.trim() && !saving && !savedOk) handleSave(); }}
-          placeholder={provider.configured ? "Enter new key to replace…" : "sk-…"}
+          onKeyDown={(e) => { if (e.key === "Enter" && canSave && !saving && !savedOk) handleSave(); }}
+          placeholder={llama ? t("models.optionalApiKey") : provider.configured ? "Enter new key to replace…" : "sk-…"}
           style={{ flex: 1 }}
           autoComplete="off"
           spellCheck={false}
@@ -1775,13 +1800,13 @@ function ApiKeyDetail({ provider, onRefresh, enabledModels }: {
         />
         <button
           onClick={handleSave}
-          disabled={saving || !apiKey.trim() || savedOk}
+          disabled={saving || !canSave || savedOk}
           style={{
             padding: "6px 12px",
-            background: savedOk ? "var(--success)" : apiKey.trim() ? "var(--accent)" : "var(--bg-panel)",
+            background: savedOk ? "var(--success)" : canSave ? "var(--accent)" : "var(--bg-panel)",
             border: "none", borderRadius: "var(--radius-sm)",
-            color: savedOk ? "#fff" : apiKey.trim() ? "var(--accent-contrast)" : "var(--text-dim)",
-            cursor: (saving || !apiKey.trim() || savedOk) ? "not-allowed" : "pointer",
+            color: savedOk ? "#fff" : canSave ? "var(--accent-contrast)" : "var(--text-dim)",
+            cursor: (saving || !canSave || savedOk) ? "not-allowed" : "pointer",
             fontSize: "var(--fs-caption)", fontWeight: "var(--fw-semibold)", flexShrink: 0,
             display: "flex", alignItems: "center", gap: 5,
           }}
@@ -1799,7 +1824,13 @@ function ApiKeyDetail({ provider, onRefresh, enabledModels }: {
 
       <ProviderUsageSummary providerId={provider.id} enabled={provider.configured} />
 
-      {provider.configured && <EnabledModelsSection providerId={provider.id} controller={enabledModels} />}
+      {provider.configured && (
+        <EnabledModelsSection
+          providerId={provider.id}
+          controller={enabledModels}
+          emptyCatalogHint={llama ? t("models.llamaEmptyCatalog") : undefined}
+        />
+      )}
     </div>
   );
 }
@@ -1940,7 +1971,11 @@ function AddProviderPicker({
                 >
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: "var(--fs-caption)", fontWeight: "var(--fw-semibold)", color: "var(--text)", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.displayName}</div>
-                    <div style={{ fontSize: "var(--fs-micro)", color: "var(--text-dim)", marginTop: 2 }}>{p.modelCount} models</div>
+                    <div style={{ fontSize: "var(--fs-micro)", color: "var(--text-dim)", marginTop: 2 }}>
+                      {p.id === LLAMA_CPP_PROVIDER_ID
+                        ? t("models.optionalApiKey")
+                        : t(p.modelCount === 1 ? "models.modelCountOne" : "models.modelCount", { count: p.modelCount })}
+                    </div>
                   </div>
                   <ProviderIcon id={p.id} size={28} />
                 </button>
@@ -1980,6 +2015,12 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
   const [selection, setSelection] = useState<Selection | null>(readRememberedSelection);
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([]);
   const [apiKeyProviders, setApiKeyProviders] = useState<ApiKeyProvider[]>([]);
+  /** Runtime display names of every provider, including ones with no chat models. */
+  const [providerNames, setProviderNames] = useState<Record<string, string>>({});
+  /** Each provider's models.json `name` as saved, which pi also reports as its runtime name. */
+  const [savedNames, setSavedNames] = useState<Map<string, string>>(() => new Map());
+  /** Set once the provider lists have answered; until then an overrides-only entry may be a managed provider's. */
+  const [authListed, setAuthListed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   /** Provider ids as models.json has them on disk, and where renames moved them. */
   const savedProvidersRef = useRef<Set<string>>(new Set());
@@ -1998,15 +2039,17 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
    */
   const [providerNameDraft, setProviderNameDraft] = useState<{ provider: string; name: string } | null>(null);
 
-  const refreshAuthProviders = useCallback(() => {
-    fetch("/api/auth/providers")
-      .then((r) => r.json())
-      .then((d: { oauthProviders?: OAuthProvider[]; apiKeyProviders?: ApiKeyProvider[] }) => {
-        if (Array.isArray(d.oauthProviders)) setOauthProviders(d.oauthProviders);
-        if (Array.isArray(d.apiKeyProviders)) setApiKeyProviders(d.apiKeyProviders);
-      })
-      .catch(() => {});
-  }, []);
+  /** Resolves true once the lists and runtime names have been replaced. */
+  const refreshAuthProviders = useCallback(() => fetch("/api/auth/providers")
+    .then((r) => r.json())
+    .then((d: { oauthProviders?: OAuthProvider[]; apiKeyProviders?: ApiKeyProvider[]; providerNames?: Record<string, string> }) => {
+      if (Array.isArray(d.oauthProviders)) setOauthProviders(d.oauthProviders);
+      if (Array.isArray(d.apiKeyProviders)) setApiKeyProviders(d.apiKeyProviders);
+      setProviderNames(d.providerNames ?? {});
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => setAuthListed(true)), []);
 
   useEffect(() => {
     fetch("/api/models-config")
@@ -2021,6 +2064,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
         setSavedConfig(normalized);
         savedProvidersRef.current = new Set(Object.keys(normalized.providers ?? {}));
         savedModelIdsRef.current = savedModelIds(normalized);
+        setSavedNames(savedProviderNames(normalized));
         const keys = Object.keys(normalized.providers ?? {});
         setSelection((current) => current && customSelectionExists(normalized, current)
           ? current
@@ -2072,7 +2116,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
 
   const renameProvider = useCallback((oldName: string, newName: string) => {
     if (applyProviderRename(config, oldName, newName)) setSaveError(null);
-    else setSaveError(t("models.providerNameTaken", { name: newName }));
+    else setSaveError(t("models.providerIdTaken", { name: newName }));
   }, [applyProviderRename, config, t]);
 
   const deleteProvider = useCallback((name: string) => {
@@ -2155,7 +2199,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
     if (providerNameDraft && pendingName && config.providers?.[providerNameDraft.provider]) {
       const renamed = applyProviderRename(config, providerNameDraft.provider, pendingName);
       if (!renamed) {
-        setSaveError(t("models.providerNameTaken", { name: pendingName }));
+        setSaveError(t("models.providerIdTaken", { name: pendingName }));
         setSaving(false);
         return;
       }
@@ -2182,15 +2226,27 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
         setSavedConfig(draft);
         renamesRef.current.clear();
         enabledModels.resync(renames, modelRenames);
+        // Runtime names follow the saved ids and `name`s. Until they arrive, the old runtime
+        // name still equals the old saved `name`, so both move together.
+        const nextSavedNames = savedProviderNames(draft);
+        void refreshAuthProviders().then((refreshed) => { if (refreshed) setSavedNames(nextSavedNames); });
       }
     } catch (e) {
       setSaveError(String(e));
     } finally {
       setSaving(false);
     }
-  }, [applyProviderRename, config, enabledModels, loadError, providerNameDraft, t]);
+  }, [applyProviderRename, config, enabledModels, loadError, providerNameDraft, refreshAuthProviders, t]);
 
   const providers = Object.entries(config.providers ?? {});
+  const customProviderLabel = (providerId: string, entry: ProviderEntry) => providerSidebarLabel(
+    providerId,
+    entry,
+    providerRuntimeName(
+      providerNames[providerId] ?? enabledModels.view?.providers.find((provider) => provider.id === providerId)?.name,
+      savedNames.get(providerId),
+    ),
+  );
   // `12/40` next to a provider makes a narrowed selector visible at a glance.
   const scopeBadge = (providerId: string) => {
     const label = providerBadgeLabel(enabledModels.view, providerId);
@@ -2221,6 +2277,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
           key={selection.name}
           name={selection.name}
           editingName={providerNameDraft?.provider === selection.name ? providerNameDraft.name : selection.name}
+          fallbackLabel={customProviderLabel(selection.name, provider)}
           provider={provider}
           onChange={(p) => updateProvider(selection.name, p)}
           onEditingNameChange={(n) => setProviderNameDraft(n === selection.name ? null : { provider: selection.name, name: n })}
@@ -2324,7 +2381,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
                         <line x1="1" y1="9" x2="4" y2="9" /><line x1="1" y1="14" x2="4" y2="14" />
                       </svg>
                       <ConfigSidebarText className="is-grow">
-                        {pName}
+                        {customProviderLabel(pName, pData)}
                       </ConfigSidebarText>
                       {scopeBadge(pName)}
                     </ConfigSidebarItem>

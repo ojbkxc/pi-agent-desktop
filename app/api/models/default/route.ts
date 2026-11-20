@@ -12,6 +12,7 @@ import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-acces
 import { resolveVisibleModels } from "@/lib/model-scope";
 import { invalidateModelsCache } from "@/lib/models-cache";
 import { projectTrustReloadOptions } from "@/lib/project-trust";
+import { llamaCppExtension } from "@/lib/pi-sdk-internals";
 
 export const dynamic = "force-dynamic";
 
@@ -77,6 +78,9 @@ export async function PUT(req: Request) {
     const services = await createAgentSessionServices({
       cwd,
       agentDir,
+      // Same reason as the picker: llama.cpp's models come from its inline
+      // extension factory, so a default on one has to be visible here.
+      resourceLoaderOptions: { extensionFactories: [llamaCppExtension] },
       ...(trustReloadOptions ? { resourceLoaderReloadOptions: trustReloadOptions } : {}),
     });
     const { settingsManager } = services;

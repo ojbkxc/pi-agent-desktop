@@ -14,6 +14,9 @@
 /** Credential kinds pi stores in `auth.json`. */
 export type ProviderCredentialType = "api_key" | "oauth";
 
+/** pi's built-in llama.cpp provider (a router URL instead of a fixed endpoint). */
+export const LLAMA_CPP_PROVIDER_ID = "llama.cpp";
+
 /** Auth status sources that mean "this key comes from models.json". */
 const CUSTOM_PROVIDER_SOURCES = new Set(["models_json_key", "models_json_command"]);
 

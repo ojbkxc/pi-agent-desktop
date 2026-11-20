@@ -392,14 +392,18 @@ function useCatalogRefresh(providerId: string, onChanged: () => void) {
 export function EnabledModelsSection({
   providerId,
   controller,
+  emptyCatalogHint,
 }: {
   providerId: string;
   controller: EnabledModelsController;
+  /** Shown instead of the generic empty line when the provider has no models yet (e.g. llama.cpp before its catalog loads). */
+  emptyCatalogHint?: string;
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
   const { view, loading, pending, failure } = controller;
-  const provider = findProviderView(view, providerId);
+  const provider = findProviderView(view, providerId)
+    ?? (emptyCatalogHint && !failure ? { id: providerId, name: providerId, kind: "builtin" as const, enabledCount: 0, models: [] } : undefined);
   const catalog = useCatalogRefresh(providerId, controller.refresh);
   const noteId = useId();
 
@@ -486,7 +490,7 @@ export function EnabledModelsSection({
       )}
       <div className="enabled-models-list">
         {shown.length === 0 ? (
-          <div className="enabled-models-empty">{t("models.enabledNoMatches")}</div>
+          <div className="enabled-models-empty">{(provider.models.length === 0 && emptyCatalogHint) || t("models.enabledNoMatches")}</div>
         ) : shown.map((model) => {
           const lastOne = isLastEnabledModel(view, model);
           return (

@@ -13,6 +13,7 @@ import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-acces
 import { projectTrustReloadOptions } from "@/lib/project-trust";
 import { chatWorkspaceDir, isChatFolderPath, isChatWorkspacePath } from "@/lib/chat-workspace";
 import { readChatSettings, resolveChatStartDefaults } from "@/lib/chat-settings";
+import { llamaCppExtension } from "@/lib/pi-sdk-internals";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +43,9 @@ async function loadModels(cwd: string): Promise<ModelsData> {
   const services = await createAgentSessionServices({
     cwd,
     agentDir,
+    // llama.cpp is registered by an inline factory, not a file extension; the
+    // picker needs its models like the session and auth routes have them.
+    resourceLoaderOptions: { extensionFactories: [llamaCppExtension] },
     ...(trustReloadOptions ? { resourceLoaderReloadOptions: trustReloadOptions } : {}),
   });
   const modelError = services.modelRuntime.getError();

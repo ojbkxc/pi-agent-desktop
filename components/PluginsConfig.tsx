@@ -48,6 +48,7 @@ import {
   ConfigTrustNotice,
 } from "./SettingsUi";
 import { itemsToSwitch, projectTrustReloadKey } from "./settings-ui-helpers";
+import { PluginDiscovery } from "./PluginDiscovery";
 
 type PluginScope = PluginPackageInfo["scope"];
 type PluginAction = "install" | "remove" | "update" | "disable" | "enable";
@@ -572,7 +573,7 @@ function PackageDetail({
   const key = packageKey(pkg);
   // d5-30：bulk 期间（updatingAll / checkingAll / bulk: 组开关）行内按钮必须一起
   // 禁用——它们与批量操作并发会互写 setData，列表/消息跟实际不符。
-  const busy = ((busyKey?.endsWith(key) || busyKey?.startsWith("bulk:")) ?? false) || bulkRunning;
+  const busy = ((busyKey?.endsWith(key) || busyKey?.startsWith("bulk:") || busyKey?.startsWith("install:")) ?? false) || bulkRunning;
   const reloadBusy = busyKey === "reload" || bulkRunning;
   const enabled = !pkg.disabled;
   const canCheckForUpdates = pkg.canCheckForUpdates;
@@ -806,6 +807,14 @@ export function PluginsConfig({
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(() => getLastSettingsSelection("plugins", cwd));
   const [addMode, setAddMode] = useState(false);
+  // Opening Plugins starts with the browsable catalog; installed entries remain in the sidebar.
+  const [discovering, setDiscovering] = useState(true);
+  // These outlive a detail selection: an install may finish while the user
+  // inspects another package. Keep its outcome available on returning to market.
+  const [discoveryInstalling, setDiscoveryInstalling] = useState<string | null>(null);
+  const [discoveryError, setDiscoveryError] = useState<{ name: string; message: string } | null>(null);
+  const [discoveryMessage, setDiscoveryMessage] = useState("");
+  const [discoveryReloadNeeded, setDiscoveryReloadNeeded] = useState(false);
   const [installSource, setInstallSource] = useState("");
   const [installScope, setInstallScope] = useState<PluginScope>("global");
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -853,7 +862,6 @@ export function PluginsConfig({
       if (!isCurrent()) return;
       if (!res.ok || next.error) throw new Error(next.error ?? `HTTP ${res.status}`);
       setData(next);
-      setAddMode((current) => (next.packages.length === 0 && next.standaloneExtensions.length === 0) || current);
       setSelected((current) => {
         if (current && (
           next.packages.some((pkg) => packageKey(pkg) === current)
@@ -1160,6 +1168,8 @@ export function PluginsConfig({
       onReloaded?.();
       await loadPlugins();
       setActionMessage(t("i18n.sessionReloaded"));
+      setDiscoveryMessage(t("i18n.sessionReloaded"));
+      setDiscoveryReloadNeeded(false);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1167,7 +1177,35 @@ export function PluginsConfig({
     }
   }, [loadPlugins, onReloaded, sessionId, t]);
 
-  const addBusy = busyKey?.startsWith("install:") ?? false;
+  const installDiscovered = async (source: string, scope: PluginScope) => {
+    if (busyKey !== null) return;
+    const name = source.slice(4);
+    setDiscoveryInstalling(name);
+    setActionError(null);
+    setDiscoveryError(null);
+    setDiscoveryMessage("");
+    setBusyKey(`install:${scope}\0${source}`);
+    try {
+      const response = await fetch("/api/plugins", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "install", source, scope, cwd }),
+      });
+      const next = await response.json() as PluginsResponse & { error?: string };
+      if (!response.ok || next.error) throw new Error(next.error ?? `HTTP ${response.status}`);
+      // A pre-install list read must not overwrite this post-install snapshot.
+      loadRequestRef.current += 1;
+      setLoading(false);
+      setData(next);
+      setDiscoveryMessage(sessionId ? t("plugins.discoveryInstalled") : t("i18n.packageInstalled"));
+      setDiscoveryReloadNeeded(Boolean(sessionId));
+    } catch (cause) {
+      setDiscoveryError({ name: `${scope}:${name}`, message: cause instanceof Error ? cause.message : String(cause) });
+    } finally {
+      setBusyKey(null);
+      setDiscoveryInstalling(null);
+    }
+  };
+
   const availableUpdateCount = Object.values(updateStatuses).filter(
     (status) => status.state === "update-available",
   ).length;
@@ -1182,6 +1220,13 @@ export function PluginsConfig({
         <ConfigSplitView>
           <ConfigSidebar>
             <ConfigSidebarList>
+              <ConfigSidebarItem className="plugin-marketplace-entry" active={discovering} onClick={() => { setDiscovering(true); setSelectedMarket(null); setAddMode(false); }}>
+                <svg className="plugin-marketplace-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M3 10 5 4h14l2 6M3 10a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0M5 13v7h14v-7M10 20v-6h4v6M9 10l1-6M15 10l-1-6" />
+                </svg>
+                <ConfigSidebarText>{t("plugins.discover")}</ConfigSidebarText>
+                <svg className="plugin-marketplace-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg>
+              </ConfigSidebarItem>
               {loading ? (
                 <div className="config-sidebar-message">
                   {t("i18n.loading")}
@@ -1204,11 +1249,12 @@ export function PluginsConfig({
                         return (
                           <ConfigSidebarItem
                             key={key}
-                            active={!addMode && !selectedMarket && selected === key}
+                            active={!discovering && !addMode && !selectedMarket && selected === key}
                             title={extension.path}
                             onClick={() => {
                               setSelected(key);
                               setSelectedMarket(null);
+                              setDiscovering(false);
                               setAddMode(false);
                               setActionError(null);
                               setActionMessage(null);
@@ -1247,7 +1293,7 @@ export function PluginsConfig({
                         )}
                         {group.packages.map((pkg) => {
                           const key = packageKey(pkg);
-                          const isSelected = !addMode && !selectedMarket && selected === key;
+                          const isSelected = !discovering && !addMode && !selectedMarket && selected === key;
                           return (
                             <ConfigSidebarItem
                               key={key}
@@ -1256,6 +1302,7 @@ export function PluginsConfig({
                               onClick={() => {
                                 setSelected(key);
                                 setSelectedMarket(null);
+                                setDiscovering(false);
                                 setAddMode(false);
                                 setActionError(null);
                                 setActionMessage(null);
@@ -1302,10 +1349,11 @@ export function PluginsConfig({
                     return (
                       <ConfigSidebarItem
                         key={key}
-                        active={!addMode && selectedMarket === key}
+                        active={!discovering && !addMode && selectedMarket === key}
                         title={entry.description ?? entry.installSource ?? entry.name}
                         onClick={() => {
                           setSelectedMarket(key);
+                          setDiscovering(false);
                           setAddMode(false);
                           setSelected(null);
                           setActionError(null);
@@ -1345,6 +1393,7 @@ export function PluginsConfig({
                 active={addMode}
                 onClick={() => {
                   setAddMode(true);
+                  setDiscovering(false);
                   setSelectedMarket(null);
                   setActionError(null);
                   setActionMessage(null);
@@ -1356,7 +1405,17 @@ export function PluginsConfig({
 
           <ConfigDetail>
             <ConfigDetailStack className="is-fill">
-              {selectedMarketEntry ? (
+              {/* Keep the catalog mounted to retain search and pagination when
+                  inspecting installed packages. `hidden` also removes its controls
+                  from focus navigation and the phone's detail-title reporting. */}
+              <div hidden={!discovering} className="plugin-discovery-host">
+                <PluginDiscovery cwd={cwd} scope={installScope} onScopeChange={setInstallScope}
+                  projectResourcesLoaded={projectResourcesLoaded} packages={packages} busy={footerBusy}
+                  installing={discoveryInstalling} installError={discoveryError} message={actionError ?? discoveryMessage}
+                  sessionId={discoveryReloadNeeded ? sessionId : null} onReload={() => { void reloadSession(); }}
+                  onInstall={installDiscovered} />
+              </div>
+              {discovering ? null : selectedMarketEntry ? (
               <MarketplaceDetail
                 entry={selectedMarketEntry}
                 cwd={cwd}
@@ -1375,7 +1434,7 @@ export function PluginsConfig({
                 source={installSource}
                 scope={installScope}
                 projectResourcesLoaded={projectResourcesLoaded}
-                busy={addBusy}
+                busy={footerBusy}
                 actionError={actionError}
                 onSourceChange={setInstallSource}
                 onScopeChange={setInstallScope}
