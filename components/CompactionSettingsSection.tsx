@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { AppSelect } from "./AppSelect";
 
@@ -218,6 +218,12 @@ export function CompactionSettingsSection() {
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
   const [invalidKeepRecent, setInvalidKeepRecent] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -241,6 +247,8 @@ export function CompactionSettingsSection() {
   const save = (patch: Partial<CompactionPolicy>) => {
     setSaving(true);
     setFailed(false);
+    if (savedTimer.current) { clearTimeout(savedTimer.current); savedTimer.current = null; }
+    setJustSaved(false);
     fetch("/api/compaction/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -252,6 +260,8 @@ export function CompactionSettingsSection() {
         if (!next) return;
         setPolicy(next);
         if ("keepRecentTokens" in patch) setKeepRecentDraft(String(next.keepRecentTokens));
+        setJustSaved(true);
+        savedTimer.current = setTimeout(() => setJustSaved(false), 2000);
       })
       .catch(() => setFailed(true))
       .finally(() => setSaving(false));
@@ -268,6 +278,11 @@ export function CompactionSettingsSection() {
   const number = (value: number) => new Intl.NumberFormat(locale).format(value);
   const percent = (value: number) => (Number.isInteger(value) ? String(value) : value.toFixed(1));
   const busy = policy === null || saving;
+  const keepRecentParsed = Number(keepRecentDraft.trim());
+  const keepRecentDirty = policy !== null
+    && keepRecentDraft.trim() !== ""
+    && Number.isInteger(keepRecentParsed)
+    && keepRecentParsed !== policy.keepRecentTokens;
 
   const commitKeepRecent = () => {
     const trimmed = keepRecentDraft.trim();
@@ -440,7 +455,15 @@ export function CompactionSettingsSection() {
       </div>
 
       <span className="settings-chats-hint" role={failed ? "alert" : "status"}>
-        {failed ? t("settings.compactionFailed") : saving ? t("i18n.saving") : ""}
+        {failed
+          ? t("settings.compactionFailed")
+          : saving
+            ? t("i18n.saving")
+            : keepRecentDirty
+              ? t("settings.unsaved")
+              : justSaved
+                ? t("settings.saved")
+                : ""}
       </span>
       <p className="settings-general-description">{t("settings.compactionHint")}</p>
     </section>

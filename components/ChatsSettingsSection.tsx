@@ -30,6 +30,12 @@ export function ChatsSettingsSection() {
   draftRef.current = draft;
   const toolsDraftRef = useRef(toolsDraft);
   toolsDraftRef.current = toolsDraft;
+  const [savedField, setSavedField] = useState<"instructions" | "tools" | null>(null);
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -65,6 +71,11 @@ export function ChatsSettingsSection() {
         setSettings(data);
         if ("instructions" in patch) setDraft(data.instructions);
         if ("allowedTools" in patch) setToolsDraft(data.allowedTools.join("\n"));
+        if ("instructions" in patch || "allowedTools" in patch) {
+          if (savedTimer.current) clearTimeout(savedTimer.current);
+          setSavedField("instructions" in patch ? "instructions" : "tools");
+          savedTimer.current = setTimeout(() => setSavedField(null), 2000);
+        }
       })
       .catch(() => setFailed(true))
       .finally(() => setSaving(false));
@@ -136,10 +147,16 @@ export function ChatsSettingsSection() {
             onChange={(event) => setDraft(event.target.value)}
             onBlur={() => { if (dirty) void save({ instructions: draftRef.current }); }}
           />
-          <span id={hintId} className="settings-chats-hint" role={failed ? "alert" : undefined}>
+          <span id={hintId} className="settings-chats-hint" role={failed ? "alert" : "status"}>
             {failed
               ? t("settings.chatsFailed")
-              : saving ? t("i18n.saving") : t("settings.chatsInstructionsHint", { count: draft.length, max: maxChars })}
+              : saving
+                ? t("i18n.saving")
+                : dirty
+                  ? t("settings.unsaved")
+                  : savedField === "instructions"
+                    ? t("settings.saved")
+                    : t("settings.chatsInstructionsHint", { count: draft.length, max: maxChars })}
           </span>
         </div>
         <div className="settings-chat-option settings-chats-field settings-chats-tools">
@@ -156,7 +173,9 @@ export function ChatsSettingsSection() {
             onChange={(event) => setToolsDraft(event.target.value)}
             onBlur={() => { if (toolsDirty) void save({ allowedTools: parseToolNameList(toolsDraftRef.current) }); }}
           />
-          <span id={`${hintId}-tools`} className="settings-chats-hint">{t("settings.chatsToolsHint")}</span>
+          <span id={`${hintId}-tools`} className="settings-chats-hint" role="status">
+            {toolsDirty ? t("settings.unsaved") : savedField === "tools" ? t("settings.saved") : t("settings.chatsToolsHint")}
+          </span>
         </div>
       </div>
     </section>
