@@ -34,8 +34,14 @@ export interface UseTeamPlanResult {
   refresh(): void;
   /** 批准当前计划（投递给 lead）。返回是否投递成功。 */
   approve(): Promise<{ ok: boolean; reason?: string }>;
+  /**
+   * 批准并先落地编辑：有改动时先 PATCH（revision+1），再用**保存后的** revision 投递批准。
+   * 编辑为空时等价于 `approve()`。保存或投递失败都返回 ok=false，错误留在 saveError /
+   * approveError 上。
+   */
+  saveAndApprove(edits: PlanEdits | null): Promise<{ ok: boolean; reason?: string }>;
   /** 保存编辑（PATCH）。成功后就地回填 plan（revision 已 +1）。 */
-  save(edits: PlanEdits): Promise<{ ok: boolean; reason?: string }>;
+  save(edits: PlanEdits): Promise<{ ok: boolean; reason?: string; plan?: TeamPlanView }>;
 }
 
 export interface PlanMemberEditDraft {
@@ -149,22 +155,21 @@ export function useTeamPlan(teamName: string | null, refreshKey: number = 0): Us
 
   const refresh = useCallback(() => setTick((value) => value + 1), []);
 
-  const approve = useCallback(async (): Promise<{ ok: boolean; reason?: string }> => {
-    const current = planRef.current;
-    if (!current) return { ok: false, reason: "no plan" };
+  // 投递批准的公共部分：调用方保证 base 是磁盘上的当前计划（保存后用它更新过的版本）。
+  const sendApproval = useCallback(async (base: TeamPlanView): Promise<{ ok: boolean; reason?: string }> => {
     setBusy(true);
     setApproveError(null);
     try {
       const response = await fetch(
-        `/api/teams/${encodeURIComponent(teamName ?? current.teamName)}/plan/approve`,
+        `/api/teams/${encodeURIComponent(teamName ?? base.teamName)}/plan/approve`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            planId: current.planId,
-            sessionId: current.sessionId,
-            incarnationId: current.incarnationId,
-            expectedRevision: current.revision,
+            planId: base.planId,
+            sessionId: base.sessionId,
+            incarnationId: base.incarnationId,
+            expectedRevision: base.revision,
           }),
         },
       );
@@ -187,7 +192,13 @@ export function useTeamPlan(teamName: string | null, refreshKey: number = 0): Us
     }
   }, [teamName]);
 
-  const save = useCallback(async (edits: PlanEdits): Promise<{ ok: boolean; reason?: string }> => {
+  const approve = useCallback(async (): Promise<{ ok: boolean; reason?: string }> => {
+    const current = planRef.current;
+    if (!current) return { ok: false, reason: "no plan" };
+    return sendApproval(current);
+  }, [sendApproval]);
+
+  const save = useCallback(async (edits: PlanEdits): Promise<{ ok: boolean; reason?: string; plan?: TeamPlanView }> => {
     const current = planRef.current;
     if (!current) return { ok: false, reason: "no plan" };
     setSaving(true);
@@ -226,7 +237,7 @@ export function useTeamPlan(teamName: string | null, refreshKey: number = 0): Us
       // 就地回填：revision 已 +1，编辑基线随 plan prop 一起重置。
       const saved = data.plan;
       setPlan((prev) => acceptPlan(prev, saved));
-      return { ok: true };
+      return { ok: true, plan: saved };
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       setSaveError(reason);
@@ -236,5 +247,18 @@ export function useTeamPlan(teamName: string | null, refreshKey: number = 0): Us
     }
   }, [teamName]);
 
-  return { plan, error, busy, approveError, saving, saveError, conflict, refresh, approve, save };
+  const saveAndApprove = useCallback(async (edits: PlanEdits | null): Promise<{ ok: boolean; reason?: string }> => {
+    const current = planRef.current;
+    if (!current) return { ok: false, reason: "no plan" };
+    let base = current;
+    if (edits && (edits.members.length > 0 || edits.tasks.length > 0)) {
+      const saved = await save(edits);
+      if (!saved.ok) return { ok: false, reason: saved.reason };
+      // 保存会 bump revision；批准必须用保存后的 identity，否则 409。
+      if (saved.plan) base = saved.plan;
+    }
+    return sendApproval(base);
+  }, [save, sendApproval]);
+
+  return { plan, error, busy, approveError, saving, saveError, conflict, refresh, approve, save, saveAndApprove };
 }

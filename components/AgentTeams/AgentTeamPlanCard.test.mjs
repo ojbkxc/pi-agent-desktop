@@ -164,18 +164,18 @@ test("批准按钮 disabled = 有未分配任务 / 非法成员名；busy 时禁
   assert.doesNotMatch(busy, /teams\.plan\./, "不应渲染 i18n 键原文");
 });
 
-test("批准门禁：非 review_pending / 有未保存改动 / 批准失败都拦住并给提示", () => {
+test("批准门禁：非 review_pending 拦住；未保存改动不再拦批准；批准失败有提示", () => {
   // draft 等状态批准路由必然 409 → 按钮禁用。
   for (const state of ["draft", "launch_failed", "interrupted"]) {
     const html = renderToStaticMarkup(planModalView(tFake, view({ state })));
     assert.match(html, /data-testid="team-plan-approve"[^>]*disabled/, `${state} 不能批准`);
   }
 
-  // 改了模型但没保存：批准被拦住 + 说明原因（否则会按旧模型启动团队）。
+  // 改了模型但没保存：批准**不再**被拦住 —— 点批准时先自动保存草稿。
   const dirty = renderToStaticMarkup(planModalView(tFake, view(), { editor: false, dirty: true }));
-  assert.match(dirty, /data-testid="team-plan-approve"[^>]*disabled/);
-  assert.match(dirty, /data-testid="team-plan-unsaved"/);
-  assert.match(dirty, /Save your changes before approving/, "提示文案来自 i18n（此处为假词典/英文包）");
+  assert.doesNotMatch(dirty, /data-testid="team-plan-approve"[^>]*disabled/, "dirty 不拦批准");
+  assert.equal(byTestId(planModalView(tFake, view(), { editor: false, dirty: true }), "team-plan-unsaved"), undefined,
+    "旧的「先保存再批准」告警已移除");
 
   // 批准失败的原因必须显示出来（调用方丢返回值也不静默）。
   const failed = renderToStaticMarkup(planModalView(tFake, view(), { approveError: "投递失败：找不到 lead 会话" }));
@@ -283,7 +283,7 @@ test("二次确认行：dirty+discardPrompt 时出现，取消留在卡片、确
   });
   const prompt = byTestId(tree, "team-plan-discard-prompt");
   assert.ok(prompt, "确认行必须出现");
-  // 二次确认态下「saveBeforeApprove」的常驻告警让位给确认文案（不叠加两条红字）。
+  // 二次确认态下不再叠加旧的「先保存再批准」常驻告警（该告警已整体移除）。
   assert.equal(byTestId(tree, "team-plan-unsaved"), undefined);
   byTestId(tree, "team-plan-discard-cancel").props.onClick();
   assert.equal(cancelDiscard, 1, "取消只退出确认，不关卡片");
@@ -314,7 +314,8 @@ test("editable 路径：传 editor 才渲染可编辑区，且 draft / review_pe
   const fs = await jiti.import("node:fs");
   const source = fs.readFileSync(new URL("./AgentTeamPlanCard.tsx", import.meta.url), "utf8");
   assert.match(source, /editor: true/, "主组件必须把可编辑区打开");
-  assert.match(source, /onSave \? \{ onSave \} : \{\}/, "onSave 缺省时不下传，保持只读降级");
+  assert.match(source, /onDraftChange: \(edits\) => \{ editsRef\.current = edits; \}/, "编辑器 diff 上报到卡片（批准时先保存）");
+  assert.match(source, /onApprove: \(\) => onApprove\?\.\(editsRef\.current\)/, "批准携带 diff");
   assert.match(source, /saving=\{options\.saving \?\? false\}/, "saving 一路传到可编辑区");
   assert.match(source, /conflict=\{options\.conflict \?\? false\}/, "conflict 一路传到可编辑区");
   assert.match(source, /cwd=\{options\.cwd \?\? null\}/, "cwd 一路传到可编辑区（agent 预设目录）");

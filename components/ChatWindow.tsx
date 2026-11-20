@@ -1952,8 +1952,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
               conflict={teamPlan.conflict}
               error={teamPlan.error}
               approveError={teamPlan.approveError}
-              onApprove={() => void teamPlan.approve()}
-              onSave={(edits) => void teamPlan.save(edits)}
+              onApprove={(edits) => void teamPlan.saveAndApprove(edits)}
               onReload={teamPlan.refresh}
               onStop={() => void handleAbort()}
             />

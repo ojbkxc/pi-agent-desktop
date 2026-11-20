@@ -194,6 +194,68 @@ test("approve 成功 → 清掉上一次的 approveError", async (t) => {
   assert.equal(h.current.approveError, null, "重试成功后不再显示旧错误");
 });
 
+test("saveAndApprove：先 PATCH 再用保存后的 revision 投递批准", async (t) => {
+  const savedPlan = { ...PLAN, revision: 4 };
+  const env = installEnv([
+    { ok: true, body: { plan: PLAN } },                                   // 初始 GET
+    { ok: true, status: 200, body: { plan: savedPlan } },                 // PATCH
+    { ok: true, status: 200, body: { ok: true, requestId: "desktop-approve-p-1-r4" } }, // POST approve
+  ]);
+  t.after(restoreEnv);
+  const h = mount(useTeamPlan, "demo", 0);
+  h.flush();
+  await flush();
+
+  const result = await h.current.saveAndApprove({
+    members: [{ id: "m1", runtime: { providerId: "anthropic", modelId: "claude" } }],
+    tasks: [],
+  });
+  assert.equal(result.ok, true);
+
+  const patch = env.calls.find((call) => call.init?.method === "PATCH");
+  const post = env.calls.find((call) => call.init?.method === "POST");
+  assert.ok(patch, "先保存");
+  assert.ok(post, "再批准");
+  assert.equal(JSON.parse(patch.init.body).expectedRevision, 3, "PATCH 用旧 revision");
+  assert.equal(JSON.parse(post.init.body).expectedRevision, 4, "批准用保存后的 revision（否则 409）");
+});
+
+test("saveAndApprove：无改动时直接批准，不发 PATCH", async (t) => {
+  const env = installEnv([
+    { ok: true, body: { plan: PLAN } },
+    { ok: true, status: 200, body: { ok: true, requestId: "desktop-approve-p-1-r3" } },
+  ]);
+  t.after(restoreEnv);
+  const h = mount(useTeamPlan, "demo", 0);
+  h.flush();
+  await flush();
+
+  const result = await h.current.saveAndApprove(null);
+  assert.equal(result.ok, true);
+  assert.equal(env.calls.some((call) => call.init?.method === "PATCH"), false, "无 diff 不保存");
+  const post = env.calls.find((call) => call.init?.method === "POST");
+  assert.equal(JSON.parse(post.init.body).expectedRevision, 3);
+});
+
+test("saveAndApprove：保存失败时不批准", async (t) => {
+  const env = installEnv([
+    { ok: true, body: { plan: PLAN } },
+    { ok: false, status: 500, body: { error: "写盘失败" } },
+  ]);
+  t.after(restoreEnv);
+  const h = mount(useTeamPlan, "demo", 0);
+  h.flush();
+  await flush();
+
+  const result = await h.current.saveAndApprove({
+    members: [{ id: "m1", runtime: { providerId: "anthropic", modelId: "claude" } }],
+    tasks: [],
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /写盘失败/);
+  assert.equal(env.calls.some((call) => call.init?.method === "POST"), false, "保存失败不得投递批准");
+});
+
 test("acceptPlan：同世系里更小的 revision 被忽略（轮询不能回退刚保存的计划）", () => {
   const newer = { ...PLAN, revision: 5 };
   const stale = { ...PLAN, revision: 3 };

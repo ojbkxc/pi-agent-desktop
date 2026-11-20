@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type CSSProperties, type Ref } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
 import { useModalDismiss } from "@/hooks/useModalDismiss";
@@ -19,13 +19,14 @@ import { PlanEditor, type PlanMemberEditDraft, type PlanTaskEditDraft } from "./
  * B3 计划卡（会话决策坞，composer 上方）——展示 + **可编辑** + 批准。
  *
  * 收缩态：团队名 + 状态徽标 + 成员数 + 「Review configuration」。点开是 Modal：
- * - 传了 `onSave` → 渲染 `PlanEditor`（成员勾选/批量设模型/跟随队长/逐个改 agent 与模型/
+ * - 传 `editor: true` → 渲染 `PlanEditor`（成员勾选/批量设模型/跟随队长/逐个改 agent 与模型/
  *   任务负责人；`draft` / `review_pending` 才可编辑）；
  * - 没传 → 退回只读名册（纯展示场景与静态断言用）。
  *
  * 批准按钮的 disabled 口径 = `isApproveDisabled`（图校验：未分配任务 / 非法成员名）
- * || **状态不是 review_pending**（批准路由对其它状态一律 409） || busy
- * || **有未保存的编辑**（否则会按旧模型启动团队）。
+ * || **状态不是 review_pending**（批准路由对其它状态一律 409） || busy。**有未保存的
+ * 编辑不再禁用批准**：点批准时先把编辑器 diff PATCH 落盘，再用保存后的 revision 投递，
+ * 所以用户不需要「保存改动」这个中间步骤。
  *
  * 阶段显示（对齐 cc-haha AgentTeamsPlanCard.tsx:83）：draft / review_pending / launch_failed
  * / interrupted 显示；无 plan、launching、running、cancelled 且无 parentPlanId 隐藏。
@@ -58,13 +59,13 @@ interface Props {
   approveError?: string | null;
   /** 点「停止」；停 lead 会话生成（由调用方接 abort，cc-haha stopGeneration 同款）。 */
   onStop?: () => void;
-  /** 点「批准」；由 hook 的 approve 投递给 lead。 */
-  onApprove?: () => void;
-  /** 保存编辑（PATCH）；缺省时保存按钮不出现。 */
-  onSave?: (edits: { members: PlanMemberEditDraft[]; tasks: PlanTaskEditDraft[] }) => void;
+  /** 点「批准」；携带编辑器里待保存的改动（无改动为 null），由上层先保存再投递。 */
+  onApprove?: (edits: PlanEdits | null) => void;
   /** 409 后重新载入。 */
   onReload?: () => void;
 }
+
+export type PlanEdits = { members: PlanMemberEditDraft[]; tasks: PlanTaskEditDraft[] };
 
 type TFn = (key: string, params?: TranslationParams) => string;
 
@@ -125,8 +126,12 @@ const S: Record<string, CSSProperties> = {
   dialog: {
     // 920px 在宽屏上几乎横跨整个窗口，两列编辑器拉得很长；720px 刚好
     // 容下 280px 成员列 + 432px 详情/任务列，又不至于把弹框铺满。
+    // `boxSizing: border-box` 必须保留：content-box 下 width 不含 padding/border，
+    // 100% 宽时每侧会多出 16px，弹框在窄窗口里左右各溢出一截。
     width: "min(720px, 100%)",
-    maxHeight: "min(80vh, 720px)",
+    maxWidth: "100%",
+    boxSizing: "border-box",
+    maxHeight: "min(78vh, 640px)",
     overflow: "auto",
     background: "var(--bg-panel)",
     border: "1px solid var(--border)",
@@ -180,13 +185,14 @@ export function planModalView(
     saving?: boolean;
     saveError?: string | null;
     conflict?: boolean;
-    onSave?: (edits: { members: PlanMemberEditDraft[]; tasks: PlanTaskEditDraft[] }) => void;
     onReload?: () => void;
     /** 传 true 才渲染可编辑区（需要 React hook，无 DOM 的纯视图测试默认不传）。 */
     editor?: boolean;
-    /** 可编辑区有未保存改动（批准必须被拦住）。 */
+    /** 可编辑区有未保存改动（关闭时二次确认用；不再禁用批准）。 */
     dirty?: boolean;
     onDirtyChange?: (dirty: boolean) => void;
+    /** 编辑器草稿 diff 变化回调（批准时由卡片先保存）。 */
+    onDraftChange?: (edits: PlanEdits | null) => void;
     /** 关闭确认进行中（dirty 时点关闭进入此态，面板内出现二次确认行）。 */
     discardPrompt?: boolean;
     /** 二次确认：放弃未保存改动并关闭。 */
@@ -209,7 +215,7 @@ export function planModalView(
 ) {
   const review = derivePlanReview(plan);
   const approveDisabled =
-    isApproveDisabled(plan) || !isPlanApprovable(plan) || Boolean(options.busy) || Boolean(options.dirty);
+    isApproveDisabled(plan) || !isPlanApprovable(plan) || Boolean(options.busy);
   // cc-haha 同款口径：带 parentPlanId 的卡片（加入运行中团队的新增计划）才给停止按钮。
   const canStop = Boolean(plan.parentPlanId) && Boolean(options.onStop);
   // 三条关闭路径（遮罩 / Close / Esc）统一走 requestClose：dirty 时先进二次确认，
@@ -255,9 +261,9 @@ export function planModalView(
             saving={options.saving ?? false}
             saveError={options.saveError ?? null}
             conflict={options.conflict ?? false}
-            {...(options.onSave ? { onSave: options.onSave } : {})}
             {...(options.onReload ? { onReload: options.onReload } : {})}
             {...(options.onDirtyChange ? { onDirtyChange: options.onDirtyChange } : {})}
+            {...(options.onDraftChange ? { onDraftChange: options.onDraftChange } : {})}
           />
         ) : (
           <>
@@ -306,11 +312,6 @@ export function planModalView(
           </>
         )}
 
-        {options.dirty && !options.discardPrompt ? (
-          <p style={S.alert} role="alert" data-testid="team-plan-unsaved">
-            {t("teams.plan.saveBeforeApprove")}
-          </p>
-        ) : null}
         {/* dirty 时点关闭 → 二次确认行（interaction.md P1：草稿不能被静默丢弃）。
             Esc / 遮罩 / Close 三条路径都由 requestClose 走进这里，不再直接卸载。 */}
         {options.discardPrompt ? (
@@ -373,12 +374,13 @@ export function AgentTeamPlanCard({
   approveError = null,
   onStop,
   onApprove,
-  onSave,
   onReload,
 }: Props) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
-  // 可编辑区有未保存改动时，批准必须被拦住（否则按旧模型启动团队）。
+  // 编辑器草稿 diff（null = 无改动）：点批准时随批准一起保存。
+  const editsRef = useRef<PlanEdits | null>(null);
+  // 可编辑区有未保存改动：只用于关闭时二次确认，不再拦住批准。
   const [dirty, setDirty] = useState(false);
   // dirty 时点关闭 → 停在卡片里问「放弃未保存的修改？」（interaction.md P1）。
   // 三条关闭路径（Esc / 遮罩 / Close）都先到这里，确认后才真关。
@@ -398,6 +400,7 @@ export function AgentTeamPlanCard({
     if (!open) {
       setDirty(false);
       setDiscardPrompt(false);
+      editsRef.current = null;
     }
   }, [open]);
 
@@ -466,7 +469,8 @@ export function AgentTeamPlanCard({
           createPortal(
             planModalView(t, plan, {
               busy,
-              onApprove,
+              // 批准携带编辑器 diff：上层先 PATCH 再用新 revision 投递。
+              onApprove: () => onApprove?.(editsRef.current),
               onClose: () => setOpen(false),
               onRequestClose: requestClose,
               onDiscard: discardAndClose,
@@ -481,6 +485,7 @@ export function AgentTeamPlanCard({
               dirty,
               approveError,
               onDirtyChange: setDirty,
+              onDraftChange: (edits) => { editsRef.current = edits; },
               ...(onStop
                 ? {
                     onStop: () => {
@@ -490,7 +495,6 @@ export function AgentTeamPlanCard({
                   }
                 : {}),
               stopping: stoppingPlanId === plan.planId,
-              ...(onSave ? { onSave } : {}),
               ...(onReload ? { onReload } : {}),
             }),
             document.body,

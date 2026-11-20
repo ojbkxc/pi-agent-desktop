@@ -15,18 +15,13 @@ import { isUsableRuntime, type TeamPlanView } from "@/lib/agent-teams-plan";
  * - 逐个成员改 agent 预设与服务商+模型；
  * - 任务负责人下拉（含「未分配」）。
  *
- * 数据流：本地草稿 → 点「保存改动」→ `PATCH /api/teams/[team]/plan` → 回填服务端
- * 返回的 plan（revision +1）。**保存不是批准**：批准仍走 `onApprove`（投递 prompt
- * 给 lead，由它 approve + launch）；保存只改字段，状态保持 review_pending。
+ * 数据流：本地草稿 → 上报 diff（`onDraftChange`）→ 卡片点「批准」时先
+ * `PATCH /api/teams/[team]/plan` 再投递批准 prompt。没有独立的「保存改动」按钮：
+ * 编辑只在批准时一并落盘，避免「改了模型但忘了保存」的多余步骤。
  *
  * 模型目录来自 `useModelCatalog()`（与团队成员换模型面板同源）；agent 预设来自
  * `/api/subagents/profiles?cwd=`，读不到时只展示当前值、不阻塞模型与任务编辑。
  */
-
-export interface PlanEditorDeps {
-  /** 保存草稿（PATCH）。返回新的 plan；失败抛出带 message 的错误。 */
-  onSave?: (edits: { members: PlanMemberEditDraft[]; tasks: PlanTaskEditDraft[] }) => Promise<TeamPlanView>;
-}
 
 export interface PlanMemberEditDraft {
   id: string;
@@ -137,12 +132,15 @@ interface Props {
   cwd?: string | null;
   /** 是否允许编辑（draft / review_pending）。 */
   editable: boolean;
-  /** 保存进行中。 */
+  /** 保存进行中（批准前自动保存时由上层置位）。 */
   saving?: boolean;
   /** 保存错误。 */
   saveError?: string | null;
-  /** 保存；成功后由上层回填 plan。缺省时不显示保存按钮（纯只读）。 */
-  onSave?: (edits: { members: PlanMemberEditDraft[]; tasks: PlanTaskEditDraft[] }) => void;
+  /**
+   * 草稿发生变化时上报「只含真正改过字段」的 PATCH 体（null = 与服务端一致）。
+   * 卡片拿它在批准时先保存；本组件不再提供独立的「保存改动」按钮。
+   */
+  onDraftChange?: (edits: { members: PlanMemberEditDraft[]; tasks: PlanTaskEditDraft[] } | null) => void;
   /** 计划已被别人改过（409）：提示重新载入。 */
   conflict?: boolean;
   onReload?: () => void;
@@ -213,7 +211,7 @@ const S = {
   hint: { fontSize: "var(--fs-micro)", color: "var(--text-dim)", margin: "4px 0 0" },
 } as const;
 
-export function PlanEditor({ plan, cwd = null, editable, saving = false, saveError = null, onSave, conflict = false, onReload, onDirtyChange }: Props) {
+export function PlanEditor({ plan, cwd = null, editable, saving = false, saveError = null, onDraftChange, conflict = false, onReload, onDirtyChange }: Props) {
   const { t } = useI18n();
   // 窄屏（≤720）改单列：固定两列在 400px 视口下把负责人下拉挤出视口，
   // dialog 出现横向滚动（interaction.md P2 #4）。与 useIsMobile 的 640 不同——
@@ -278,6 +276,11 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
 
+  // 同时把「批准时要一并保存的 diff」上报给卡片；无改动时上报 null。
+  useEffect(() => {
+    onDraftChange?.(dirty ? diffPlanEdits(plan, draft) : null);
+  }, [dirty, plan, draft, onDraftChange]);
+
   const setMember = useCallback((id: string, patch: Partial<PlanMemberDraft>) => {
     setDraft((current) => ({
       ...current,
@@ -292,12 +295,13 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
     setDraft((current) => ({ ...current, tasks: { ...current.tasks, [id]: ownerId } }));
   }, []);
 
-  const applyBatch = () => {
-    const runtime = splitModelRef(batchRef);
+  // 批量模型下拉：选中即应用到已勾选成员，不再需要单独的「应用到选择」按钮。
+  const applyModelRef = (ref: string) => {
+    const runtime = splitModelRef(ref);
     if (!runtime || selected.length === 0) return;
     setDraft((current) => {
       const members = { ...current.members };
-      for (const id of selected) members[id] = { ...members[id], modelRef: batchRef };
+      for (const id of selected) members[id] = { ...members[id], modelRef: ref };
       return { ...current, members };
     });
   };
@@ -307,12 +311,7 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
     // 队长运行时可能是 pi-team 写的占位 unknown/unknown（本服务进程不设 PROVIDER/MODEL 环境
     // 变量）；那样的值不能写进成员模型，按钮也据此禁用。
     if (!isUsableRuntime(lead) || selected.length === 0) return;
-    const modelRef = joinModelRef(lead!.providerId, lead!.modelId);
-    setDraft((current) => {
-      const members = { ...current.members };
-      for (const id of selected) members[id] = { ...members[id], modelRef };
-      return { ...current, members };
-    });
+    applyModelRef(joinModelRef(lead!.providerId, lead!.modelId));
   };
 
   // 恢复建议模型：模型与 agent 预设回到计划里的值，思考级别保持用户当前的选择。
@@ -330,11 +329,7 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
     });
   };
 
-  const save = () => {
-    if (!onSave || !dirty) return;
-    onSave(diffPlanEdits(plan, draft));
-  };
-
+  // 保存与批准合并：卡片在批准时携带这里的 diff 先 PATCH。此处不再有独立保存按钮。
   const toggleSelected = (id: string) => {
     setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   };
@@ -422,15 +417,12 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
                 <AppSelect
                   aria-label={t("teams.plan.batch")}
                   value={batchRef}
-                  onValueChange={setBatchRef}
+                  onValueChange={(value) => { setBatchRef(value); applyModelRef(value); }}
                   options={[{ value: "", label: t("teams.plan.batchPick") }, ...modelOptions]}
                   disabled={selected.length === 0 || catalog.loading}
                 />
               </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", flex: "0 1 auto" }}>
-                <ConfigButton size="small" disabled={selected.length === 0 || !batchRef} onClick={applyBatch}>
-                  {t("teams.plan.applyBatch")}
-                </ConfigButton>
                 <ConfigButton size="small" disabled={selected.length === 0 || !isUsableRuntime(plan.leaderRuntime)} onClick={followLead}>
                   {t("teams.plan.followLeader")}
                 </ConfigButton>
@@ -544,17 +536,12 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
 
       <div style={S.footer}>
         <span style={{ ...S.hint, marginRight: "auto", alignSelf: "center" }}>
-          {dirty ? t("teams.plan.unsaved") : t("teams.plan.saved")}
+          {saving
+            ? t("teams.plan.saving")
+            : dirty
+              ? t("teams.plan.approveSavesHint")
+              : t("teams.plan.saved")}
         </span>
-        {onSave && (
-          <ConfigButton
-            data-testid="team-plan-save"
-            disabled={!editable || !dirty || saving}
-            onClick={save}
-          >
-            {saving ? t("teams.plan.saving") : t("teams.plan.save")}
-          </ConfigButton>
-        )}
       </div>
     </div>
   );
