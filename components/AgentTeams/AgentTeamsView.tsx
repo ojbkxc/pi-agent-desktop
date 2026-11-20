@@ -791,6 +791,7 @@ export function AgentTeamsView({
                   snapshot={snapshot}
                   fill
                   onFocusTask={(taskId) => setSelectedTicketId(taskId)}
+                  onOpenMember={(member) => openMemberInspector(member.id)}
                 />
               </div>
             </aside>

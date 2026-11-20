@@ -132,3 +132,15 @@ test("#63：占用行如实展示接线（缺字段不编造、ended+闲置仅�
   assert.match(localePlugins, /删除团队记录：计划、工单、成员邮箱与回执；成员会话记录（\.jsonl）与产物保留/);
   assert.match(localePlugins, /permanently deletes the team records: plan, tickets, member mailboxes and receipts\. Member session transcripts \(\.jsonl\) and artifacts are kept/);
 });
+
+// 通信流参与者 → 成员检查器接线（对齐 cc-haha）：feed 行点参与者名字要能打开其检查器。
+// feed 用 onOpenMember(WorkbenchMember) 回调；AgentTeamsView 把它接到既有的
+// openMemberInspector（清任务抽屉 + 选中成员 + 展开右列）。缺这条线，名字只是死文本。
+test("通信流参与者可点开成员检查器：onOpenMember 接到 openMemberInspector", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(source, /<AgentTeamsCommunicationFeed\b/);
+  assert.match(source, /onOpenMember=\{\(member\) => openMemberInspector\(member\.id\)\}/, "参与者回调要按成员 id 打开检查器");
+  // openMemberInspector 必须具备完整语义：清任务抽屉 + 选中成员 + 展开右列。
+  assert.match(source, /const openMemberInspector = useCallback\(\(memberId: string\) => \{[\s\S]*?setSelectedTicketId\(null\);[\s\S]*?setSelectedMemberId\(memberId\);[\s\S]*?setCommOpen\(true\);/);
+});
+
