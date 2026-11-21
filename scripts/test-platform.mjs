@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { accessSync } from "node:fs";
+import { accessSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -36,9 +36,31 @@ export async function assertOwnerOnlyMode(path, expected = 0o600) {
   assert.ok(info.isFile());
 }
 
+/**
+ * A path in its canonical long form, or resolved as given when it does not exist.
+ * `realpathSync` alone keeps a Windows 8.3 short name (`C:\\Users\\EX_MAZ~1`);
+ * the `.native` variant expands it, which is what makes the profile check below
+ * read two spellings of one directory as the same tree.
+ */
+function canonicalPath(path) {
+  for (const realpath of [realpathSync.native, realpathSync]) {
+    try {
+      return realpath(path);
+    } catch {
+      // Try the next form, then fall back to a plain resolve.
+    }
+  }
+  return resolve(path);
+}
+
 export async function fixtureDir(prefix) {
-  const temp = resolve(tmpdir());
-  const relativeToHome = relative(resolve(homedir()), temp);
+  // Canonicalize both sides: Windows reports %TEMP% in its 8.3 short form
+  // (`C:\Users\EX_MAZ~1\…`) while `homedir()` answers the long one, and
+  // `relative()` reads those as two trees. The guard below then missed that
+  // fixtures sit inside the profile, so trust tests inherited the developer's
+  // ~/.pi and ~/.agents/skills through the SDK's ancestor scan and failed.
+  const temp = canonicalPath(tmpdir());
+  const relativeToHome = relative(canonicalPath(homedir()), temp);
   const inProfile = !relativeToHome.startsWith("..") && !isAbsolute(relativeToHome);
   // Ancestor-scanning trust tests must not inherit the developer's ~/.agents/skills.
   const base = inProfile ? resolve("test-results", "fixtures") : temp;

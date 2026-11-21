@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
 import { existsSync, realpathSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { after } from "node:test";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { createJiti } from "jiti";
+import { fixtureDir } from "../../../scripts/test-platform.mjs";
 
 // Real paths: trust.json keys folders by them, and the temp folder is a link on macOS.
-const root = realpathSync(await mkdtemp(join(tmpdir(), "pi-web-project-trust-route-")));
+// `fixtureDir` keeps the fixture out of the developer's profile, so the SDK's ancestor
+// scan cannot inherit ~/.pi or ~/.agents/skills and make a fresh folder require trust;
+// `.native` expands a Windows 8.3 short temp path into the long one the route answers.
+const root = realpathSync.native(await fixtureDir("pi-web-project-trust-route-"));
 const agentDir = join(root, "agent");
 const cwd = join(root, "project");
 const fresh = join(root, "fresh");

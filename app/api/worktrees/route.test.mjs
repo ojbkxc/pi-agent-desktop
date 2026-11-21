@@ -31,8 +31,10 @@ function call(handler, method, body) {
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" }).trim();
 
 async function tempRepo(t) {
-  // realpath: macOS tmpdir is a symlink and git reports real paths.
-  const parent = realpathSync(await mkdtemp(path.join(os.tmpdir(), "pi-web-worktrees-route-")));
+  // realpath: macOS tmpdir is a symlink and git reports real paths. `.native`
+  // additionally expands a Windows 8.3 short temp path (`C:\\Users\\EX_MAZ~1\\…`),
+  // which the route answers back in its long form — `realpathSync` alone keeps it.
+  const parent = realpathSync.native(await mkdtemp(path.join(os.tmpdir(), "pi-web-worktrees-route-")));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const repo = path.join(parent, "repo");
   execFileSync("git", ["init", "-q", "-b", "main", repo]);

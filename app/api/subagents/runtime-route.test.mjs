@@ -92,10 +92,21 @@ test("subagent route validates actions and rejects commands after completion", a
   response = await POST(request({ action: "unknown" }), context);
   assert.equal(response.status, 400);
 
+  // `af0f5e7f` made stop idempotent: pi-team parks a member through host.stop, and the
+  // wrapper is often already gone by then, so abort answers 200 and settles the run
+  // record instead of throwing. A command is still refused once the run ended — that
+  // guard lives in `steer()` and is what keeps the route's 409 mapping covered.
   state.stop();
   response = await POST(request({ action: "abort" }), context);
+  assert.equal(response.status, 200);
+  const aborted = await response.json();
+  assert.equal(aborted.ok, true);
+  assert.notEqual(aborted.run.status, "running", "a stopped run is not reported as running");
+
+  response = await POST(request({ action: "steer", message: "keep going" }), context);
   assert.equal(response.status, 409);
   assert.match((await response.json()).error, /not running/);
+  assert.deepEqual(state.steered, [], "a command after completion never reaches the run");
 });
 
 test("subagent GET returns 404 for an unknown session", async (t) => {
