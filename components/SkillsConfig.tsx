@@ -45,6 +45,7 @@ import {
 } from "./SettingsUi";
 import { isImeComposing } from "@/lib/ime";
 import { itemsToSwitch, projectTrustReloadKey } from "./settings-ui-helpers";
+import { RedteamSkillPackRow } from "./RedteamSkillPackRow";
 
 type SkillScope = "global" | "project" | "path" | "builtin";
 type Translate = ReturnType<typeof useI18n>["t"];
@@ -809,6 +810,9 @@ export function SkillsConfig({
     <ConfigPanelShell embedded={embedded} title={t("common.skills")} subtitle={shortenPath(cwd)} closeLabel={t("i18n.close")} onClose={onClose}>
 
         {!projectResourcesLoaded && <ConfigTrustNotice message={t("trust.skillsNotLoaded")} />}
+
+        {/* Optional pack: bundled but never auto-loaded; installing copies it into the user skill root. */}
+        <RedteamSkillPackRow onChanged={() => void loadSkills()} />
 
         {/* Body */}
         <ConfigSplitView>

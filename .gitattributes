@@ -5,3 +5,7 @@ public/preview-runtime/*.js text eol=lf
 # so a CRLF checkout would report drift on a clean tree.
 assets/purge-presets/** text eol=lf
 lib/purge/preset-catalog.ts text eol=lf
+
+# Vendored optional skill pack (verbatim upstream markdown): LF keeps the
+# installed copies byte-identical on a Windows checkout.
+optional-skills/** text eol=lf

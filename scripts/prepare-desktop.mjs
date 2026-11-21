@@ -255,6 +255,13 @@ async function assembleServer() {
     recursive: true,
   });
 
+  // 可选技能包（optional-skills/redteam）：不参与自动加载，由技能面板的「安装」按需
+  // 复制到用户技能根。同样靠 process.cwd() 找回，必须一并 stage；见
+  // scripts/prepare-desktop-optional-skills.test.mjs。
+  await cp(join(rootDir, "optional-skills"), join(serverResourcesDir, "optional-skills"), {
+    recursive: true,
+  });
+
   const staticSource = join(desktopBuildDir, "static");
   const staticDestination = join(serverResourcesDir, ".next-desktop", "static");
   await mkdir(dirname(staticDestination), { recursive: true });
