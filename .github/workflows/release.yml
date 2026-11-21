@@ -114,19 +114,12 @@ jobs:
           tagName: v__VERSION__
           releaseName: pi-agent-desktop v__VERSION__
           releaseBody: |
-            ## Pi Agent Desktop 0.8.7 (fork)
+            ## Pi Agent Desktop 0.8.8 (fork)
 
-            **2026-11-21 覆盖式重发（第二次）/ re-release.** Same version number; this build replaces the previous v0.8.7 artifacts.
+            **2026-11-21 发版.** 承接 0.8.7，修复团队工作台「查看配置」弹框宽度等问题。
 
-            本版主线：Agent Teams 工作台全面对齐 cc-haha。
-
-            - **任务画布 / task board.** 依赖链聚焦（点票高亮整条上下游、其余淡出）、确定/不确定进度条、停滞徽标、刚解锁脉冲、六种图例。
-            - **编队带 / formation.** 成员卡显示当前票、等待依赖与收件数；活动消息发送方/接收方双色高亮；跨泳道消息并入总线飞线。
-            - **通信流 / feed.** 飞行中的消息行与画布聚焦票联动高亮，可键盘聚焦。
-            - **检查器 / inspector.** 消息渐进披露、跨帧耗时、模型继承与上下文超限提示、失败独立分组。
-            - **任务详情 / task detail.** 负责人推断（显式空不推断）、负责人停滞提示、依赖票可点击跳转。
-            - **回放 / replay.** 四档倍速、滑轨 seek、方向键跳帧。
-            - **健壮性 / robustness.** 团队计划与团队条轮询的竞态/超时、派活请求闸、窄屏底部抽屉、名册失败可重试。
+            - **计划弹框宽度 / plan dialog width.** 「查看配置」弹框现与聊天输入框等宽（`min(820px, 聊天列−滚动条−32, 100%)`），窄窗口/窄聊天列下不再横跨屏幕；布局改用容器查询断点（弹框收窄时正确切单列），模型生成长文本加 `overflow-wrap:anywhere` 防撑宽。
+            - **细节 / polish.** 会话列表「…」按钮点击区固定 28px。
 
             以下为历史发布说明。
 
