@@ -14,7 +14,8 @@ const jiti = createJiti(import.meta.url, {
   alias: { "@": process.cwd() },
   interopDefault: true,
 });
-const { GET, gateLogPayload } = await jiti.import("./route.ts");
+const { GET } = await jiti.import("./route.ts");
+const { gateLogPayload } = await jiti.import("@/lib/gate-attribution");
 // 与 route.ts 用同一个 specifier，才能落到同一个模块实例：否则两边各拿一份环形
 // 记录，测试里的 recordGate 写不到路由读的那一份。
 const { clearGateEvents, recordGate } = await jiti.import("@/lib/gate-attribution");

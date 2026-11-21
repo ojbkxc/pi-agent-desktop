@@ -16,7 +16,7 @@ const jiti = createJiti(import.meta.url, {
   alias: { "@": process.cwd() },
   interopDefault: true,
 });
-const { activeModelPayload, readDefaultModel } = await jiti.import("./route.ts");
+const { activeModelPayload, readDefaultModel } = await jiti.import("@/lib/purge/active-model.ts");
 
 const DIRS = [];
 

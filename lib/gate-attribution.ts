@@ -86,3 +86,15 @@ export function gateAttribution(): {
   }
   return { byLayer, byDecision };
 }
+
+/**
+ * 只读视图：哪个闸门拦了多少次，以及本进程最近 `GATE_EVENT_MAX` 条闸门事件。
+ *
+ * 由 `app/api/purge/gate-log/route.ts` 直接回答。route.ts 只能导出 Next 的约定名
+ * （`scripts/route-exports.test.mjs`），所以这段合成放在这里。它记录、不参与判定：
+ * 不写盘、不改设置、不连接任何东西；`reason` 只有代码（`rejected`、`timeout`、
+ * `not-trusted`），永不包含命令、路径或密钥。
+ */
+export function gateLogPayload() {
+  return { attribution: gateAttribution(), events: gateSnapshot() };
+}

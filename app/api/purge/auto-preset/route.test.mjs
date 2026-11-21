@@ -7,7 +7,8 @@ const jiti = createJiti(import.meta.url, {
   interopDefault: true,
   moduleCache: false,
 });
-const { GET, autoPresetPayload } = await jiti.import("./route.ts");
+const { GET } = await jiti.import("./route.ts");
+const { autoPresetPayload } = await jiti.import("@/lib/purge/auto-preset.ts");
 const { defaultPurgeSettings } = await jiti.import("@/lib/purge/types.ts");
 const { BUILTIN_PRESETS } = await jiti.import("@/lib/purge/preset-catalog.ts");
 
