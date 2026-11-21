@@ -26,6 +26,7 @@ import {
 } from "./mcp-status";
 import { createTestRedactor, maskStatusError, maskStatusStderr } from "./mcp-test";
 import { hasParentDirectorySegment, isPathWithinRoots, resolveRealRoots } from "./path-security";
+import { recordGate } from "./gate-attribution";
 import type { McpTransport, PiSdkInternals } from "./pi-sdk-internals";
 import { mayReadProjectConfigNow } from "./project-trust";
 
@@ -765,6 +766,10 @@ class HostInstance {
   private update(attempt: ConnectAttempt, state: AttemptState, details: { error?: string; stderr?: string } = {}): void {
     attempt.update(state, details);
     if (attempt.released) return;
+    // A connection that settled is activity, not idleness: the idle window starts
+    // again then, so a sweep of the previous one cannot let go of a connection the
+    // extension just opened (which would drop the last state this session saw).
+    if (attempt.settled) this.armIdle();
     attempt.recorded = this.write(attempt.target, { state: SESSION_STATES[state], ...details });
   }
 
@@ -870,6 +875,11 @@ class HostInstance {
     // After the SDK's read, so a file that landed since the trust read is reported too.
     if (!projectReadable) {
       const entries = untrustedProjectServerEntries(ctx.cwd);
+      // 只记录「确实有服务器被信任门挡住」的场合：没有 .pi/mcp.json 的项目也会让
+      // projectReadable 为 false，那种情况什么都没拦，记了就是噪声。
+      if (entries.length > 0) {
+        recordGate({ layer: "mcp-trust", decision: "denied", reason: "not-trusted" });
+      }
       for (const [name, value] of entries.slice(0, MCP_UNTRUSTED_REPORT_MAX)) {
         // One entry the host cannot key (`mcpConfigKey()` is total, so this is a guard) never drops the others.
         try {
@@ -972,12 +982,34 @@ class HostInstance {
   private armIdle(): void {
     this.clearIdle();
     if (this.runActive || this.preparing > 0 || this.options.idleMs <= 0 || this.attempts.size === 0) return;
-    this.idleTimer = setTimeout(() => {
-      this.idleTimer = undefined;
-      if (this.ctx && !this.ctx.isIdle()) return;
-      void this.release();
-    }, this.options.idleMs);
+    this.idleTimeout();
+  }
+
+  private idleTimeout(): void {
+    this.idleTimer = setTimeout(() => this.idleOut(), this.options.idleMs);
     this.idleTimer.unref?.();
+  }
+
+  /**
+   * The idle sweep. A transport the extension opened and the server has not
+   * answered yet is not idleness: the host holds that connection, and letting
+   * go of the attempt now forgets the record of it (`letGo()` drops a
+   * "connecting" one) although the connection reports a moment later, so the
+   * state this session last saw is lost. The sweep therefore waits again for as
+   * long as such an attempt is unsettled: a handshake takes as long as the
+   * server takes, and a deadline shorter than it would reap the connection it is
+   * waiting for. A registration whose connection never opened is idle like any
+   * other, and `unregister()` abandons it.
+   */
+  private idleOut(): void {
+    this.idleTimer = undefined;
+    if (this.ctx && !this.ctx.isIdle()) return;
+    for (const attempt of this.attempts.values()) {
+      if (!attempt.started || attempt.settled) continue;
+      this.idleTimeout();
+      return;
+    }
+    void this.release();
   }
 }
 

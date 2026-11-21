@@ -4,6 +4,7 @@ import { getAgentDir, type McpServerConfig } from "@earendil-works/pi-coding-age
 import type { McpErrorResponse, McpRefusalReason, McpScope } from "./api-types";
 import { isMcpDisabledByOperator, MCP_DISABLE_VARIABLE } from "./builtin-extensions";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "./file-access";
+import { recordGate } from "./gate-attribution";
 import { mcpEntryConfigKey } from "./mcp-config-key";
 import { readMcpServerConfigs, readMcpServerEntry } from "./mcp-config-read";
 import { findWebPasswordField } from "./mcp-transport";
@@ -129,7 +130,11 @@ export function mcpProjectTrustRefusal(
     const status = getProjectTrustStatus(cwd, agentDir);
     // A folder that requires no trust reports an unreadable store here instead of throwing.
     if (status.decisionError !== undefined) return mcpEntryRefusal(409, "trust-unreadable", status.decisionError);
-    if (status.decision !== true) return mcpEntryRefusal(403, "project-untrusted", untrustedMessage);
+    if (status.decision !== true) {
+      // 只记录本闸门自己的结论，不参与判定（见 lib/gate-attribution.ts）。
+      recordGate({ layer: "project-trust", decision: "denied", reason: "project-untrusted" });
+      return mcpEntryRefusal(403, "project-untrusted", untrustedMessage);
+    }
     return undefined;
   } catch (error) {
     return mcpEntryRefusal(409, "trust-unreadable", errorMessage(error));
