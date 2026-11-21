@@ -28,6 +28,9 @@ import { formationNaturalWidth } from "@/lib/agent-teams-formation-layout";
 import { deriveMemberWorkloads, idleMemberIds } from "./member-workload";
 import { formatTeamActivityDate, formatTeamBytes, hasDisplayableUsage, shouldNoticeIdleTeam } from "./team-usage-display";
 
+/** 一条消息在编队总线上飞过的时间（与 cc-haha 的 MESSAGE_FLIGHT_MS 一致）。 */
+const MESSAGE_FLIGHT_MS = 1500;
+
 interface Props {
   /** 指定团队名；缺省时自动挑选本机最新创建的团队。 */
   teamName?: string;
@@ -156,8 +159,9 @@ interface Props {
 }
 
 /**
- * 泳道图页面（pi-web 专属）：每成员一条泳道（y=成员，x=时间），成员事件节点 +
- * 跨泳道流向，上方是任务依赖。数据来自 GET /api/teams/[team]/workbench。
+ * 泳道图页面（pi-web 专属）：每成员一条泳道（y=成员，x=时间）展示事件节点；
+ * 消息流向不在这里画曲线，而是由上方编队带的总线逐条飞过（同 cc-haha）。
+ * 数据来自 GET /api/teams/[team]/workbench。
  */
 export function AgentTeamsView({
   teamName,
@@ -184,6 +188,9 @@ export function AgentTeamsView({
   const [now, setNow] = useState(() => Date.now());
   const timeline = useTeamTimeline(selected);
   const rootRef = useRef<HTMLElement>(null);
+  // 消息飞行队列：只飞「本轮新到达」的消息，一次一条；回放与首次加载不飞。
+  const [flightQueue, setFlightQueue] = useState<string[]>([]);
+  const flightSeenRef = useRef<{ teamId: string; ids: Set<string> } | null>(null);
 
   // 角色名走 i18n；没有对应词条时回退到 role 原文，绝不把 key 名渲染到界面。
   const roleLabel = useCallback((role: string): string => {
@@ -281,6 +288,30 @@ export function AgentTeamsView({
   }, [timeline.isLive]);
 
   const layout = useMemo(() => (snapshot ? layoutSwimlanes(snapshot) : null), [snapshot]);
+
+  // 跨泳道流向现在走编队总线的「飞行」，不再在时间轴上画曲线（同 cc-haha）：
+  // 只把这一帧新出现的消息排进队列，一条飞 1.5s。首次加载/切换团队只记基线不飞。
+  useEffect(() => {
+    if (!snapshot) return;
+    const teamId = snapshot.team?.id ?? "";
+    const messages = snapshot.messages ?? [];
+    const seen = flightSeenRef.current;
+    if (!seen || seen.teamId !== teamId) {
+      flightSeenRef.current = { teamId, ids: new Set(messages.map((message) => message.id)) };
+      setFlightQueue([]);
+      return;
+    }
+    const fresh = messages.filter((message) => !seen.ids.has(message.id));
+    for (const message of messages) seen.ids.add(message.id);
+    if (!timeline.isLive || fresh.length === 0) return;
+    setFlightQueue((queue) => [...queue, ...fresh.map((message) => message.id)].slice(-20));
+  }, [snapshot, timeline.isLive]);
+
+  useEffect(() => {
+    if (flightQueue.length === 0) return;
+    const timer = window.setTimeout(() => setFlightQueue((queue) => queue.slice(1)), MESSAGE_FLIGHT_MS);
+    return () => window.clearTimeout(timer);
+  }, [flightQueue]);
 
   // 五态紧急度计数：与任务画布同源（lib/agent-teams-task-layout.ts）。
   const counts = useMemo(() => countTaskStates(snapshot?.tickets ?? []), [snapshot]);
@@ -632,36 +663,8 @@ export function AgentTeamsView({
                     className="agent-teams-canvas"
                     style={{ width: layout.width, height: layout.height, minWidth: layout.width }}
                   >
-                    <svg className="agent-teams-flows" width={layout.width} height={layout.height} aria-hidden="true">
-                      {/* 箭头：连线必须有个明确去向，否则「谁发给谁」还得靠颜色猜。
-                          marker 定义在这个 svg 内部，按 kind 各一个，避免跨组件 id 冲突。 */}
-                      <defs>
-                        <marker id="agent-teams-arrow-message" viewBox="0 0 10 10" refX="9" refY="5"
-                          markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                          <path d="M 0 0 L 10 5 L 0 10 z" className="agent-teams-arrow agent-teams-arrow--message" />
-                        </marker>
-                        <marker id="agent-teams-arrow-report" viewBox="0 0 10 10" refX="9" refY="5"
-                          markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                          <path d="M 0 0 L 10 5 L 0 10 z" className="agent-teams-arrow agent-teams-arrow--report" />
-                        </marker>
-                      </defs>
-                      {layout.flows.map((flow, index) => {
-                        // 终点在起点右侧（时间更晚）用四段 S 曲线；终点在左侧时弧线会
-                        // 反折，C 控制点的水平偏移必须跟着换向，否则曲线绕成一个环。
-                        const span = flow.toX - flow.fromX;
-                        const bend = Math.max(24, Math.min(Math.abs(span) / 2, 120));
-                        const c1 = flow.fromX + (span >= 0 ? bend : -bend);
-                        const c2 = flow.toX - (span >= 0 ? bend : -bend);
-                        return (
-                          <path
-                            key={`${flow.from}-${flow.to}-${index}`}
-                            className={`agent-teams-flow agent-teams-flow--${flow.kind}`}
-                            d={`M ${flow.fromX} ${flow.fromY} C ${c1} ${flow.fromY}, ${c2} ${flow.toY}, ${flow.toX} ${flow.toY}`}
-                            markerEnd={`url(#agent-teams-arrow-${flow.kind})`}
-                          />
-                        );
-                      })}
-                    </svg>
+                    {/* 跨泳道流向画在编队带的总线上（FormationBand activeMessageId），
+                        时间轴这里只保留每个成员的事件节点，避免同一条通道被多根曲线糊住。 */}
                     {layout.lanes.map((lane) => (
                       <div key={lane.memberId} className="agent-teams-lane" style={{ top: lane.y, height: lane.height }}>
                         <span
@@ -709,6 +712,7 @@ export function AgentTeamsView({
                   <FormationBand
                     snapshot={snapshot}
                     width={width}
+                    activeMessageId={flightQueue[0] ?? null}
                     onSelectMember={(memberId) => openMemberInspector(memberId)}
                   />
                 )}

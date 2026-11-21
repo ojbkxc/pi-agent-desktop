@@ -972,8 +972,10 @@ export interface SwimlaneLayout {
 }
 
 /**
- * 纯布局：每个成员一行（lane），行内事件按时间序从左到右排。跨泳道流向用起点
- * （发送方事件右缘）到终点（收件方 lane 中线）的两点表示，由渲染层画曲线。
+ * 纯布局：每个成员一行（lane），行内事件按时间序从左到右排。跨泳道流向的几何仍
+ * 在这里给出（`flows`，快照数据的一部分），但**时间轴视觉不再画这些曲线**：消息
+ * 流向改由编队带的总线飞行承担（`lib/agent-teams-flight.ts`），一次一条，避免同一
+ * 通道被多根曲线糊住。
  */
 export function layoutSwimlanes(snapshot: TeamWorkbenchSnapshot): SwimlaneLayout {
   const columns = Math.max(1, ...snapshot.lanes.map((lane) => lane.events.length));

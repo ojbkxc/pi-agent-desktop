@@ -11,10 +11,10 @@ const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 
-const render = (snapshot, width = 1280) => renderToStaticMarkup(React.createElement(
+const render = (snapshot, width = 1280, extra = {}) => renderToStaticMarkup(React.createElement(
   I18nProvider,
   { initialLocale: "en" },
-  React.createElement(FormationBand, { snapshot, width }),
+  React.createElement(FormationBand, { snapshot, width, ...extra }),
 ));
 
 function member(id, overrides = {}) {
@@ -182,4 +182,28 @@ test("进度条旁直接可见完成计数 n/m", () => {
   assert.match(html, />1\/2</, "1 张 completed / 共 2 张票");
   // 读屏语义仍由进度条的 aria-label 承担，可见计数不重复朗读。
   assert.match(html, /aria-hidden="true">1\/2</);
+});
+
+test("activeMessageId：消息沿编队总线飞过，带本地化标签", () => {
+  const snap = snapshot([LEAD, member("w1", { status: "running" })]);
+  snap.messages = [{
+    id: "m1",
+    from: "team-lead",
+    to: "w1",
+    recipients: ["w1"],
+    kind: "direct",
+    text: "go",
+    timestamp: "2026-01-01T00:00:00.000Z",
+  }];
+  const html = render(snap, 1280, { activeMessageId: "m1" });
+  assert.match(html, /data-testid="agent-teams-formation-flight"/);
+  assert.match(html, /data-flight-channel="lead"/);
+  assert.match(html, /data-flight-tone="assignment"/);
+  assert.match(html, /agent-teams-formation-flight-chip/);
+  assert.match(html, />Assignment</, "标签来自 teams.communication.assignment");
+});
+
+test("没有活动消息时不画飞线", () => {
+  const html = render(snapshot([LEAD, member("w1")]));
+  assert.doesNotMatch(html, /agent-teams-formation-flight/);
 });

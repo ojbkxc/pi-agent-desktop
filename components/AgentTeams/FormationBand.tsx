@@ -20,6 +20,7 @@ import {
   type MemberWorkState,
 } from "@/lib/agent-teams-formation-layout";
 import type { TicketUrgency } from "@/lib/agent-teams-task-layout";
+import { formationFlights, type FlightNode } from "@/lib/agent-teams-flight";
 import type { TranslationParams } from "@/lib/i18n/types";
 import { deriveMemberWorkloads, workloadBadgeKind, type MemberWorkload } from "./member-workload";
 
@@ -154,6 +155,11 @@ interface Props {
   width: number;
   /** 点击成员卡（可选）：上层用它打开该成员会话。 */
   onSelectMember?: (memberId: string, sessionId: string | null) => void;
+  /**
+   * 当前要在编队总线上飞过的消息（上层维护队列，一次一条）。缺省 = 只画静态总线；
+   * 跨泳道的消息流向不再在时间轴里画曲线（见 lib/agent-teams-flight.ts）。
+   */
+  activeMessageId?: string | null;
 }
 
 /**
@@ -161,7 +167,7 @@ interface Props {
  * peer bus，填掉任务泳道上方的空白区（见 lib/agent-teams-formation-layout.ts）。
  * 成员默认按加入顺序（稳定不重排），可切换「按紧急度重排」；紧急度变化只改徽标。
  */
-export function FormationBand({ snapshot, width, onSelectMember }: Props) {
+export function FormationBand({ snapshot, width, onSelectMember, activeMessageId }: Props) {
   const { t } = useI18n();
   const layout = useMemo(() => layoutFormation(snapshot, width), [snapshot, width]);
   const [sortMode, setSortMode] = useState<"joined" | "urgency">("joined");
@@ -182,6 +188,24 @@ export function FormationBand({ snapshot, width, onSelectMember }: Props) {
 
   const { lead, bus } = layout;
   const hasWorkers = orderedWorkers.length > 0;
+
+  // 飞线只认当前显示位置：成员按紧急度重排后，路线必须跟着卡片走。
+  const flightNodes = useMemo<FlightNode[]>(() => [
+    ...(lead ? [{ id: lead.member.id, name: lead.member.name, centerX: lead.centerX, isLead: true }] : []),
+    ...orderedWorkers.map((node) => ({
+      id: node.member.id,
+      name: node.member.name,
+      centerX: node.centerX,
+      isLead: false,
+    })),
+  ], [lead, orderedWorkers]);
+  const activeMessage = activeMessageId
+    ? (snapshot.messages ?? []).find((message) => message.id === activeMessageId)
+    : undefined;
+  const flights = useMemo(
+    () => formationFlights(activeMessage, flightNodes),
+    [activeMessage, flightNodes],
+  );
 
   return (
     <div
@@ -241,7 +265,27 @@ export function FormationBand({ snapshot, width, onSelectMember }: Props) {
             ))}
           </g>
         )}
+        {flights.map((flight) => (
+          <path
+            key={flight.key}
+            data-testid="agent-teams-formation-flight"
+            data-flight-channel={flight.channel}
+            data-flight-tone={flight.tone}
+            className="agent-teams-formation-flight"
+            d={flight.d}
+          />
+        ))}
       </svg>
+
+      {flights.map((flight) => (
+        <span
+          key={`${flight.key}-chip`}
+          className={`agent-teams-formation-flight-chip agent-teams-formation-flight-chip--${flight.tone}`}
+          style={{ left: flight.chipX, top: flight.chipY }}
+        >
+          {t(flight.labelKey)}
+        </span>
+      ))}
 
       {lead && <MemberCard node={lead} onSelect={handleSelect} />}
       {orderedWorkers.map((node) => (

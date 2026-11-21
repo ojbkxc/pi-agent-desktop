@@ -11245,40 +11245,9 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 
 .agent-teams-canvas { position: relative; }
 
-.agent-teams-flows {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-
-.agent-teams-flow {
-  fill: none;
-  stroke: var(--border);
-  stroke-width: 1.5;
-  opacity: 0.9;
-  /* 虚线 + 流动：消息/交付是一次「传递」，静止的实线读不出方向与进度。
-     dash 周期与动画时长绑定，改 stroke-dasharray 时同步改 keyframes。 */
-  stroke-dasharray: 6 5;
-  animation: agent-teams-flow-dash 1.6s linear infinite;
-}
-
-.agent-teams-flow--report { stroke: var(--success); }
-
 @keyframes agent-teams-flow-dash {
   from { stroke-dashoffset: 22; }
   to { stroke-dashoffset: 0; }
-}
-
-.agent-teams-arrow {
-  fill: var(--border);
-  stroke: none;
-}
-
-.agent-teams-arrow--report { fill: var(--success); }
-
-/* 减少动态效果：不流动，保留方向（虚线仍在，只是静止）。 */
-@media (prefers-reduced-motion: reduce) {
-  .agent-teams-flow { animation: none; stroke-dashoffset: 0; }
 }
 
 .agent-teams-lane {
@@ -11825,6 +11794,43 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   stroke: var(--border);
   stroke-width: 2;
   stroke-dasharray: 6 6;
+}
+
+/* 消息飞行：一条消息沿共享总线（lead bus / peer bus）走一遍，而不是每条消息
+   在时间轴上各画一根曲线。dash 周期与动画时长绑定，改 dasharray 时同步改
+   @keyframes agent-teams-flow-dash。 */
+.agent-teams-formation-flight {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-dasharray: 7 7;
+  animation: agent-teams-flow-dash 1.6s linear infinite;
+}
+
+.agent-teams-formation-flight[data-flight-tone="report"] { stroke: var(--success); }
+.agent-teams-formation-flight[data-flight-tone="peer"] { stroke: var(--text-muted); }
+.agent-teams-formation-flight[data-flight-tone="system"] { stroke: var(--border); }
+
+.agent-teams-formation-flight-chip {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.agent-teams-formation-flight-chip--report { color: var(--success); border-color: var(--success); }
+.agent-teams-formation-flight-chip--assignment { color: var(--accent); border-color: var(--accent); }
+
+/* 减少动态效果：不流动，保留方向（虚线仍在，只是静止）。 */
+@media (prefers-reduced-motion: reduce) {
+  .agent-teams-formation-flight { animation: none; stroke-dashoffset: 0; }
 }
 
 .agent-teams-formation-card {

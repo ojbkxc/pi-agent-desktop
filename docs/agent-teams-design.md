@@ -844,7 +844,7 @@ Ticket 与 Thread（团队讨论）多对多订阅。后续讨论（如 PR 上�
 
 - **lanes[]** → 水平泳道（每成员一条），y 轴 = 成员，x 轴 = 时间
 - **lanes[].events[]** → 泳道上的事件节点（spawn / task / message / report 四种）
-- **flows[]** → 跨泳道箭头（消息/报告流动）
+- **flows[]** → 跨泳道流向。视觉上不再在时间轴里逐条画曲线：编队带（`FormationBand`）提供 lead bus / peer bus，一次只让一条新消息沿总线飞过（`lib/agent-teams-flight.ts`，1.5s/条）；`flows[]` 仍保留在快照里供数据消费与布局测试。
 - **tickets[]** → 泳道上方的任务依赖条（DAG）；状态口径见 `getTeamTaskState()`（`lib/agent-teams-task-layout.ts`，四态 completed / in_progress / blocked / available）
 - **taskAnchors[]** → 成员对话按任务切分的锚点（哪个任务上工作了哪段）
 - **tasks[]** → `public/lane-diagram.html` 直接消费的兼容数组（按依赖深度分行）
@@ -1032,7 +1032,7 @@ DeepSeek：有界并发槽位，**留一个额外槽位给人的消息/状态请
 **验证**：
 - `node --test lib/agent-teams-swimlane.test.mjs`（快照投影：lanes/events/flows/taskAnchors 正确）
 - `node --test app/api/agent-teams/*.test.mjs`（API 路由）
-- 手动：多 worker 并行，泳道画布实时显示各 lane 事件与跨 lane flow
+- 手动：多 worker 并行，时间轴显示各 lane 事件；消息流向在编队总线上逐条飞过（不再画跨 lane 曲线）
 - 历史快照：at=<ts> 返回当时快照
 
 ### Phase 4：DeepSeek 三段式 + 人类优先槽（1 周）
