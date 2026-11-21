@@ -586,6 +586,12 @@ export function PurgeConsoleSection() {
     <div className="settings-general settings-purge">
       <h2 className="settings-general-title">{t("purge.title")}</h2>
       <p className="settings-general-description">{t("purge.description")}</p>
+      {/* 默认关闭是安全选择，但不说一声会让人以为功能坏了。只提示，不自动打开。 */}
+      {!draft.enabled && (
+        <p className="settings-general-description settings-purge-off" role="status">
+          {t("purge.disabledHint")}
+        </p>
+      )}
 
       <section className="settings-general-section">
         <h3 className="settings-general-heading">{t("purge.togglesHeading")}</h3>

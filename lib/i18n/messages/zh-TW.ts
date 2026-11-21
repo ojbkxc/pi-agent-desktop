@@ -1417,6 +1417,8 @@ export const zhTWLocale: LocalePlugin = {
     "purge.presetsSearchAria": "搜尋預設",
     "purge.presetsTotal": "共 {total} 條",
     "purge.presetsAllVendors": "全部",
+    "purge.presetsCurrentModel": "目前模型",
+    "purge.disabledHint": "破甲控制台目前關閉，請求原樣送出、不會被改寫。",
     "purge.presetsFilterAria": "依廠商過濾",
     "purge.presetsLoading": "正在載入預設…",
     "purge.presetsEmpty": "沒有符合的預設。",

@@ -37,6 +37,11 @@ export interface PurgePresetBrief {
   sha256: string;
   /** First `PRESET_PREVIEW_CHARS` characters of the body. */
   preview: string;
+  /**
+   * 当前模型与该预设目标模型的匹配强度，仅当列表请求带了 `model` 时由服务端给出。
+   * 只用于标记「写给这个模型的」，不参与排序。
+   */
+  modelMatch?: "exact" | "vendor" | "mismatch" | "unknown";
 }
 
 /** Vendor chip: a count of the rows that survived the current filter. */
@@ -116,6 +121,7 @@ export const PURGE_PRESET_MESSAGE_KEYS = [
   "purge.presetsSearchAria",
   "purge.presetsTotal",
   "purge.presetsAllVendors",
+  "purge.presetsCurrentModel",
   "purge.presetsFilterAria",
   "purge.presetsLoading",
   "purge.presetsEmpty",
@@ -192,12 +198,16 @@ export function presetListQuery(params: {
   q?: string;
   vendor?: string;
   limit?: number | null;
+  /** 当前模型标识：服务端据此给每项附 `modelMatch`，不筛选、不重排。 */
+  model?: string;
 } = {}): string {
   const search = new URLSearchParams();
   const q = (params.q ?? "").trim();
   const vendor = (params.vendor ?? "").trim();
+  const model = (params.model ?? "").trim();
   if (q !== "") search.set("q", q);
   if (vendor !== "") search.set("vendor", vendor);
+  if (model !== "") search.set("model", model);
   if (typeof params.limit === "number" && Number.isFinite(params.limit)) {
     search.set("limit", String(clampPresetLimit(params.limit)));
   }
@@ -263,7 +273,13 @@ export function asPresetBrief(raw: unknown): PurgePresetBrief | null {
     bytes: asCount(raw.bytes),
     sha256: asString(raw.sha256),
     preview: asString(raw.preview),
+    ...(asModelMatch(raw.modelMatch) ? { modelMatch: asModelMatch(raw.modelMatch) } : {}),
   };
+}
+
+/** 未知或缺失一律不猜：没有该字段就不渲染徒标。 */
+function asModelMatch(raw: unknown): PurgePresetBrief["modelMatch"] {
+  return raw === "exact" || raw === "vendor" || raw === "mismatch" || raw === "unknown" ? raw : undefined;
 }
 
 export function asVendorCount(raw: unknown): PurgePresetVendorCount | null {
@@ -370,6 +386,13 @@ type LoadState = "idle" | "loading" | "ready" | "failed";
 
 export interface PurgePresetLibraryProps {
   /**
+   * 当前模型标识，由宿主从会话状态传入。
+   *
+   * 只用于让服务端回 `modelMatch`、把「写给这个模型的」标出来；本组件不拿它
+   * 去应用任何预设。留空则请求不带该参数，响应与以前完全一致。
+   */
+  activeModel?: string;
+  /**
    * Hand a preset body to the host so it can land in the structured-template
    * draft. The host marks its form dirty; this component never PUTs on its own.
    */
@@ -395,6 +418,7 @@ export function PurgePresetLibrary({
   onSkillWritten,
   fetchImpl,
   copyText,
+  activeModel,
 }: PurgePresetLibraryProps = {}) {
   const { t, locale } = useI18n();
   const searchId = useId();
@@ -433,7 +457,7 @@ export function PurgePresetLibrary({
   useEffect(() => {
     let cancelled = false;
     setListState("loading");
-    const url = presetListQuery({ q: debouncedQuery, vendor });
+    const url = presetListQuery({ q: debouncedQuery, vendor, model: activeModel });
     doFetch(url, { cache: "no-store" })
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
       .then((data: unknown) => {
@@ -455,7 +479,7 @@ export function PurgePresetLibrary({
         setListState("failed");
       });
     return () => { cancelled = true; };
-  }, [debouncedQuery, doFetch, reloadKey, vendor]);
+  }, [activeModel, debouncedQuery, doFetch, reloadKey, vendor]);
 
   // The body follows the selection.
   useEffect(() => {
@@ -634,7 +658,12 @@ export function PurgePresetLibrary({
                 >
                   <span className="settings-preset-item-main">
                     <span className="settings-preset-item-title">{item.title}</span>
-                    <span className="settings-preset-item-meta">{item.vendor} · {item.model}</span>
+                    <span className="settings-preset-item-meta">
+                      {item.vendor} · {item.model}
+                      {item.modelMatch === "exact" && (
+                        <span className="settings-preset-item-badge">{t("purge.presetsCurrentModel")}</span>
+                      )}
+                    </span>
                   </span>
                   <span className="settings-preset-item-side">
                     <span className="settings-preset-item-bytes">{formatPresetBytes(item.bytes, locale)}</span>

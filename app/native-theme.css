@@ -14620,6 +14620,20 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   font-size: var(--fs-caption);
 }
 
+.settings-preset-item-badge {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+}
+
+.settings-purge-off {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
 .settings-preset-item-side {
   display: flex;
   flex-shrink: 0;
