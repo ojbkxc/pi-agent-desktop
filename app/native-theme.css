@@ -11473,6 +11473,35 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   background: var(--bg-hover);
 }
 
+/* 通信流里能点亮某张票的行可键盘聚焦（tabIndex=0）：焦点环与全站 accent 一致。 */
+[data-find-transcript] [data-find-row]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* 检查器「显示更早」胶囊与票行耗时（基础形态由内联样式给出，这里补交互态）。 */
+.agent-teams-show-earlier:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.agent-teams-show-earlier:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.agent-teams-member-task-duration { white-space: nowrap; }
+
+/* 任务详情里的依赖/解锁票跳转：颜色由内联决定，这里补悬停下划线（仅可用时）
+   与键盘焦点环。禁用态保持纯文本，不暗示可点。 */
+[data-jump-ticket]:hover:enabled { text-decoration: underline; }
+
+[data-jump-ticket]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 /* 任务详情里的归属徽标：推断（虚线灰）与「负责人没在干活」（警示色）必须一眼可辨。 */
 .agent-teams-task-badge {
   display: inline-flex;
