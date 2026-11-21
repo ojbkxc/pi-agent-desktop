@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { getTicketUrgency, type TicketUrgency } from "@/lib/agent-teams-task-layout";
+import { resolveTicketOwner } from "@/lib/agent-teams-owner";
 import type { TeamWorkbenchSnapshot } from "@/lib/agent-teams-swimlane";
 
 /** 票态（紧急度）→ 复用既有词条键（与成员检查器同一口径）。 */
@@ -61,6 +62,8 @@ export interface AgentTeamTaskDetailProps {
   onClose: () => void;
   /** 点负责人 → 打开该成员检查器（可选）。 */
   onSelectMember?: (memberId: string) => void;
+  /** 点依赖 / 解锁里的票 id → 切到那张票的详情（可选；缺省时按钮禁用）。 */
+  onSelectTicket?: (ticketId: string) => void;
   /** 右列是否展开（决定抽屉的右偏移，避免压住右列）。 */
   dockOpen?: boolean;
 }
@@ -75,6 +78,7 @@ export function AgentTeamTaskDetailBody({
   ticketId,
   onClose,
   onSelectMember,
+  onSelectTicket,
   dockOpen = false,
 }: AgentTeamTaskDetailProps) {
   const { t } = useI18n();
@@ -107,11 +111,21 @@ export function AgentTeamTaskDetailBody({
     [snapshot.tickets, ticketId],
   );
   const ticketsById = useMemo(() => new Map(snapshot.tickets.map((item) => [item.id, item])), [snapshot.tickets]);
+  // 负责人解析：显式 ownerId 优先；缺失时从 assignments / 派工消息回填并标记 inferred。
+  const ownerResolution = useMemo(
+    () => (ticket ? resolveTicketOwner(ticket, snapshot.members, snapshot.messages) : null),
+    [snapshot.members, snapshot.messages, ticket],
+  );
+  // 负责人成员（用于状态与「打开成员」）；回填得到的 id 同样能解析到成员。
   const owner = useMemo(
-    () => (ticket?.ownerId ? snapshot.members.find((member) => member.id === ticket.ownerId) ?? null : null),
-    // 依赖整个 `ticket`：React Compiler 的推断就是它；写 `ticket?.ownerId` 会被判定
-    // manual memoization 无法保留（eslint react-hooks/preserve-manual-memoization）。
-    [snapshot.members, ticket],
+    () => (ownerResolution?.memberId
+      ? snapshot.members.find((member) => member.id === ownerResolution.memberId) ?? null
+      : null),
+    [snapshot.members, ownerResolution],
+  );
+  // 负责人自身已停止/失败：票没人推进，抽屉要提示「负责人未在工作」。
+  const ownerStalled = Boolean(
+    owner && (owner.status === "failed" || owner.status === "parked" || owner.status === "aborted"),
   );
   // 解锁：依赖本票的其它票（谁的 dependencies 含本票 id）。
   const unblocks = useMemo(
@@ -125,9 +139,35 @@ export function AgentTeamTaskDetailBody({
   const deps = ticket.dependencies;
 
   const chip = (label: string, ids: string[]) => (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
       <span className="agent-teams-member-role">{label}:</span>
-      <span style={{ fontFamily: "var(--font-mono)" }}>{ids.length > 0 ? ids.map((id) => `#${id}`).join(", ") : "—"}</span>
+      {ids.length > 0 ? (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+          {ids.map((id) => (
+            <button
+              key={id}
+              type="button"
+              data-jump-ticket={id}
+              onClick={() => onSelectTicket?.(id)}
+              disabled={!onSelectTicket}
+              aria-label={t("teams.task.jumpTo", { ticket: `#${id}` })}
+              style={{
+                border: "none",
+                background: "none",
+                padding: 0,
+                fontFamily: "var(--font-mono)",
+                color: onSelectTicket ? "var(--accent)" : "var(--text-muted)",
+                cursor: onSelectTicket ? "pointer" : "default",
+                font: "inherit",
+              }}
+            >
+              #{id}
+            </button>
+          ))}
+        </span>
+      ) : (
+        <span style={{ fontFamily: "var(--font-mono)" }}>—</span>
+      )}
     </span>
   );
 
@@ -218,12 +258,19 @@ export function AgentTeamTaskDetailBody({
           fontSize: "var(--fs-small)",
         }}
       >
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
           <span className="agent-teams-member-role">{t("teams.task.owner")}:</span>
-          {owner ? (
+          {ownerResolution?.memberId ? (
             <button
               type="button"
-              onClick={() => owner && onSelectMember?.(owner.id)}
+              onClick={() => {
+                // 优先用解析到的成员实例（显式或回填）；名册里找不到时退回解析出的 id。
+                if (owner) {
+                  onSelectMember?.(owner.id);
+                } else if (ownerResolution.memberId) {
+                  onSelectMember?.(ownerResolution.memberId);
+                }
+              }}
               disabled={!onSelectMember}
               style={{
                 border: "none",
@@ -234,10 +281,42 @@ export function AgentTeamTaskDetailBody({
                 font: "inherit",
               }}
             >
-              {owner.name}
+              {ownerResolution.memberName ?? ownerResolution.memberId}
             </button>
           ) : (
             <span>{t("teams.unassigned")}</span>
+          )}
+          {ownerResolution?.inferred && (
+            <span
+              className="agent-teams-task-badge agent-teams-task-badge--inferred"
+              data-testid="agent-teams-task-inferred-owner"
+              style={{
+                border: "var(--hairline) solid var(--info)",
+                color: "var(--info)",
+                borderRadius: 999,
+                padding: "0 6px",
+                fontSize: "var(--fs-micro)",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {t("teams.task.inferredOwner")}
+            </span>
+          )}
+          {ownerStalled && (
+            <span
+              className="agent-teams-task-badge agent-teams-task-badge--stalled"
+              data-testid="agent-teams-task-stalled-owner"
+              style={{
+                border: "var(--hairline) solid var(--warning)",
+                color: "var(--warning)",
+                borderRadius: 999,
+                padding: "0 6px",
+                fontSize: "var(--fs-micro)",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {t("teams.task.stalledOwner")}
+            </span>
           )}
         </span>
         {chip(t("teams.task.dependsOn"), deps)}

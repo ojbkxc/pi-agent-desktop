@@ -15,6 +15,8 @@ import type { TeamPlanView } from "@/lib/agent-teams-plan";
 
 /** 计划卡轮询节奏（与 cc-haha 一致：2s）。 */
 export const TEAM_PLAN_POLL_MS = 2000;
+/** 单次拉取的超时（超时按失败处理，可重试；必须大于轮询间隔以免半开连接永久挂起）。 */
+export const TEAM_PLAN_FETCH_TIMEOUT_MS = 8000;
 
 export interface UseTeamPlanResult {
   plan: TeamPlanView | null;
@@ -99,11 +101,24 @@ export function useTeamPlan(teamName: string | null, refreshKey: number = 0): Us
   // 最新 plan 的 ref：approve 时读它取 identity，避免闭包拿到旧值。
   const planRef = useRef<TeamPlanView | null>(null);
   planRef.current = plan;
+  // 上一次的团队名：用来把「换团队清空」与「tick/refreshKey 重拉」分开。
+  const teamNameRef = useRef<string | null>(teamName);
 
+  // 换团队才清空上一条，避免把 A 团队的计划串到 B；同时清掉保存/批准/冲突错误，
+  // 否则 A 团队的失败会挂到 B 团队的界面上。
+  // **不与下面重拉 effect 合并**：tick / refreshKey 只是补拉，刷新期间必须保留旧 plan，
+  // 直到新响应经 acceptPlan 接纳——否则每 2s 轮询都会把卡片闪空一次。
   useEffect(() => {
-    // 换团队：先清掉上一条，避免把 A 团队的计划串到 B。
+    if (teamNameRef.current === teamName) return;
+    teamNameRef.current = teamName;
     setPlan(null);
     setError(null);
+    setSaveError(null);
+    setConflict(false);
+    setApproveError(null);
+  }, [teamName]);
+
+  useEffect(() => {
     if (!teamName) return;
 
     let stopped = false;
@@ -121,7 +136,12 @@ export function useTeamPlan(teamName: string | null, refreshKey: number = 0): Us
       if (stopped) return;
       if (doc && doc.visibilityState !== "visible") return; // 不可见：暂停
       try {
-        const response = await fetch(url, { cache: "no-store" });
+        // 超时按失败处理：半开/挂死的连接不能把轮询永久卡住，AbortError 走下面的 catch
+        // 落 error 并按 TEAM_PLAN_POLL_MS 重排。
+        const response = await fetch(url, {
+          cache: "no-store",
+          signal: AbortSignal.timeout(TEAM_PLAN_FETCH_TIMEOUT_MS),
+        });
         if (stopped) return;
         if (!response.ok) {
           setError(`计划读取失败（HTTP ${response.status}）`);

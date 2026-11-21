@@ -30,8 +30,9 @@ const PLAN = {
   updatedAt: 0,
 };
 
-/** mount 一个 hook：返回读当前返回值 / flush effects / 重渲染 的句柄。 */
-function mount(hook, ...args) {
+/** mount 一个 hook：返回读当前返回值 / flush effects / 重渲染 / 改参数的句柄。 */
+function mount(hook, ...initialArgs) {
+  const args = initialArgs.slice();
   let latest;
   const render = () => {
     ReactFake.__beginRender();
@@ -44,14 +45,27 @@ function mount(hook, ...args) {
     get current() { return latest; },
     flush: () => ReactFake.__flushEffects(),
     rerender: () => { render(); return latest; },
+    /** 换参数（如切换团队）后同步重渲染。 */
+    setArgs: (...next) => { args.length = 0; args.push(...next); render(); return latest; },
   };
 }
 
 const realFetch = globalThis.fetch;
 const realSetTimeout = globalThis.setTimeout;
 const realClearTimeout = globalThis.clearTimeout;
+const realAbortTimeout = AbortSignal.timeout;
 
-/** 装 fetch / 定时器桩；responses 是队列，每次 fetch 取一个。 */
+/** 造一个 Response 形状的最小对象（fetch 桩返回）。 */
+function mkResponse(status, body) {
+  return { ok: status >= 200 && status < 300, status, json: async () => body };
+}
+
+/**
+ * 装 fetch / 定时器桩；responses 是队列，每次 fetch 取一个。
+ * 队列项可为 `{ ok, status, body }`，或 `{ reject: Error }`（模拟超时/网络拒绝）。
+ * AbortSignal.timeout 换成立即返回 undefined：hook 只用它挂 signal，桩不看信号；
+ * 真定时器会拖住 node 退出。
+ */
 function installEnv(responses) {
   const calls = [];
   const timers = [];
@@ -59,16 +73,35 @@ function installEnv(responses) {
     calls.push({ url: String(url), init });
     const next = responses.shift();
     if (!next) throw new Error("no more fetch responses queued");
-    return { ok: next.ok, status: next.status ?? (next.ok ? 200 : 500), json: async () => next.body };
+    if (next.reject) throw next.reject;
+    return mkResponse(next.status ?? (next.ok ? 200 : 500), next.body);
   };
   globalThis.setTimeout = (fn, delay) => { timers.push({ fn, delay }); return timers.length; };
   globalThis.clearTimeout = () => {};
+  AbortSignal.timeout = () => undefined;
   return { calls, timers };
 }
+
+/** 装一个「手动 resolve」的 fetch 桩：每次 fetch 返回未决 promise，测试自己 resolve/reject。 */
+function installDeferredEnv() {
+  const calls = [];
+  const timers = [];
+  const pending = [];
+  globalThis.fetch = (url, init) => {
+    calls.push({ url: String(url), init });
+    return new Promise((resolve, reject) => { pending.push({ resolve, reject }); });
+  };
+  globalThis.setTimeout = (fn, delay) => { timers.push({ fn, delay }); return timers.length; };
+  globalThis.clearTimeout = () => {};
+  AbortSignal.timeout = () => undefined;
+  return { calls, timers, pending };
+}
+
 function restoreEnv() {
   globalThis.fetch = realFetch;
   globalThis.setTimeout = realSetTimeout;
   globalThis.clearTimeout = realClearTimeout;
+  AbortSignal.timeout = realAbortTimeout;
 }
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -254,6 +287,70 @@ test("saveAndApprove：保存失败时不批准", async (t) => {
   assert.equal(result.ok, false);
   assert.match(result.reason, /写盘失败/);
   assert.equal(env.calls.some((call) => call.init?.method === "POST"), false, "保存失败不得投递批准");
+});
+
+// ── T9：轮询竞态 / 超时 / 换团队清错误 ─────────────────────────────────────────
+test("tick 补拉期间保留旧 plan，新响应经 acceptPlan 接纳后才替换", async (t) => {
+  const env = installDeferredEnv();
+  t.after(restoreEnv);
+  const h = mount(useTeamPlan, "demo", 0);
+  h.flush();
+  await flush();
+  assert.equal(env.pending.length, 1, "首次拉取已发出");
+  env.pending[0].resolve(mkResponse(200, { plan: PLAN }));
+  await flush();
+  assert.equal(h.current.plan.revision, 3);
+
+  // 触发一次补拉（refresh → tick++ → effect 重跑）。这是「刷新」而不是「换团队」：
+  // 不应清空旧 plan。
+  h.current.refresh();
+  h.flush();
+  await flush();
+  assert.equal(env.pending.length, 2, "补拉发出新请求");
+  assert.equal(h.current.plan.revision, 3, "补拉期间旧 plan 必须保留（不能闪空）");
+
+  env.pending[1].resolve(mkResponse(200, { plan: { ...PLAN, revision: 4 } }));
+  await flush();
+  assert.equal(h.current.plan.revision, 4, "新响应被 acceptPlan 接纳");
+});
+
+test("超时/网络失败：error 落地并按 TEAM_PLAN_POLL_MS 重排（不会永久停摆）", async (t) => {
+  const env = installDeferredEnv();
+  t.after(restoreEnv);
+  const h = mount(useTeamPlan, "demo", 0);
+  h.flush();
+  await flush();
+  env.pending[0].reject(Object.assign(new Error("The operation timed out"), { name: "TimeoutError" }));
+  await flush();
+  assert.ok(h.current.error, "超时必须暴露 error（按失败处理）");
+  assert.match(h.current.error, /timed out|Timeout/i);
+  assert.equal(env.timers.at(-1).delay, TEAM_PLAN_POLL_MS, "失败后仍重排下一轮轮询");
+});
+
+test("换团队：清掉 plan 与 saveError/conflict/approveError（不串团队）", async (t) => {
+  const env = installDeferredEnv();
+  t.after(restoreEnv);
+  const h = mount(useTeamPlan, "demo", 0);
+  h.flush();
+  await flush();
+  env.pending[0].resolve(mkResponse(200, { plan: PLAN }));
+  await flush();
+  assert.equal(h.current.plan.revision, 3);
+
+  // 制造一次批准失败 → approveError 落地（并触发一次补拉 tick）。
+  const approved = h.current.approve();
+  await flush();
+  env.pending[1].resolve(mkResponse(502, { ok: false, reason: "boom" }));
+  await approved;
+  assert.equal(h.current.approveError, "boom");
+
+  // 切团队：重渲染跑「换团队清空」effect（不 await 新 fetch 的挂起 promise）。
+  h.setArgs("other");
+  h.flush();
+  assert.equal(h.current.plan, null, "换团队清空 plan");
+  assert.equal(h.current.approveError, null, "批准错误随团队切换清掉");
+  assert.equal(h.current.saveError, null);
+  assert.equal(h.current.conflict, false);
 });
 
 test("acceptPlan：同世系里更小的 revision 被忽略（轮询不能回退刚保存的计划）", () => {

@@ -1,14 +1,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 
-// 会话头部团队条（B1）纯逻辑单测：显示态派生、进度口径、活跃期判定。
-// 组件渲染（头像堆叠 / 类名 / i18n 键）由 verifier 批次一覆盖；这里只钉可静态验证的派生。
-const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
+// 会话头部团队条（B1）单测：显示态派生、进度口径、活跃期判定，并用 fake-react 手动驱动
+// hook 的轮询 effect（无 DOM）。只用一个 jiti 实例——两个交互实例会共享 Node 的模块缓存，
+// 第二次 import 会复用首次绑定的真实 react，hook 驱动就失效了。
+const jiti = createJiti(import.meta.url, {
+  alias: {
+    react: fileURLToPath(new URL("./__fixtures__/fake-react.mjs", import.meta.url)),
+    "@": process.cwd(),
+  },
+  jsx: { runtime: "automatic" },
+  tsconfigPaths: true,
+});
+const ReactFake = await jiti.import("react");
 const {
   deriveTeamStripPhase,
   deriveTeamStripProgress,
   isActiveTeamPhase,
+  useActiveTeamStrip,
+  TEAM_STRIP_POLL_MS,
+  TEAM_STRIP_RETRY_MS,
 } = await jiti.import("./useActiveTeamStrip.ts");
 
 /** 最小成员（投影层 member.status 不含 "failed"）。 */
@@ -127,9 +140,12 @@ test("接线：setSnapshot(null) 只在 sessionId 变化时执行（refreshKey �
   const raw = await readFile(new URL("./useActiveTeamStrip.ts", import.meta.url), "utf8");
   const source = raw.replace(/\r\n/g, "\n");
 
-  // 独立的清空 effect：依赖数组里只有 sessionId。
-  const resetEffect = source.indexOf("useEffect(() => {\n    setSnapshot(null);\n  }, [sessionId]);");
-  assert.ok(resetEffect > 0, "setSnapshot(null) 必须住在只依赖 sessionId 的 effect 里");
+  // 独立的清空 effect：依赖数组里只有 sessionId（快照与 error 一并随换会话清掉）。
+  assert.match(
+    source,
+    /useEffect\(\(\) => \{\s*\n\s*setSnapshot\(null\);\s*\n\s*setError\(null\);\s*\n\s*\}, \[sessionId\]\);/,
+    "setSnapshot(null)/setError(null) 必须住在只依赖 sessionId 的 effect 里",
+  );
   // 主轮询 effect 的依赖仍是 sessionId + refreshKey（refreshKey 继续触发补拉）。
   assert.match(source, /\}, \[sessionId, refreshKey\]\);/);
   // 主 effect 开头不得再无条件清空（旧缺陷：每发一条消息条就闪一次）。
@@ -137,3 +153,125 @@ test("接线：setSnapshot(null) 只在 sessionId 变化时执行（refreshKey �
   const head = mainEffect.slice(0, mainEffect.indexOf("let stopped"));
   assert.doesNotMatch(head, /setSnapshot\(null\)/, "主 effect 开头不得清空快照");
 });
+
+// ── T9：hook 轮询的失败/超时出口（fake-react 手动驱动 effect）──────────────────
+const realFetch = globalThis.fetch;
+const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
+const realAbortTimeout = AbortSignal.timeout;
+
+function installEnv(responses) {
+  const calls = [];
+  const timers = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), init });
+    const next = responses.shift();
+    if (!next) throw new Error("no more fetch responses queued");
+    if (next.reject) throw next.reject;
+    return { ok: next.ok !== false, status: next.status ?? (next.ok === false ? 500 : 200), json: async () => next.body };
+  };
+  globalThis.setTimeout = (fn, delay) => { timers.push({ fn, delay }); return timers.length; };
+  globalThis.clearTimeout = () => {};
+  AbortSignal.timeout = () => undefined;
+  return { calls, timers };
+}
+function installDeferredEnv() {
+  const timers = [];
+  const pending = [];
+  globalThis.fetch = (url, init) => {
+    pending.push({ url: String(url), init });
+    return new Promise((resolve, reject) => { pending.at(-1).resolve = resolve; pending.at(-1).reject = reject; });
+  };
+  globalThis.setTimeout = (fn, delay) => { timers.push({ fn, delay }); return timers.length; };
+  globalThis.clearTimeout = () => {};
+  AbortSignal.timeout = () => undefined;
+  return { timers, pending };
+}
+function restoreEnv() {
+  globalThis.fetch = realFetch;
+  globalThis.setTimeout = realSetTimeout;
+  globalThis.clearTimeout = realClearTimeout;
+  AbortSignal.timeout = realAbortTimeout;
+}
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+function mountHook(...initialArgs) {
+  const args = initialArgs.slice();
+  let latest;
+  const render = () => {
+    ReactFake.__beginRender();
+    latest = useActiveTeamStrip(...args);
+  };
+  ReactFake.__setNotify(() => render());
+  ReactFake.__reset();
+  render();
+  return {
+    get current() { return latest; },
+    flush: () => ReactFake.__flushEffects(),
+    setArgs: (...next) => { args.length = 0; args.push(...next); render(); return latest; },
+  };
+}
+
+test("hook：成功拉到活跃团队 → 快照落地、error 清空、按 POLL 排期", async (t) => {
+  const env = installEnv([{
+    ok: true,
+    body: snapshot({ members: [member("lead", "running")], status: "running" }),
+  }]);
+  t.after(restoreEnv);
+  const h = mountHook("s1", 0);
+  h.flush();
+  await flush();
+  assert.equal(env.calls.length, 1);
+  assert.match(env.calls[0].url, /\/api\/teams\/session\/s1\/workbench$/);
+  assert.equal(h.current.snapshot.team.name, "t", "快照落地");
+  assert.equal(h.current.error, null);
+  assert.equal(env.timers.at(-1).delay, TEAM_STRIP_POLL_MS, "活跃期按 POLL 排期");
+});
+
+test("hook：超时/网络失败 → error 落地并按 RETRY 重排（不会永久停摆）", async (t) => {
+  const env = installEnv([{ reject: Object.assign(new Error("The operation timed out"), { name: "TimeoutError" }) }]);
+  t.after(restoreEnv);
+  const h = mountHook("s1", 0);
+  h.flush();
+  await flush();
+  assert.ok(h.current.error, "超时必须暴露 error");
+  assert.match(h.current.error, /timed out|Timeout/i);
+  assert.equal(env.timers.at(-1).delay, TEAM_STRIP_RETRY_MS, "失败后仍重排重试");
+});
+
+test("hook：HTTP 非 ok → error 落地并重排 RETRY", async (t) => {
+  const env = installEnv([{ ok: false, status: 500, body: {} }]);
+  t.after(restoreEnv);
+  const h = mountHook("s1", 0);
+  h.flush();
+  await flush();
+  assert.match(h.current.error, /500/);
+  assert.equal(env.timers.at(-1).delay, TEAM_STRIP_RETRY_MS);
+});
+
+test("hook：同会话 refreshKey 补拉不闪空旧快照；失败也保留最后一次快照", async (t) => {
+  const env = installDeferredEnv();
+  t.after(restoreEnv);
+  const h = mountHook("s1", 0);
+  h.flush();
+  await flush();
+  env.pending[0].resolve({
+    ok: true,
+    status: 200,
+    json: async () => snapshot({ members: [member("lead", "running")], status: "running" }),
+  });
+  await flush();
+  assert.ok(h.current.snapshot);
+
+  h.setArgs("s1", 1); // 同会话，refreshKey 变化
+  h.flush();
+  await flush();
+  assert.equal(env.pending.length, 2, "补拉发出新请求");
+  assert.ok(h.current.snapshot, "补拉期间旧快照仍在（不闪空）");
+
+  env.pending[1].resolve({ ok: false, status: 500, json: async () => ({}) });
+  await flush();
+  assert.match(h.current.error, /500/);
+  assert.ok(h.current.snapshot, "失败也保留最后一次快照");
+});
+

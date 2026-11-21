@@ -124,11 +124,12 @@ const S: Record<string, CSSProperties> = {
     zIndex: "var(--z-modal)",
   },
   dialog: {
-    // 与下面 composer 的内容宽（--chat-content-max-width，默认 820px）对齐：
-    // 弹框看起来就是输入框的放大版，而不是另起一套宽度。
+    // 固定舒适宽度 720px 封顶，**不再**只跟随聊天区内容宽（--chat-content-max-width，
+    // 默认 820px）：用户把聊天宽度调大后，这个配置表单不该被一起拉宽成一整屏。仍保留
+    // 100% 让窄窗口不溢出（min 取三者最小值）。
     // `boxSizing: border-box` 必须保留：content-box 下 width 不含 padding/border，
     // 100% 宽时每侧会多出 16px，弹框在窄窗口里左右各溢出一截。
-    width: "min(var(--chat-content-max-width, 820px), 100%)",
+    width: "min(720px, var(--chat-content-max-width, 820px), 100%)",
     maxWidth: "100%",
     boxSizing: "border-box",
     maxHeight: "min(78vh, 640px)",
@@ -428,7 +429,26 @@ export function AgentTeamPlanCard({
   // `enabled` 只取决于 open：dirty 切换不能重挂模态（否则模态栈被反复压入）。
   const panelRef = useModalDismiss<HTMLDivElement>(requestClose, open);
 
-  if (!isPlanCardVisible(plan) || !plan) return null;
+  // 无 plan 且拉取失败：不能再直接 return null 把错误吞掉——否则轮询失败时计划卡
+  // 静默消失，用户不知道后台还在重试。给一条可见提示（teams.plan.loadFailed）。
+  if (!plan) {
+    if (!error) return null;
+    return (
+      <section
+        aria-label={t("teams.plan.title")}
+        data-testid="team-plan-card"
+        data-plan-error="true"
+        role="status"
+        style={{ ...S.bar, flexDirection: "column", alignItems: "stretch" }}
+      >
+        <p style={S.alert} role="alert" data-testid="team-plan-load-error" title={error}>
+          {t("teams.plan.loadFailed")}
+        </p>
+      </section>
+    );
+  }
+
+  if (!isPlanCardVisible(plan)) return null;
 
   return (
     <section

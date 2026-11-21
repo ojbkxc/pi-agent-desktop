@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo, useState, type CSSProperties } from "react";
+import { memo, useMemo, useState, type CSSProperties, type FocusEvent } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { MarkdownBody } from "@/components/MarkdownBody";
 import { useProgressiveReveal } from "@/hooks/useProgressiveReveal";
@@ -215,6 +215,15 @@ interface Props {
    * 可选：不传时参与者名字保持纯文本，行为与原实现一致。
    */
   onOpenMember?: (member: WorkbenchMember) => void;
+  /**
+   * 正在飞行的消息 id（编队带总线上一刻飞过的那条）。该行加 `data-active-message="true"`，
+   * 由样式层点亮。可选：不传时任何行都不标记。
+   */
+  activeMessageId?: string | null;
+  /**
+   * 画布上当前聚焦的票 id。属于该票的消息行加 `data-focused-ticket="true"`。可选。
+   */
+  focusedTicketId?: string | null;
 }
 
 /**
@@ -227,7 +236,7 @@ interface Props {
  * - 悬停行 → `onFocusTask(taskId)` 通知父级高亮画布对应任务（离开 → null）；
  * - 空态文案。
  */
-export function AgentTeamsCommunicationFeed({ snapshot, fill = false, onFocusTask, onOpenMember }: Props) {
+export function AgentTeamsCommunicationFeed({ snapshot, fill = false, onFocusTask, onOpenMember, activeMessageId = null, focusedTicketId = null }: Props) {
   const { t, locale } = useI18n();
   const [filter, setFilter] = useState<FeedFilter>("all");
 
@@ -368,6 +377,8 @@ export function AgentTeamsCommunicationFeed({ snapshot, fill = false, onFocusTas
                 category={category}
                 repeats={repeats}
                 isLatest={index === 0}
+                isActive={message.id === activeMessageId}
+                focusedTicketId={focusedTicketId}
                 snapshot={snapshot}
                 onFocusTask={onFocusTask}
                 onOpenMember={onOpenMember}
@@ -407,6 +418,8 @@ const FeedRow = memo(function FeedRow({
   category,
   repeats,
   isLatest,
+  isActive,
+  focusedTicketId,
   snapshot,
   onFocusTask,
   onOpenMember,
@@ -419,6 +432,10 @@ const FeedRow = memo(function FeedRow({
   /** 这一条代表了多少条连续相同的信号。 */
   repeats: number;
   isLatest: boolean;
+  /** 是否是当前飞行的消息（编队带总线上一刻飞过的那条）。 */
+  isActive: boolean;
+  /** 画布上当前聚焦的票；本行所属票与之相同则加 focus 标记。 */
+  focusedTicketId: string | null;
   snapshot: TeamWorkbenchSnapshot;
   onFocusTask?: (taskId: string | null) => void;
   onOpenMember?: (member: WorkbenchMember) => void;
@@ -431,14 +448,29 @@ const FeedRow = memo(function FeedRow({
   const time = formatMessageTime(message.timestamp, locale);
   const text = rowDisplayText(message, body, category, t);
   const compact = isCompactRow(body, category);
+  // 键盘焦点与鼠标悬停走同一条「高亮画布任务」通道：进入即聚焦、真正离开行才清空
+  // （焦点在行内按钮之间移动时 onBlur 会冒泡，用 relatedTarget 判断是否仍在行内）。
+  const handleFocus = focusedTaskId && onFocusTask ? () => onFocusTask(focusedTaskId) : undefined;
+  const handleBlur = focusedTaskId && onFocusTask
+    ? (event: FocusEvent<HTMLElement>) => {
+      const next = event.relatedTarget as Node | null;
+      if (!next || !event.currentTarget.contains(next)) onFocusTask(null);
+    }
+    : undefined;
   const rowProps = {
     "data-testid": `agent-teams-message-${message.id}`,
     "data-find-row": message.id,
     "data-message-body": body.kind,
     "data-message-kind": message.kind,
     "data-message-category": category,
+    ...(isActive ? { "data-active-message": "true" } : {}),
+    ...(focusedTaskId && focusedTaskId === focusedTicketId ? { "data-focused-ticket": "true" } : {}),
+    // 可键盘聚焦：只有能点亮某张票的行才进 Tab 序列，避免把纯系统行塞进键盘导航。
+    ...(focusedTaskId ? { tabIndex: 0 } : {}),
     onMouseEnter: focusedTaskId ? () => onFocusTask?.(focusedTaskId) : undefined,
     onMouseLeave: focusedTaskId ? () => onFocusTask?.(null) : undefined,
+    onFocus: handleFocus,
+    onBlur: handleBlur,
   };
 
   if (compact) {

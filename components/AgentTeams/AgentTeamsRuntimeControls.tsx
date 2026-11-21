@@ -37,6 +37,8 @@ interface Props {
   onAbort?: () => void;
   /** 只读（回放中 / 非实时）⇒ 不渲染。 */
   readOnly?: boolean;
+  /** 打开成员编辑入口（工作台的「编辑成员」）；只在暂停态可点，running 时禁用并提示。 */
+  onEditMembers?: () => void;
 }
 
 type TFn = (key: string, params?: TranslationParams) => string;
@@ -110,7 +112,7 @@ const S: Record<string, React.CSSProperties> = {
   error: { color: "var(--danger)", fontSize: "var(--fs-caption)" },
 };
 
-export function AgentTeamsRuntimeControls({ team, onAbort, readOnly = false }: Props) {
+export function AgentTeamsRuntimeControls({ team, onAbort, readOnly = false, onEditMembers }: Props) {
   const { t } = useI18n();
   const scope: TeamRuntimeScope | null = useMemo(
     () => teamRuntimeScope({ name: team?.name, leadSessionId: team?.leadSessionId, incarnationId: team?.incarnationId }),
@@ -155,6 +157,9 @@ export function AgentTeamsRuntimeControls({ team, onAbort, readOnly = false }: P
     && (view.status === "paused" || view.status === "partial")
     && !entry?.busy
     && !pauseRequested;
+  // 成员编辑只在**暂停态**开放：running 时改成员会与服务端 runtime-control/member 的
+  // 409 门禁冲突，故禁用并给「暂停团队后才能编辑成员」提示（disabled = status !== "paused"）。
+  const canEditMembers = view?.status === "paused";
   const errors: string[] = [];
   if (entry?.error) errors.push(entry.error);
   if (view?.error) errors.push(view.error);
@@ -211,6 +216,25 @@ export function AgentTeamsRuntimeControls({ team, onAbort, readOnly = false }: P
             ? t("teams.runtime.resuming")
             : t(view.status === "partial" ? "teams.runtime.retry" : "teams.runtime.resume")}
         </button>
+      ) : null}
+      {onEditMembers ? (
+        <>
+          {canEditMembers ? null : (
+            <span style={S.hint} data-testid="runtime-edit-members-hint">
+              {t("teams.runtime.pauseToEdit")}
+            </span>
+          )}
+          <button
+            type="button"
+            data-testid="runtime-edit-members"
+            className="agent-teams-runtime-edit-members"
+            style={canEditMembers ? S.button : S.buttonOff}
+            disabled={!canEditMembers}
+            onClick={canEditMembers ? onEditMembers : undefined}
+          >
+            {t("teams.runtime.editMembers")}
+          </button>
+        </>
       ) : null}
       {errors.length > 0 ? (
         <p style={S.error} role="alert" data-testid="runtime-errors">

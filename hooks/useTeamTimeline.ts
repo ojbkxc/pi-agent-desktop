@@ -7,8 +7,28 @@ import type { TeamWorkbenchSnapshot } from "@/lib/agent-teams-swimlane";
 export const WORKBENCH_HISTORY_LIMIT = 60;
 /** live 跟随的轮询节奏（沿用改造前的 3 秒）。 */
 export const LIVE_REFRESH_MS = 3000;
-/** 回放播放：每 1.2 秒前进一格。 */
+/** 回放播放：1 倍速时每 1.2 秒前进一格。 */
 export const REPLAY_STEP_MS = 1200;
+/** 回放倍速档位（与 cc-haha 回放控制条一致）。 */
+export const REPLAY_SPEEDS = [0.5, 1, 2, 4] as const;
+export type ReplaySpeed = (typeof REPLAY_SPEEDS)[number];
+
+/**
+ * 倍速 → 单帧播放间隔：0.5× 慢放 2400ms、1× 1200ms、2× 600ms、4× 300ms。
+ * 非法倍速（0 / 负数 / NaN / Infinity）退回 1×，绝不产生无限或零间隔。
+ */
+export function replayStepMs(speed: number): number {
+  const safe = Number.isFinite(speed) && speed > 0 ? speed : 1;
+  return Math.round(REPLAY_STEP_MS / safe);
+}
+
+/** 把任意数字夹到最近的合法档位（精确命中优先，否则按 >1 归 4×、其余归 1×）。 */
+export function clampReplaySpeed(speed: number): ReplaySpeed {
+  for (const candidate of REPLAY_SPEEDS) {
+    if (speed === candidate) return candidate;
+  }
+  return Number.isFinite(speed) && speed > 1 ? 4 : 1;
+}
 /** 拉取失败后的重试上限：指数退避但不超过 30 秒。 */
 export const MAX_RETRY_MS = 30000;
 /** 单次快照拉取的超时：与 useModelCatalog 的 20s 口径同量级（d5-20）。 */
@@ -254,6 +274,9 @@ export interface TeamTimelineController {
   /** 钉住的帧已被淘汰、视图被夹到最旧帧，供 UI 提示。 */
   frameExpired: boolean;
   playing: boolean;
+  /** 播放倍速（0.5 / 1 / 2 / 4），只影响自动播放的帧间隔，不影响手动 seek/step。 */
+  speed: ReplaySpeed;
+  setSpeed: (speed: ReplaySpeed) => void;
   loading: boolean;
   failed: boolean;
   enterReplay: () => void;
@@ -274,10 +297,11 @@ export interface TeamTimelineController {
  * - 回放钉住的是「帧身份 frameKey」而不是数组下标：历史满 60 帧丢弃最旧帧、
  *   下标整体左移时，被钉住的帧不会漂移；该帧被淘汰则夹到最旧帧并置 frameExpired。
  */
-export function useTeamTimeline(teamName: string | null): TeamTimelineController {
+export function useTeamTimeline(teamName: string | null, reloadKey = 0): TeamTimelineController {
   const [snapshots, setSnapshots] = useState<TeamWorkbenchSnapshot[]>([]);
   const [pinnedFrame, setPinnedFrame] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
+  const [speed, setSpeedState] = useState<ReplaySpeed>(1);
   const [loading, setLoading] = useState(Boolean(teamName));
   const [failed, setFailed] = useState(false);
 
@@ -318,7 +342,9 @@ export function useTeamTimeline(teamName: string | null): TeamTimelineController
     });
     poller.start();
     return () => poller.stop();
-  }, [teamName]);
+    // reloadKey：名册失败告警旁的「重试」除了重拉名册，也要立刻重建时间线轮询——
+    // 否则失败告警消失了，快照区仍停在 failed 直到退避到期。
+  }, [teamName, reloadKey]);
 
   const latestIndex = snapshots.length - 1;
   const selectedIndex = resolvePinnedIndex(snapshots, pinnedFrame);
@@ -373,7 +399,11 @@ export function useTeamTimeline(teamName: string | null): TeamTimelineController
     setPlaying(true);
   }, [latestIndex, playing, selectedIndex, snapshots]);
 
-  // 播放步进：每 REPLAY_STEP_MS 前进一格，到最新一格自动停。
+  const setSpeed = useCallback((next: ReplaySpeed) => {
+    setSpeedState(clampReplaySpeed(next));
+  }, []);
+
+  // 播放步进：每 replayStepMs(speed) 前进一格，到最新一格自动停；改倍速会重排定时器。
   useEffect(() => {
     if (!playing) return;
     if (latestIndex <= 0 || selectedIndex >= latestIndex) {
@@ -383,9 +413,9 @@ export function useTeamTimeline(teamName: string | null): TeamTimelineController
     const timer = setTimeout(() => {
       const next = snapshots[selectedIndex + 1];
       if (next) setPinnedFrame(frameKey(next));
-    }, REPLAY_STEP_MS);
+    }, replayStepMs(speed));
     return () => clearTimeout(timer);
-  }, [latestIndex, playing, selectedIndex, snapshots]);
+  }, [latestIndex, playing, selectedIndex, snapshots, speed]);
 
   return {
     snapshots,
@@ -397,6 +427,8 @@ export function useTeamTimeline(teamName: string | null): TeamTimelineController
     isReplaying,
     frameExpired,
     playing,
+    speed,
+    setSpeed,
     loading,
     failed,
     enterReplay,

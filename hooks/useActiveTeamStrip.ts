@@ -24,6 +24,8 @@ import { getTicketUrgency } from "@/lib/agent-teams-task-layout";
 export const TEAM_STRIP_POLL_MS = 3000;
 /** 网络类失败的重试节奏（非活跃期与 404 不重试）。 */
 export const TEAM_STRIP_RETRY_MS = 5000;
+/** 单次拉取的超时（超时按网络类失败：落 error 并重排重试，不能永久停摆）。 */
+export const TEAM_STRIP_FETCH_TIMEOUT_MS = 8000;
 
 /**
  * 团队条的显示态：在团队阶段（team.status）之上叠加**成员级异常**。
@@ -55,6 +57,8 @@ export interface ActiveTeamStrip {
   phase: TeamStripPhase;
   /** 完成/总数。 */
   progress: TeamStripProgress;
+  /** 拉取失败/超时信息；成功、无团队或换会话后清空。 */
+  error: string | null;
 }
 
 /**
@@ -107,6 +111,7 @@ export function isActiveTeamPhase(status: string | undefined): boolean {
  */
 export function useActiveTeamStrip(sessionId: string | null, refreshKey: number = 0): ActiveTeamStrip {
   const [snapshot, setSnapshot] = useState<TeamWorkbenchSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // 换会话时才清空（同一条会话的刷新键不动旧快照）：之前 setSnapshot(null) 在
   // 主 effect 开头无条件执行，而 refreshKey（AppShell 传消息计数）每发一条消息
@@ -114,6 +119,7 @@ export function useActiveTeamStrip(sessionId: string | null, refreshKey: number 
   // （state.md P2）。拆成只依赖 sessionId 的小 effect 后，refreshKey 只负责补拉。
   useEffect(() => {
     setSnapshot(null);
+    setError(null);
   }, [sessionId]);
 
   useEffect(() => {
@@ -141,10 +147,17 @@ export function useActiveTeamStrip(sessionId: string | null, refreshKey: number 
       // 页面不可见：暂停（不拉取），等 visibilitychange 回到前台再补。
       if (doc && doc.visibilityState !== "visible") return;
       try {
-        const response = await fetch(url, { cache: "no-store" });
+        // 超时按失败处理：半开/挂死的连接不能永久停摆，AbortError 走下面的 catch
+        // 落 error 并按 TEAM_STRIP_RETRY_MS 重排。
+        const response = await fetch(url, {
+          cache: "no-store",
+          signal: AbortSignal.timeout(TEAM_STRIP_FETCH_TIMEOUT_MS),
+        });
         if (stopped) return;
         if (!response.ok) {
-          // 404 = 团队目录在但读不出快照（真异常）；按网络类失败重试。
+          // 404 = 团队目录在但读不出快照（真异常）；按网络类失败重试——并且**必须**
+          // 重排（失败也要重新排期，不能永久停摆）与暴露 error 供头部条提示。
+          setError(`HTTP ${response.status}`);
           schedule(TEAM_STRIP_RETRY_MS);
           return;
         }
@@ -154,14 +167,18 @@ export function useActiveTeamStrip(sessionId: string | null, refreshKey: number 
         // （条不占位），等 refreshKey / 重新可见再拉。
         if (!data.team) {
           setSnapshot(null);
+          setError(null);
           return;
         }
         const snapshot = data as TeamWorkbenchSnapshot;
         setSnapshot(snapshot);
+        setError(null);
         // 仅活跃期继续 3 秒轮询；completed / ended 停止，保留最后一次快照。
         if (isActiveTeamPhase(snapshot.team.status)) schedule(TEAM_STRIP_POLL_MS);
-      } catch {
-        if (!stopped) schedule(TEAM_STRIP_RETRY_MS);
+      } catch (err) {
+        if (stopped) return;
+        setError(err instanceof Error ? err.message : String(err));
+        schedule(TEAM_STRIP_RETRY_MS);
       }
     }
 
@@ -182,5 +199,6 @@ export function useActiveTeamStrip(sessionId: string | null, refreshKey: number 
     snapshot,
     phase: deriveTeamStripPhase(snapshot),
     progress: deriveTeamStripProgress(snapshot),
-  }), [snapshot]);
+    error,
+  }), [snapshot, error]);
 }

@@ -138,3 +138,35 @@ test("纯函数：memberStatusKey 与 statePresentation 的状态映射", () => 
   assert.equal(statePresentation(VIEW({ status: "partial" }), false, false).key, "teams.runtime.partial");
   assert.equal(statePresentation(VIEW({ status: "running" }), false, false).key, "teams.runtime.running");
 });
+
+// T10：成员编辑入口（onEditMembers）——paused 才可点，running 禁用并给暂停提示。
+test("编辑成员入口：paused 可点（按钮可见、非 disabled）", async () => {
+  await loadView(VIEW({ status: "paused", revision: 2 }));
+  const html = render(React.createElement(AgentTeamsRuntimeControls, {
+    team: TEAM, onAbort: () => {}, onEditMembers: () => {},
+  }));
+  assert.match(html, /data-testid="runtime-edit-members"/, "按钮出现");
+  assert.match(html, /class="agent-teams-runtime-edit-members"/, "约定 class 名");
+  assert.match(html, /Edit members/, "文案走 i18n");
+  assert.doesNotMatch(html, /data-testid="runtime-edit-members"[^>]*disabled/, "paused 时可点");
+  assert.doesNotMatch(html, /Pause the team to edit members/, "paused 不显示暂停提示");
+  assert.doesNotMatch(html, /teams\.runtime\./, "不渲染 i18n 键原文");
+});
+
+test("编辑成员入口：running 禁用并提示先暂停（disabled = status !== paused）", async () => {
+  await loadView(VIEW({ status: "running", revision: 1 }));
+  const html = render(React.createElement(AgentTeamsRuntimeControls, {
+    team: TEAM, onAbort: () => {}, onEditMembers: () => {},
+  }));
+  assert.match(html, /data-testid="runtime-edit-members"/, "按钮仍可见");
+  assert.match(html, /data-testid="runtime-edit-members"[^>]*disabled/, "running 时禁用");
+  assert.match(html, /Pause the team to edit members/, "禁用时给暂停提示");
+  assert.doesNotMatch(html, /teams\.runtime\./, "不渲染 i18n 键原文");
+});
+
+test("编辑成员入口：缺省 onEditMembers 时不渲染按钮（保持既有契约）", async () => {
+  await loadView(VIEW());
+  const html = render(React.createElement(AgentTeamsRuntimeControls, { team: TEAM, onAbort: () => {} }));
+  assert.doesNotMatch(html, /data-testid="runtime-edit-members"/);
+  assert.doesNotMatch(html, /agent-teams-runtime-edit-members/);
+});

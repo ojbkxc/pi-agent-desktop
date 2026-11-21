@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { useTeamTimeline } from "@/hooks/useTeamTimeline";
-import { formatElapsedClock } from "@/lib/format-units";
 import {
   layoutSwimlanes,
   EVENT_HEIGHT,
@@ -13,7 +14,6 @@ import {
   type SwimlaneEventType,
 } from "@/lib/agent-teams-swimlane";
 import { AppSelect } from "@/components/AppSelect";
-import type { TranslationParams } from "@/lib/i18n/types";
 import { TaskBoardCanvas, countTaskStates } from "@/components/AgentTeams/TaskBoardCanvas";
 import { FormationBand } from "@/components/AgentTeams/FormationBand";
 import { TeamMemberModelPanel } from "@/components/AgentTeams/TeamMemberModelPanel";
@@ -24,12 +24,23 @@ import { FallbackSettings } from "@/components/AgentTeams/FallbackSettings";
 import { AgentTeamsMemberInspector } from "@/components/AgentTeams/AgentTeamsMemberInspector";
 import { AgentTeamTaskDetail } from "@/components/AgentTeams/AgentTeamTaskDetail";
 import { AgentTeamsCommunicationFeed } from "@/components/AgentTeams/AgentTeamsCommunicationFeed";
+import { AgentTeamsLiveClock } from "@/components/AgentTeams/AgentTeamsLiveClock";
+import { AgentTeamsReplayBar } from "@/components/AgentTeams/AgentTeamsReplayBar";
 import { formationNaturalWidth } from "@/lib/agent-teams-formation-layout";
 import { deriveMemberWorkloads, idleMemberIds } from "./member-workload";
 import { formatTeamActivityDate, formatTeamBytes, hasDisplayableUsage, shouldNoticeIdleTeam } from "./team-usage-display";
 
+// C9 的派生函数与类型搬到了秒级时钟叶子组件（AgentTeamsLiveClock）——now 不再由本视图
+// 持有。这里再导出一次，既有单测与外部引用（deriveLiveIndicator 的边界用例）不用改路径。
+export { deriveLiveIndicator } from "@/components/AgentTeams/AgentTeamsLiveClock";
+export type { LiveIndicator, LiveIndicatorInput } from "@/components/AgentTeams/AgentTeamsLiveClock";
+
 /** 一条消息在编队总线上飞过的时间（与 cc-haha 的 MESSAGE_FLIGHT_MS 一致）。 */
 const MESSAGE_FLIGHT_MS = 1500;
+/** 飞线待发队列上限：一次积压再多也只排最近这些。 */
+const FLIGHT_PENDING_LIMIT = 20;
+/** seen id 集合的上限：超出后按当前快照窗口重建，避免长跑团队 Set 无限膨胀。 */
+const FLIGHT_SEEN_LIMIT = 500;
 
 interface Props {
   /** 指定团队名；缺省时自动挑选本机最新创建的团队。 */
@@ -69,72 +80,6 @@ function roleLabelKey(role: string): string {
   return `teams.role.${role}`;
 }
 
-/** 毫秒 → HH:MM:SS（>1h）或 MM:SS；负值夹到 0。统一走 lib/format-units 的时钟口径。 */
-function formatDuration(valueMs: number): string {
-  return formatElapsedClock(valueMs);
-}
-
-/** ISO → 本地 HH:MM:SS（C9 会话时钟）；不可解析回退 --:--:--。 */
-function formatClock(iso: string, locale: string): string {
-  const time = Date.parse(iso);
-  if (!Number.isFinite(time)) return "--:--:--";
-  try {
-    return new Date(time).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  } catch {
-    return "--:--:--";
-  }
-}
-
-/** C9 Live 指示的纯派生输入（全部来自快照 + 时钟，无副作用）。 */
-export interface LiveIndicatorInput {
-  /** snapshot.team.status。 */
-  teamStatus: string;
-  /** 运行中的成员数（不含队长）。 */
-  workingCount: number;
-  /** 是否实时跟随（回放时 elapsed/clock 冻结到当前帧）。 */
-  isLive: boolean;
-  /** 团队创建时间（ISO）。 */
-  createdAt: string;
-  /** 当前帧生成时间（ISO）。 */
-  generatedAt: string;
-  /** 当前毫秒时间戳（仅实时跟随时每秒推进）。 */
-  now: number;
-}
-
-export interface LiveIndicator {
-  /** forming / running / waiting 三态提示。 */
-  hint: string;
-  /** 已用时长（团队创建 → 现在，或回放时的当前帧）。 */
-  elapsed: string;
-  /** 会话时钟（实时=now，回放=帧时间）。 */
-  clock: string;
-}
-
-/**
- * C9：把 Live 指示需要的三样（三态 hint / 已用时长 / 会话时钟）从快照与时钟纯派生出来。
- * 抽成模块级纯函数是为了能在没有 DOM 的测试里直接覆盖三态与时长/时钟的边界
- * （工作台视图本身 SSR 时 snapshot 为 null，起不到断言作用）。
- */
-export function deriveLiveIndicator(
-  input: LiveIndicatorInput,
-  t: (key: string, params?: TranslationParams) => string,
-  locale: string,
-): LiveIndicator {
-  const hint = input.teamStatus === "forming"
-    ? t("teams.live.formingHint")
-    : input.workingCount > 0
-      ? t("teams.live.runningHint", { count: input.workingCount })
-      : t("teams.live.waitingHint");
-  const startMs = Date.parse(input.createdAt);
-  const frameMs = Date.parse(input.generatedAt);
-  const start = Number.isFinite(startMs) ? startMs : Number.isFinite(frameMs) ? frameMs : input.now;
-  const end = input.isLive ? input.now : Number.isFinite(frameMs) ? frameMs : input.now;
-  const clock = input.isLive
-    ? formatClock(new Date(input.now).toISOString(), locale)
-    : formatClock(input.generatedAt, locale);
-  return { hint, elapsed: formatDuration(end - start), clock };
-}
-
 /** 工作台（整页视图）：左侧泳道/任务板/成员区，右侧成员检查器/通信流/收起导轨。 */
 interface Props {
   /** 指定团队名（硬钉）；缺省时自动挑选本机最新创建的团队。 */
@@ -156,6 +101,13 @@ interface Props {
    * 「换模型」下拉里一个模型都没有。
    */
   sessionCwd?: string | null;
+  /**
+   * 暂停团队时停掉队长生成（透传给 AgentTeamsRuntimeControls.onAbort）。
+   * 上层不提供时暂停按钮不渲染（runtime 控件保持只读语义）。
+   */
+  onAbortLead?: () => void;
+  /** 打开成员编辑入口（透传给 AgentTeamsRuntimeControls.onEditMembers；可选）。 */
+  onEditMembers?: () => void;
 }
 
 /**
@@ -170,6 +122,8 @@ export function AgentTeamsView({
   onRequestClose,
   onOpenSession,
   sessionCwd,
+  onAbortLead,
+  onEditMembers,
 }: Props) {
   const { t, locale } = useI18n();
   const [teams, setTeams] = useState<TeamSummary[]>([]);
@@ -183,14 +137,23 @@ export function AgentTeamsView({
   // C7 成员检查器 / C8 任务详情抽屉 / C11 通信列表面板的选择态。
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
+  // 通信流悬停行的「画布聚焦」通道：只点亮对应任务，不打开任务抽屉（与点击不同）。
+  const [focusedTicketId, setFocusedTicketId] = useState<string | null>(null);
   const [commOpen, setCommOpen] = useState(false);
-  // C9 会话时钟：仅在实时跟随时每秒更新（回放时冻结）。
-  const [now, setNow] = useState(() => Date.now());
-  const timeline = useTeamTimeline(selected);
+  // 失败告警旁「重试」的触发键：同时重拉团队名册与时间线轮询（见 handleRetryLists）。
+  const [retryKey, setRetryKey] = useState(0);
+  // 会话时钟不再由本视图持有：每秒 now 下沉到 AgentTeamsLiveClock 叶子组件，
+  // 避免整页（画布/泳道/通信流）每秒重渲染一次。
+  const timeline = useTeamTimeline(selected, retryKey);
   const rootRef = useRef<HTMLElement>(null);
-  // 消息飞行队列：只飞「本轮新到达」的消息，一次一条；回放与首次加载不飞。
-  const [flightQueue, setFlightQueue] = useState<string[]>([]);
+  const rightDockRef = useRef<HTMLDivElement>(null);
+  const commPanelRef = useRef<HTMLElement>(null);
+  // 飞线队列：head 带 deadline，追加新消息只进 pending，不重置当前这条的计时器。
+  const [flightHead, setFlightHead] = useState<{ id: string; expiresAt: number } | null>(null);
+  const [flightPending, setFlightPending] = useState<string[]>([]);
   const flightSeenRef = useRef<{ teamId: string; ids: Set<string> } | null>(null);
+  // 窄屏（≤640px）右栏改为覆盖式抽屉；具体几何由样式层（lead）负责。
+  const isMobile = useIsMobile();
 
   // 角色名走 i18n；没有对应词条时回退到 role 原文，绝不把 key 名渲染到界面。
   const roleLabel = useCallback((role: string): string => {
@@ -201,6 +164,10 @@ export function AgentTeamsView({
 
   // 当前展示的快照：实时跟随时是末条，回放时是 historyIndex 指向的那一格。
   const snapshot = timeline.currentSnapshot;
+  // 上一帧（同一时间线口径）：任务画布据此判定「上一帧 blocked、本帧 available」的刚解锁高亮。
+  const previousSnapshot = timeline.selectedIndex > 0
+    ? timeline.snapshots[timeline.selectedIndex - 1]
+    : undefined;
   // #55（忙闲可见，纯读派生）：空闲成员名（按名册顺序）与未认领派活数。
   const idleNames = useMemo(() => {
     if (!snapshot) return [] as string[];
@@ -238,6 +205,8 @@ export function AgentTeamsView({
         const data = await response.json() as { teams: TeamSummary[] };
         if (cancelled) return;
         setTeams(data.teams);
+        // 名册成功即清掉失败横幅：网络抖动恢复后不该一直挂着上一条错误。
+        setListFailed(false);
         const inRoster = (name: string | null | undefined): name is string =>
           Boolean(name && data.teams.some((team) => team.name === name));
         const latest = [...data.teams].sort((a, b) => (b.createdAt < a.createdAt ? -1 : 1))[0]?.name ?? null;
@@ -254,7 +223,14 @@ export function AgentTeamsView({
       }
     })();
     return () => { cancelled = true; };
-  }, [teamName, initialTeamName, teamsReloadKey]);
+  }, [teamName, initialTeamName, teamsReloadKey, retryKey]);
+
+  // 失败告警旁的「重试」：清掉失败态并同时重拉名册与时间线（同一触发键）。
+  const handleRetryLists = useCallback(() => {
+    setListFailed(false);
+    setListLoading(true);
+    setRetryKey((key) => key + 1);
+  }, []);
 
   // d5-3：生命周期操作成功后的收尾（TeamLifecycleActions.onDone）。回收删除了团队
   // 目录——重拉名册，且若删的正是当前选中团队则放开选中，让它回落到名册里其余
@@ -273,24 +249,23 @@ export function AgentTeamsView({
     setModelPanel(null);
   }, [selected]);
 
-  // 切换团队时清掉成员检查器/任务抽屉的选择，避免带着上一团队的 id 指向新团队。
+  // 切换团队时清掉成员检查器/任务抽屉/画布聚焦的选择，避免带着上一团队的 id 指向新团队。
   useEffect(() => {
     setSelectedMemberId(null);
     setSelectedTicketId(null);
+    setFocusedTicketId(null);
   }, [selected]);
 
   // C9 会话时钟：仅在实时跟随时每秒跳动（回放时冻结，改为显示帧时间）。
-  useEffect(() => {
-    if (!timeline.isLive) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [timeline.isLive]);
+  // 定时器在 AgentTeamsLiveClock 内部，本视图不再因为秒针而重渲染。
 
   const layout = useMemo(() => (snapshot ? layoutSwimlanes(snapshot) : null), [snapshot]);
 
-  // 跨泳道流向现在走编队总线的「飞行」，不再在时间轴上画曲线（同 cc-haha）：
-  // 只把这一帧新出现的消息排进队列，一条飞 1.5s。首次加载/切换团队只记基线不飞。
+  // 跨泳道流向走编队总线的「飞行」，不再在时间轴上画曲线（同 cc-haha）：
+  // 只把这一帧新出现的消息排进 pending，一条飞 1.5s。首次加载/切换团队只记基线不飞。
+  //
+  // 计时器由 head 的 deadline 驱动：追加新消息只动 pending，不会重建当前这条的
+  // setTimeout——否则团队频繁发言时每 3 秒到一条新消息就把正在飞的那条无限续命。
   useEffect(() => {
     if (!snapshot) return;
     const teamId = snapshot.team?.id ?? "";
@@ -298,20 +273,46 @@ export function AgentTeamsView({
     const seen = flightSeenRef.current;
     if (!seen || seen.teamId !== teamId) {
       flightSeenRef.current = { teamId, ids: new Set(messages.map((message) => message.id)) };
-      setFlightQueue([]);
+      setFlightHead(null);
+      setFlightPending([]);
       return;
     }
     const fresh = messages.filter((message) => !seen.ids.has(message.id));
     for (const message of messages) seen.ids.add(message.id);
+    // seen 集合按当前快照窗口裁剪：长时间运行的团队消息只增不减，Set 会无限膨胀。
+    // 超出上限就重建为当前窗口里的 id（旧消息已不在快照中，不会因此重新排队）。
+    if (seen.ids.size > FLIGHT_SEEN_LIMIT) {
+      seen.ids = new Set(messages.map((message) => message.id));
+    }
     if (!timeline.isLive || fresh.length === 0) return;
-    setFlightQueue((queue) => [...queue, ...fresh.map((message) => message.id)].slice(-20));
+    setFlightPending((queue) => [...queue, ...fresh.map((message) => message.id)].slice(-FLIGHT_PENDING_LIMIT));
   }, [snapshot, timeline.isLive]);
 
+  // 进入回放 / 退出实时跟随：清空飞线（历史帧不该产生新的飞行动画）。
   useEffect(() => {
-    if (flightQueue.length === 0) return;
-    const timer = window.setTimeout(() => setFlightQueue((queue) => queue.slice(1)), MESSAGE_FLIGHT_MS);
+    if (timeline.isLive) return;
+    setFlightHead(null);
+    setFlightPending([]);
+  }, [timeline.isLive]);
+
+  // 队首出队：只有 head 为空时才从 pending 取一条，起始时间记为「现在」。
+  useEffect(() => {
+    if (flightHead !== null || flightPending.length === 0) return;
+    const [next, ...rest] = flightPending;
+    setFlightPending(rest);
+    setFlightHead({ id: next, expiresAt: Date.now() + MESSAGE_FLIGHT_MS });
+  }, [flightHead, flightPending]);
+
+  // 到点下线：依赖只有 head（pending 追加不会重置本定时器）。
+  useEffect(() => {
+    if (!flightHead) return;
+    const remaining = Math.max(0, flightHead.expiresAt - Date.now());
+    const timer = window.setTimeout(() => setFlightHead(null), remaining);
     return () => window.clearTimeout(timer);
-  }, [flightQueue]);
+  }, [flightHead]);
+
+  // 当前飞行的消息 id（编队带总线 + 通信流活动行共用同一个入口）。
+  const activeMessageId = flightHead?.id ?? null;
 
   // 五态紧急度计数：与任务画布同源（lib/agent-teams-task-layout.ts）。
   const counts = useMemo(() => countTaskStates(snapshot?.tickets ?? []), [snapshot]);
@@ -347,24 +348,10 @@ export function AgentTeamsView({
   );
   // 右列是否展开（检查器或通信流面板占用时）：任务抽屉据此避让。
   const dockOpen = Boolean(selectedMember) || commOpen;
-  // C9：运行中的成员数（不含队长，队长恒 running）与三态提示。
+  // C9：运行中的成员数（不含队长，队长恒 running）。
   const workingCount = useMemo(
     () => (snapshot ? snapshot.members.slice(1).filter((member) => member.status === "running").length : 0),
     [snapshot],
-  );
-  // C9：Live 指示（三态 hint / 已用时长 / 会话时钟）由纯函数派生，便于无 DOM 测试覆盖。
-  const liveIndicator = useMemo(
-    () => (!snapshot
-      ? null
-      : deriveLiveIndicator({
-          teamStatus: snapshot.team.status,
-          workingCount,
-          isLive: timeline.isLive,
-          createdAt: snapshot.team.createdAt,
-          generatedAt: snapshot.generatedAt,
-          now,
-        }, t, locale)),
-    [snapshot, workingCount, timeline.isLive, now, t, locale],
   );
   // C11：通信流收起导轨上的消息计数（messages = 邮箱消息投影，见 lib/agent-teams-swimlane）。
   const messageCount = snapshot?.messages.length ?? 0;
@@ -376,6 +363,79 @@ export function AgentTeamsView({
     setCommOpen(true);
   }, []);
 
+  // Esc 的关闭优先级（T8）：成员检查器 → 通信面板 → 任务抽屉，一次只关最上层。
+  // preventDefault 留在 main 的 onKeyDown（interaction.md P2）：本页根节点持焦时
+  // Esc 不得落到 window 全局快捷键停掉仍在后台运行的 agent。
+  const handleEscapeKey = useCallback((event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Escape") return;
+    if (selectedMemberId) { setSelectedMemberId(null); return; }
+    if (commOpen) { setCommOpen(false); return; }
+    if (selectedTicketId) { setSelectedTicketId(null); }
+  }, [selectedMemberId, commOpen, selectedTicketId]);
+
+  // 面板焦点管理（T8）：打开时焦点进入面板容器，全部关闭后归还给打开前的元素。
+  // 检查器/通信列共享右栏容器（检查器优先），任务详情抽屉独立（组件自带 tabIndex=-1）。
+  const topPanelKey = selectedMember
+    ? `member:${selectedMember.id}`
+    : commOpen
+      ? "comm"
+      : selectedTicketId
+        ? "ticket"
+        : null;
+  const panelFocusRef = useRef<{ key: string | null; origin: HTMLElement | null }>({ key: null, origin: null });
+  useEffect(() => {
+    const previous = panelFocusRef.current.key;
+    if (topPanelKey === previous) return;
+    const doc = typeof document === "undefined" ? null : document;
+    if (topPanelKey === null) {
+      const origin = panelFocusRef.current.origin;
+      panelFocusRef.current = { key: null, origin: null };
+      if (origin?.isConnected) origin.focus({ preventScroll: true });
+      return;
+    }
+    if (previous === null) {
+      const active = doc?.activeElement;
+      panelFocusRef.current = {
+        key: topPanelKey,
+        origin: active instanceof HTMLElement ? active : null,
+      };
+    } else {
+      panelFocusRef.current = { ...panelFocusRef.current, key: topPanelKey };
+    }
+    // 面板在本轮渲染里刚挂载，等一帧再聚焦。
+    if (typeof window === "undefined") return;
+    const frame = window.requestAnimationFrame(() => {
+      const target = topPanelKey === "ticket"
+        ? rootRef.current?.querySelector<HTMLElement>(".agent-teams-task-detail")
+        : rightDockRef.current;
+      target?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [topPanelKey]);
+
+  // 通信列样式：桌面按视口收缩（min(380px, 40vw)，固定 380 会压瘪左栏）；
+  // 窄屏整宽，位置/阴影交给 --overlay 的样式层。
+  const commPanelStyle: CSSProperties = isMobile
+    ? {
+        width: "100%",
+        flex: "none",
+        minHeight: 0,
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+        background: "var(--bg-panel)",
+      }
+    : {
+        width: "min(380px, 40vw)",
+        flex: "none",
+        minHeight: 0,
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+        borderLeft: "var(--hairline) solid var(--border)",
+        background: "var(--bg-panel)",
+      };
+
   return (
     <main
       ref={rootRef}
@@ -386,7 +446,7 @@ export function AgentTeamsView({
       style={{ overflow: "hidden" }}
       // 根节点挂载时就会拿到焦点（:216）。Esc 在这里不能落到 window 的全局快捷键，
       // 否则会停掉仍在后台运行的 agent（与 ScheduledView / AutofixView 同一写法）。
-      onKeyDown={(event) => { if (event.key === "Escape") event.preventDefault(); }}
+      onKeyDown={(event) => { if (event.key === "Escape") event.preventDefault(); handleEscapeKey(event); }}
     >
       {/* 左右分栏：左=既有整页工作台（自身滚动），右=成员检查器/通信流/导轨（C7/C11）。 */}
       <div className="agent-teams-workbench-row" style={{ display: "flex", height: "100%", minHeight: 0 }}>
@@ -434,29 +494,16 @@ export function AgentTeamsView({
                 </div>
               </div>
               {/* C9 Live 指示：仅在实时跟随时显示 following 徽标 + 三态提示 + 已用时长 + 会话时钟。
-                  live/replay 切换本身由上方时间轴负责，这里只补额外视觉信息。 */}
-              {timeline.isLive && liveIndicator && (
-                <div
-                  className="agent-teams-live"
-                  data-testid="agent-teams-live-controls"
-                  style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
-                >
-                  <span className="agent-teams-timeline-state agent-teams-timeline-state--live">
-                    <span className="agent-teams-timeline-dot agent-teams-timeline-dot--live" aria-hidden="true" />
-                    {t("teams.live.following")}
-                  </span>
-                  <span className="agent-teams-live-hint" style={{ color: "var(--text-muted)", fontSize: "var(--fs-small)" }}>
-                    {liveIndicator.hint}
-                  </span>
-                  <span className="agent-teams-live-stat" style={{ display: "inline-flex", flexDirection: "column", gap: 2 }}>
-                    <span className="agent-teams-member-role" style={{ fontSize: "var(--fs-micro)" }}>{t("teams.live.elapsed")}</span>
-                    <span style={{ fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}>{liveIndicator.elapsed}</span>
-                  </span>
-                  <span className="agent-teams-live-stat" style={{ display: "inline-flex", flexDirection: "column", gap: 2 }}>
-                    <span className="agent-teams-member-role" style={{ fontSize: "var(--fs-micro)" }}>{t("teams.live.sessionClock")}</span>
-                    <span style={{ fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}>{liveIndicator.clock}</span>
-                  </span>
-                </div>
+                  秒级 now 在 AgentTeamsLiveClock 内部推进，本视图只在 isLive 时挂载它；
+                  叶子组件再自行判断页面可见性（隐藏时停表、切回前台补一次）。
+                  live/replay 切换本身由下方时间轴负责，这里只补额外视觉信息。 */}
+              {timeline.isLive && (
+                <AgentTeamsLiveClock
+                  teamStatus={snapshot.team.status}
+                  workingCount={workingCount}
+                  createdAt={snapshot.team.createdAt}
+                  generatedAt={snapshot.generatedAt}
+                />
               )}
             </div>
           )}
@@ -469,6 +516,8 @@ export function AgentTeamsView({
             <AgentTeamsRuntimeControls
               team={snapshot.team}
               readOnly={!timeline.isLive}
+              onAbort={onAbortLead}
+              onEditMembers={onEditMembers}
             />
           </div>
         )}
@@ -529,6 +578,21 @@ export function AgentTeamsView({
           </div>
         )}
 
+        {/* T7 回放控制条：倍速（0.5/1/2/4）+ 滑轨 seek + ←/→ 跳帧 + 帧位置/帧时间。
+            实时与回放都挂载——任何时候拖动滑轨都会钉住该帧（进入回放），倍速只
+            影响自动播放间隔。只有一格历史时不渲染，避免一条死控件。 */}
+        {snapshot && timeline.latestIndex > 0 && (
+          <AgentTeamsReplayBar
+            selectedIndex={Math.max(0, timeline.selectedIndex)}
+            latestIndex={timeline.latestIndex}
+            frameAt={snapshot.generatedAt}
+            speed={timeline.speed}
+            onSpeedChange={timeline.setSpeed}
+            onSeek={timeline.seek}
+            onStep={(delta) => (delta < 0 ? timeline.stepBack() : timeline.stepForward())}
+          />
+        )}
+
         {snapshot && timeline.isReplaying && timeline.frameExpired && (
           <p className="scheduled-hint agent-teams-timeline-expired" role="status">{t("teams.frameExpired")}</p>
         )}
@@ -582,7 +646,18 @@ export function AgentTeamsView({
           </div>
         )}
 
-        {failed && <p className="scheduled-error" role="alert">{t("teams.loadFailed")}</p>}
+        {failed && (
+          <p className="scheduled-error" role="alert">
+            {t("teams.loadFailed")}
+            <button
+              type="button"
+              className="agent-teams-timeline-button agent-teams-retry"
+              onClick={handleRetryLists}
+            >
+              {t("teams.retry")}
+            </button>
+          </p>
+        )}
         {loading && !snapshot && !failed && <p className="scheduled-hint">{t("teams.loading")}</p>}
         {!loading && !failed && !snapshot && <p className="scheduled-hint">{t("teams.empty")}</p>}
 
@@ -707,12 +782,14 @@ export function AgentTeamsView({
               <TaskBoardCanvas
                 snapshot={snapshot}
                 requestedWidth={boardWidth}
+                focusedTicketId={focusedTicketId}
+                previousSnapshot={previousSnapshot}
                 onSelectTask={(ticketId) => setSelectedTicketId(ticketId)}
                 formation={(width) => (
                   <FormationBand
                     snapshot={snapshot}
                     width={width}
-                    activeMessageId={flightQueue[0] ?? null}
+                    activeMessageId={activeMessageId}
                     onSelectMember={(memberId) => openMemberInspector(memberId)}
                   />
                 )}
@@ -741,9 +818,18 @@ export function AgentTeamsView({
         </section>
       </div>
 
-      {/* 右列：成员检查器（C7）→ 通信流面板（C11，含注入槽位）→ 收起导轨（点击展开）。 */}
+      {/* 右列：成员检查器（C7）→ 通信流面板（C11，含注入槽位）→ 收起导轨（点击展开）。
+          窄屏（≤640px）加 --overlay 与 data-layout="drawer"：几何由样式层改成覆盖式
+          抽屉/底部全宽，本组件只负责标出形态。 */}
       {snapshot && (
-        <div className="agent-teams-right-dock" style={{ display: "flex", flex: "none", minHeight: 0 }}>
+        <div
+          ref={rightDockRef}
+          tabIndex={-1}
+          className={`agent-teams-right-dock${isMobile && dockOpen ? " agent-teams-right-dock--overlay" : ""}`}
+          data-layout={isMobile ? (dockOpen ? "drawer" : "rail") : "side"}
+          data-narrow={isMobile ? "true" : undefined}
+          style={{ display: "flex", flex: "none", minHeight: 0 }}
+        >
           {selectedMember ? (
             <AgentTeamsMemberInspector
               snapshot={snapshot}
@@ -754,20 +840,13 @@ export function AgentTeamsView({
             />
           ) : commOpen ? (
             <aside
+              ref={commPanelRef}
+              tabIndex={-1}
               className="agent-teams-comm-panel"
               data-testid="agent-teams-communication-pane"
               aria-label={t("teams.communication.title")}
-              style={{
-                // 右列固定 380 会在窄视口把左栏压到 ~200px；40vw 上限让它随视口收缩。
-                width: "min(380px, 40vw)",
-                flex: "none",
-                minHeight: 0,
-                height: "100%",
-                display: "flex",
-                flexDirection: "column",
-                borderLeft: "var(--hairline) solid var(--border)",
-                background: "var(--bg-panel)",
-              }}
+              data-narrow={isMobile ? "true" : undefined}
+              style={commPanelStyle}
             >
               <div
                 style={{
@@ -794,8 +873,10 @@ export function AgentTeamsView({
                 <AgentTeamsCommunicationFeed
                   snapshot={snapshot}
                   fill
-                  onFocusTask={(taskId) => setSelectedTicketId(taskId)}
+                  onFocusTask={setFocusedTicketId}
                   onOpenMember={(member) => openMemberInspector(member.id)}
+                  activeMessageId={activeMessageId}
+                  focusedTicketId={focusedTicketId}
                 />
               </div>
             </aside>

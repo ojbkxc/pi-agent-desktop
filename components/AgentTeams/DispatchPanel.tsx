@@ -62,9 +62,37 @@ export const MEMBER_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 type Translator = (key: string, params?: TranslationParams) => string;
 
-/** 建议行稳定 key（同票同派活唯一）。 */
+/** 建议行稳定 key（同票同派活同代际唯一）。
+ *
+ * 代际（expectedUpdatedAt）纳入 key：改派建议的 expects 随票面 updatedAt 变化——同一
+ * 派活被重新分配后 assignmentId/expectedUpdatedAt 都变。以前只拼 `kind:ticketId:assignmentId`，
+ * 旧代际的失败/冲突文案会挂到新建议行上；纳入 generation 后，旧结果天然落到别的 key，
+ * 配合 refresh 后的 pruneRowResults 一起清掉。
+ */
 export function suggestionRowKey(s: DispatchSuggestion): string {
-  return `${s.kind}:${s.ticketId}:${s.assignmentId ?? ""}`;
+  return `${s.kind}:${s.ticketId}:${s.assignmentId ?? ""}:${s.expectedUpdatedAt ?? ""}`;
+}
+
+/** 只接受最新一次 refresh 响应的请求闸：并发/乱序时旧响应一律丢弃。 */
+export interface RequestGate {
+  /** 开始一次请求，返回自增序号。 */
+  begin(): number;
+  /** 该序号是否仍是最新一次（旧响应返回 false）。 */
+  isLatest(id: number): boolean;
+}
+
+/** 建一个自增请求闸（组件用 ref 持有单例）。 */
+export function createRequestGate(): RequestGate {
+  let latest = 0;
+  return {
+    begin(): number {
+      latest += 1;
+      return latest;
+    },
+    isLatest(id: number): boolean {
+      return id === latest;
+    },
+  };
 }
 
 /** POST /assignments 请求体（v5 §一.2）：改派必带 assignmentId+expectedUpdatedAt；
@@ -115,11 +143,30 @@ export function outcomeText(outcome: string, error: string | undefined, t: Trans
   }
 }
 
-type RowResult =
+export type RowResult =
   | { phase: "delivered"; text: string }
   | { phase: "skipped"; text: string }
   | { phase: "conflict"; text: string }
   | { phase: "failed"; text: string; clientRequestId: string; body: Record<string, unknown> };
+
+/**
+ * 刷新成功后按当前建议集合修剪行结果：建议消失或代际变化（assignmentId / expectedUpdatedAt
+ * 改变 → key 变）的旧结果一并清掉，避免把上一代际的失败/冲突文案挂到新建议上。
+ * 无变化时返回原对象，避免无谓重渲染。
+ */
+export function pruneRowResults(
+  prev: Record<string, RowResult>,
+  suggestions: DispatchSuggestion[],
+): Record<string, RowResult> {
+  const live = new Set(suggestions.map(suggestionRowKey));
+  let changed = false;
+  const next: Record<string, RowResult> = {};
+  for (const [key, value] of Object.entries(prev)) {
+    if (live.has(key)) next[key] = value;
+    else changed = true;
+  }
+  return changed ? next : prev;
+}
 
 interface MemberReceipt {
   name: string;
@@ -157,6 +204,9 @@ export function DispatchPanel({
   const inFlightRef = useRef(false);
   const aliveRef = useRef(true);
   useEffect(() => () => { aliveRef.current = false; }, []);
+  // 自增请求闸：快照节奏 + 手动刷新可能并发，只接受最新一次响应（先发后到的旧响应丢弃）。
+  const gateRef = useRef<RequestGate | null>(null);
+  if (gateRef.current === null) gateRef.current = createRequestGate();
 
   const refresh = useCallback(async () => {
     if (!team) {
@@ -164,21 +214,27 @@ export function DispatchPanel({
       setLoadError(null);
       return;
     }
+    const gate = gateRef.current;
+    if (!gate) return;
+    const requestId = gate.begin();
     setLoading(true);
     try {
       const response = await fetch(`/api/teams/${encodeURIComponent(team)}/workload`, { cache: "no-store" });
+      if (!aliveRef.current || !gate.isLatest(requestId)) return;
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json() as WorkloadResponse;
-      if (!aliveRef.current) return;
+      if (!aliveRef.current || !gate.isLatest(requestId)) return;
       setWorkload(data);
       setLoadError(null);
+      // 建议集合换代：清掉已消失/代际变化对应的行结果，避免旧文案串到新建议。
+      setRowResults((prev) => pruneRowResults(prev, data.suggestions));
     } catch (error) {
       // 只降级本面板：原画布（泳道/编队带/统计头）不消费本面板任何状态。
-      if (!aliveRef.current) return;
+      if (!aliveRef.current || !gate.isLatest(requestId)) return;
       setWorkload(null);
       setLoadError(error instanceof Error ? error.message : String(error));
     } finally {
-      if (aliveRef.current) setLoading(false);
+      if (aliveRef.current && gate.isLatest(requestId)) setLoading(false);
     }
   }, [team]);
 

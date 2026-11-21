@@ -144,3 +144,116 @@ test("通信流参与者可点开成员检查器：onOpenMember 接到 openMembe
   assert.match(source, /const openMemberInspector = useCallback\(\(memberId: string\) => \{[\s\S]*?setSelectedTicketId\(null\);[\s\S]*?setSelectedMemberId\(memberId\);[\s\S]*?setCommOpen\(true\);/);
 });
 
+// ── T8 独立部分：飞线生命周期 / 焦点通道 / 名册重试 / Esc 优先级 / 窄屏 ──────
+const ordered = (source, ...needles) => {
+  const positions = needles.map((needle) => source.indexOf(needle));
+  for (let i = 0; i < positions.length; i += 1) assert.ok(positions[i] >= 0, `缺少片段：${needles[i]}`);
+  for (let i = 1; i < positions.length; i += 1) assert.ok(positions[i] > positions[i - 1], `顺序错误：${needles[i]} 应在 ${needles[i - 1]} 之后`);
+};
+
+test("T8 飞线队列：headId + deadline 驱动，追加新消息不重置当前这条的计时器", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(source, /const \[flightHead, setFlightHead\] = useState<\{ id: string; expiresAt: number \} \| null>\(null\)/);
+  assert.match(source, /setFlightHead\(\{ id: next, expiresAt: Date\.now\(\) \+ MESSAGE_FLIGHT_MS \}\)/);
+  // 到点下线只依赖 head：pending 追加不触发重排，否则当前这条会被无限续命。
+  assert.match(source, /const remaining = Math\.max\(0, flightHead\.expiresAt - Date\.now\(\)\)/);
+  assert.match(source, /\}, \[flightHead\]\);/);
+  assert.doesNotMatch(source, /setFlightQueue/, "旧的数组队列计时器会随追加重置，已移除");
+});
+
+test("T8 飞线队列：进入回放/非实时清空，seen ids 按快照窗口裁剪且有上限", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(source, /if \(timeline\.isLive\) return;\s*\n\s*setFlightHead\(null\);\s*\n\s*setFlightPending\(\[\]\);/);
+  assert.match(source, /const FLIGHT_SEEN_LIMIT = \d+;/);
+  assert.match(source, /if \(seen\.ids\.size > FLIGHT_SEEN_LIMIT\) \{\s*\n\s*seen\.ids = new Set\(messages\.map\(\(message\) => message\.id\)\)/);
+  assert.match(source, /slice\(-FLIGHT_PENDING_LIMIT\)/);
+});
+
+test("T8 焦点通道：通信流 onFocusTask 只聚焦，不再打开任务抽屉", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(source, /const \[focusedTicketId, setFocusedTicketId\] = useState<string \| null>\(null\)/);
+  assert.match(source, /onFocusTask=\{setFocusedTicketId\}/);
+  assert.doesNotMatch(source, /onFocusTask=\{\(taskId\) => setSelectedTicketId\(taskId\)\}/, "悬停不得打开任务抽屉");
+  // 任务点击仍走抽屉。
+  assert.match(source, /onSelectTask=\{\(ticketId\) => setSelectedTicketId\(ticketId\)\}/);
+});
+
+test("T8 名册：加载成功清空 listFailed，失败告警旁有重试按钮（teams.retry）", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(source, /setTeams\(data\.teams\);[\s\S]*?setListFailed\(false\);/);
+  assert.match(source, /const handleRetryLists = useCallback\(\(\) => \{[\s\S]*?setListFailed\(false\);[\s\S]*?setRetryKey\(\(key\) => key \+ 1\);/);
+  assert.match(source, /className="agent-teams-timeline-button agent-teams-retry"/);
+  assert.match(source, /onClick=\{handleRetryLists\}/);
+  assert.match(source, /t\("teams\.retry"\)/);
+  // 重试键同时重拉时间线轮询（useTeamTimeline 的第二个参数）。
+  assert.match(source, /useTeamTimeline\(selected, retryKey\)/);
+});
+
+test("T8 Esc：先关成员检查器 → 通信面板 → 任务抽屉；根节点仍吞掉 Esc 防停后台 agent", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(source, /if \(event\.key === "Escape"\) event\.preventDefault\(\); handleEscapeKey\(event\);/);
+  ordered(
+    source,
+    "const handleEscapeKey",
+    "if (selectedMemberId) { setSelectedMemberId(null); return; }",
+    "if (commOpen) { setCommOpen(false); return; }",
+    "if (selectedTicketId) { setSelectedTicketId(null); }",
+  );
+});
+
+test("T8 焦点管理：打开面板焦点进入容器，关闭归还", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(source, /const topPanelKey = selectedMember\s*\? `member:\$\{selectedMember\.id\}`/);
+  assert.match(source, /const origin = panelFocusRef\.current\.origin;/);
+  assert.match(source, /origin\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(source, /target\?\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(source, /ref=\{rightDockRef\}\s*\n\s*tabIndex=\{-1\}/);
+});
+
+test("T8 窄屏：右栏以 data-layout 标出抽屉形态（几何交样式层）", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(source, /import \{ useIsMobile \} from "@\/hooks\/useIsMobile"/);
+  assert.match(source, /const isMobile = useIsMobile\(\);/);
+  assert.match(source, /agent-teams-right-dock--overlay/);
+  assert.match(source, /data-layout=\{isMobile \? \(dockOpen \? "drawer" : "rail"\) : "side"\}/);
+  assert.match(source, /width: "min\(380px, 40vw\)"/);
+  assert.match(source, /width: "100%"/, "窄屏分支整宽");
+});
+
+test("T8：编队带活动消息来自飞线 head（不再是队列下标）", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(source, /const activeMessageId = flightHead\?\.id \?\? null;/);
+  assert.match(source, /activeMessageId=\{activeMessageId\}/);
+});
+
+// ── T8 依赖接线（canvas T1/T2/T4、runtime-data T10 的实际签名）──────────────
+test("T8 接线：TaskBoardCanvas 收到 focusedTicketId 与 previousSnapshot", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(source, /<TaskBoardCanvas\b[\s\S]*?focusedTicketId=\{focusedTicketId\}/);
+  assert.match(source, /previousSnapshot=\{previousSnapshot\}/);
+  // previousSnapshot 与当前帧同源（时间线的前一格），不是别的缓存。
+  assert.match(source, /const previousSnapshot = timeline\.selectedIndex > 0\s*\n\s*\? timeline\.snapshots\[timeline\.selectedIndex - 1\]\s*\n\s*: undefined;/);
+  // 任务点击仍打开抽屉（与悬停聚焦互不混淆）。
+  assert.match(source, /onSelectTask=\{\(ticketId\) => setSelectedTicketId\(ticketId\)\}/);
+});
+
+test("T8 接线：运行时控件拿到 onAbort=onAbortLead 与 onEditMembers（新 Props 可选）", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(source, /onAbortLead\?: \(\) => void;/);
+  assert.match(source, /onEditMembers\?: \(\) => void;/);
+  assert.match(source, /onAbortLead,\s*\n\s*onEditMembers,\s*\n\s*\}\: Props/);
+  assert.match(source, /<AgentTeamsRuntimeControls\b[\s\S]*?onAbort=\{onAbortLead\}[\s\S]*?onEditMembers=\{onEditMembers\}/);
+  assert.match(source, /readOnly=\{!timeline\.isLive\}/);
+});
+
+test("T8 接线：CommunicationFeed 与编队带共用同一条飞线，并收到画布聚焦票", async () => {
+  const source = await read("./AgentTeamsView.tsx");
+  assert.match(
+    source,
+    /<AgentTeamsCommunicationFeed\b[\s\S]*?onFocusTask=\{setFocusedTicketId\}[\s\S]*?activeMessageId=\{activeMessageId\}[\s\S]*?focusedTicketId=\{focusedTicketId\}/,
+  );
+  // 两条通道喂的是同一个来源：飞线 head 与悬停/键盘聚焦的票。
+  assert.match(source, /const activeMessageId = flightHead\?\.id \?\? null;/);
+  assert.match(source, /const \[focusedTicketId, setFocusedTicketId\] = useState<string \| null>\(null\)/);
+});
+

@@ -11401,6 +11401,100 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .agent-teams-timeline-button--primary { border-color: var(--accent); color: var(--accent); }
 .agent-teams-timeline-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/* 回放条：倍速组、帧位、帧时间与滑轨共用一行，窄屏允许换行。 */
+.agent-teams-replay-bar { flex-wrap: wrap; }
+.agent-teams-replay-speeds { flex-wrap: wrap; }
+.agent-teams-replay-label { color: var(--text-dim); font-size: var(--fs-micro); }
+
+.agent-teams-replay-speed--active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--bg-selected);
+}
+
+.agent-teams-replay-position { white-space: nowrap; }
+.agent-teams-replay-time { color: var(--text-muted); font-size: var(--fs-micro); white-space: nowrap; }
+
+.agent-teams-replay-range {
+  flex: 1 1 180px;
+  min-width: 120px;
+  accent-color: var(--accent);
+}
+
+.agent-teams-replay-range:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 名册/计划拉取失败：错误行里的重试按钮与文案同排，不换行也不贴字。 */
+.agent-teams-retry {
+  margin-left: 8px;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+/* 团队条拉取失败态：没有快照时唯一可见的提示，低调红边红字，正文单行省略。 */
+.agent-team-strip--error {
+  color: var(--danger);
+  border-color: var(--danger);
+  cursor: default;
+}
+
+.agent-team-strip-error-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 窄屏右栏改成覆盖式抽屉：从底部全宽升起，左列工作台不再被挤压变窄。
+   只有 data-layout="drawer"（点开成员/通信流）才覆盖；收起导轨仍是普通列。 */
+.agent-teams-right-dock--overlay {
+  position: fixed;
+  inset: auto 0 0 0;
+  width: 100% !important;
+  height: min(72vh, 620px) !important;
+  z-index: var(--z-dropdown);
+  border-top: var(--hairline) solid var(--border);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-dialog);
+  overflow: hidden;
+}
+
+.agent-teams-comm-panel[data-narrow="true"] { width: 100% !important; }
+
+/* 通信流：当前在编队总线上飞过的消息行（与 FormationBand 同一条 activeMessageId）
+   与画布聚焦票同票的行。行本身用 Tailwind 内联类，故用带祖先限定的属性选择器
+   提高特异性，保证盖过 utility 的 background。 */
+[data-find-transcript] [data-find-row][data-active-message="true"] {
+  background: var(--bg-selected);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+[data-find-transcript] [data-find-row][data-focused-ticket="true"] {
+  background: var(--bg-hover);
+}
+
+/* 任务详情里的归属徽标：推断（虚线灰）与「负责人没在干活」（警示色）必须一眼可辨。 */
+.agent-teams-task-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+
+.agent-teams-task-badge--inferred {
+  color: var(--text-muted);
+  border-style: dashed;
+}
+
+.agent-teams-task-badge--stalled {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
 /* ---- Render error screen (app/error.tsx, app/global-error.tsx) ------------
    Replaces Next's built-in "This page couldn't load" page, which the packaged
    app showed with no way to see the exception (no DevTools). */
@@ -11601,6 +11695,95 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .agent-teams-board-task--failed { border-left-color: var(--danger); }
 /* 依赖环内的票：虚线左边框做可辨识标记，不覆盖状态的色调。 */
 .agent-teams-board-task--cycle { border-left-style: dashed; }
+
+/* 依赖链聚焦（cc-haha dependencyChain）：悬停/聚焦一张票时，链内加亮、链外压暗。 */
+.agent-teams-board-task[data-chain-active="true"] {
+  z-index: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.agent-teams-board-task[data-chain-dimmed="true"] { opacity: 0.35; }
+
+.agent-teams-board-edge[data-chain-active="true"] { stroke: var(--accent); stroke-width: 2.5; }
+.agent-teams-board-edge[data-chain-dimmed="true"] { stroke-opacity: 0.2; }
+
+/* 依赖刚满足：短暂高亮一下，说明这张票是「刚被解锁」而不是一直可做。 */
+.agent-teams-board-task--unlocked { animation: agent-teams-unlocked 1.2s ease-out 1; }
+
+@keyframes agent-teams-unlocked {
+  from { box-shadow: 0 0 0 0 var(--success); }
+  to { box-shadow: 0 0 0 6px transparent; }
+}
+
+/* 任务卡进度条：有确定值用填充宽度，运行中但无确定值用流光。 */
+.agent-teams-board-task-progress {
+  display: block;
+  flex: none;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--bg-hover);
+}
+
+.agent-teams-board-task-progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--info);
+}
+
+.agent-teams-board-task-progress[data-progress="indeterminate"] .agent-teams-board-task-progress-fill {
+  width: 40% !important;
+  animation: agent-teams-progress-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes agent-teams-progress-indeterminate {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+
+/* 停滞：负责人已失败/挂起，但票还挂着。 */
+.agent-teams-board-task-stalled {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: scheduled-pulse 1.4s ease-in-out infinite;
+}
+
+/* 画布图例：颜色/虚线形状与任务卡、依赖边同源。 */
+.agent-teams-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: var(--fs-micro);
+}
+
+.agent-teams-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-teams-legend-swatch {
+  width: 18px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.agent-teams-legend-item[data-legend="unmet"] .agent-teams-legend-swatch {
+  border: 1px dashed var(--border);
+  background: transparent;
+}
+.agent-teams-legend-item[data-legend="satisfied"] .agent-teams-legend-swatch { background: var(--success); }
+.agent-teams-legend-item[data-legend="running"] .agent-teams-legend-swatch { background: var(--info); }
+.agent-teams-legend-item[data-legend="failed"] .agent-teams-legend-swatch { background: var(--danger); }
+.agent-teams-legend-item[data-legend="cycle"] .agent-teams-legend-swatch { background: var(--text-dim); }
+.agent-teams-legend-item[data-legend="flight"] .agent-teams-legend-swatch { background: var(--accent); }
 
 .agent-teams-board-cycle-warning {
   margin: 0 0 8px;
@@ -11920,6 +12103,45 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .agent-teams-formation-state--retrying .agent-teams-formation-state-dot { background: var(--warning); }
 .agent-teams-formation-state--parked .agent-teams-formation-state-dot { background: var(--text-muted); }
 .agent-teams-formation-state--error .agent-teams-formation-state-dot { background: var(--danger); }
+
+/* 编队卡：正在执行/等待的票 + 队长收件数；飞行中的消息给发送/接收方加环。 */
+.agent-teams-formation-taskline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 168px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+
+.agent-teams-formation-taskline-ticket {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-teams-formation-inbox {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-teams-formation-card[data-active-message="sender"] { box-shadow: 0 0 0 2px var(--accent); }
+.agent-teams-formation-card[data-active-message="recipient"] { box-shadow: 0 0 0 2px var(--info); }
+
+/* 减少动态效果：新增的脉冲/流光一并停掉。 */
+@media (prefers-reduced-motion: reduce) {
+  .agent-teams-board-task--unlocked,
+  .agent-teams-board-task-stalled,
+  .agent-teams-board-task-progress[data-progress="indeterminate"] .agent-teams-board-task-progress-fill,
+  .agent-teams-formation-state--working .agent-teams-formation-state-dot {
+    animation: none;
+  }
+}
 
 .agent-teams-formation-progress {
   display: flex;

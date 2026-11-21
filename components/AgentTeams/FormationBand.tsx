@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
-import type { TeamWorkbenchSnapshot } from "@/lib/agent-teams-swimlane";
+import type { TeamWorkbenchSnapshot, WorkbenchMessage } from "@/lib/agent-teams-swimlane";
 import {
   FORMATION_BOTTOM,
   FORMATION_TITLE_X,
@@ -14,6 +14,7 @@ import {
   MEMBER_SLOT_WIDTH,
   MEMBER_TOP,
   PEER_BUS_Y,
+  identityMatches,
   layoutFormation,
   sortWorkersByUrgency,
   type FormationMember,
@@ -51,6 +52,49 @@ function urgencyLabelKey(urgency: TicketUrgency): string {
 function ModelChip({ model }: { model: string | null }) {
   if (!model) return null;
   return <span className="agent-teams-formation-model" title={model}>{model}</span>;
+}
+
+/** 成员在当前活动消息里的角色（发送方 / 接收方）。 */
+export type ActiveMessageRole = "sender" | "recipient";
+
+export interface ActiveMessageParticipants {
+  senders: Set<string>;
+  recipients: Set<string>;
+}
+
+/**
+ * 从一条活动消息的 from/to/recipients 算出参与成员（按 member.id 收集）。
+ * 广播（kind=broadcast 或 to="*"）且没有显式收件人时，除发送者外全员都是收件人。
+ * 别名匹配复用 formation-layout 的 identityMatches，与飞线/通信流同口径。
+ */
+export function activeMessageParticipants(
+  message: WorkbenchMessage | undefined,
+  members: TeamWorkbenchSnapshot["members"],
+): ActiveMessageParticipants {
+  const senders = new Set<string>();
+  const recipients = new Set<string>();
+  if (!message) return { senders, recipients };
+
+  for (const member of members) {
+    if (identityMatches(member.id, member.name, message.from)) senders.add(member.id);
+  }
+
+  const broadcast = message.kind === "broadcast" || message.to === "*";
+  const explicit = [message.to, ...(message.recipients ?? [])]
+    .filter((identity) => Boolean(identity) && identity !== "*");
+
+  for (const member of members) {
+    if (senders.has(member.id)) continue;
+    if (broadcast && explicit.length === 0) {
+      recipients.add(member.id);
+      continue;
+    }
+    if (explicit.some((identity) => identityMatches(member.id, member.name, identity))) {
+      recipients.add(member.id);
+    }
+  }
+
+  return { senders, recipients };
 }
 
 /** 忙闲徽标文案键与计数（#55 第一段，纯读展示）：running 优先于 pending。 */
@@ -104,10 +148,25 @@ function ProgressBar({ node }: { node: FormationMember }) {
   );
 }
 
-function MemberCard({ node, workload, onSelect }: { node: FormationMember; workload?: MemberWorkload; onSelect: (member: FormationMember) => void }) {
+function MemberCard({
+  node,
+  workload,
+  onSelect,
+  activeRole,
+}: {
+  node: FormationMember;
+  workload?: MemberWorkload;
+  onSelect: (member: FormationMember) => void;
+  activeRole?: ActiveMessageRole;
+}) {
   const { t } = useI18n();
   const { member, isLead } = node;
   const stateLabel = t(workStateKey(node.workState));
+  const taskLine = node.currentTicketId
+    ? node.blockedDependencyId
+      ? { key: "teams.memberState.waitingDependency", params: { ticket: `#${node.blockedDependencyId}` } }
+      : { key: "teams.memberState.executingTicket", params: { ticket: `#${node.currentTicketId}` } }
+    : null;
   return (
     <article
       className={`agent-teams-formation-card ${isLead ? "agent-teams-formation-card--lead" : ""} ${accentClass(node.accent)}`}
@@ -115,6 +174,10 @@ function MemberCard({ node, workload, onSelect }: { node: FormationMember; workl
       data-member-id={member.id}
       data-member-state={node.workState}
       data-urgency={node.urgency ?? undefined}
+      data-active-message={activeRole}
+      data-current-ticket={node.currentTicketId ?? undefined}
+      data-blocked-dependency={node.blockedDependencyId ?? undefined}
+      data-inbox-count={node.inboxCount}
     >
       <button
         type="button"
@@ -133,6 +196,20 @@ function MemberCard({ node, workload, onSelect }: { node: FormationMember; workl
           <span className="agent-teams-formation-state-dot" aria-hidden="true" />
           <span className="agent-teams-formation-state-label">{stateLabel}</span>
         </span>
+        {(taskLine || node.inboxCount > 0) && (
+          <span className="agent-teams-formation-taskline">
+            {taskLine && (
+              <span className="agent-teams-formation-taskline-ticket" data-member-task={taskLine.key}>
+                {t(taskLine.key, taskLine.params)}
+              </span>
+            )}
+            {node.inboxCount > 0 && (
+              <span className="agent-teams-formation-inbox" data-inbox={node.inboxCount}>
+                {t("teams.memberState.inbox", { count: node.inboxCount })}
+              </span>
+            )}
+          </span>
+        )}
         {!isLead && <ProgressBar node={node} />}
         {(node.urgency || (!isLead && workload)) && (
           <span className="agent-teams-formation-meta-row">
@@ -167,7 +244,12 @@ interface Props {
  * peer bus，填掉任务泳道上方的空白区（见 lib/agent-teams-formation-layout.ts）。
  * 成员默认按加入顺序（稳定不重排），可切换「按紧急度重排」；紧急度变化只改徽标。
  */
-export function FormationBand({ snapshot, width, onSelectMember, activeMessageId }: Props) {
+export const FormationBand = memo(function FormationBand({
+  snapshot,
+  width,
+  onSelectMember,
+  activeMessageId,
+}: Props) {
   const { t } = useI18n();
   const layout = useMemo(() => layoutFormation(snapshot, width), [snapshot, width]);
   const [sortMode, setSortMode] = useState<"joined" | "urgency">("joined");
@@ -206,6 +288,16 @@ export function FormationBand({ snapshot, width, onSelectMember, activeMessageId
     () => formationFlights(activeMessage, flightNodes),
     [activeMessage, flightNodes],
   );
+  // 当前活动消息的发送方 / 接收方 → 成员卡高亮。与飞线共用同一条消息。
+  const participants = useMemo(
+    () => activeMessageParticipants(activeMessage, snapshot.members),
+    [activeMessage, snapshot.members],
+  );
+  const activeRoleOf = (memberId: string): ActiveMessageRole | undefined => {
+    if (participants.senders.has(memberId)) return "sender";
+    if (participants.recipients.has(memberId)) return "recipient";
+    return undefined;
+  };
 
   return (
     <div
@@ -287,15 +379,16 @@ export function FormationBand({ snapshot, width, onSelectMember, activeMessageId
         </span>
       ))}
 
-      {lead && <MemberCard node={lead} onSelect={handleSelect} />}
+      {lead && <MemberCard node={lead} onSelect={handleSelect} activeRole={activeRoleOf(lead.member.id)} />}
       {orderedWorkers.map((node) => (
         <MemberCard
           key={node.member.id}
           node={node}
           workload={workloads.get(node.member.id)}
           onSelect={handleSelect}
+          activeRole={activeRoleOf(node.member.id)}
         />
       ))}
     </div>
   );
-}
+});

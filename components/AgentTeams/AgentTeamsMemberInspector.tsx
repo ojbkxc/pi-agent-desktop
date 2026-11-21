@@ -2,8 +2,11 @@
 
 import { useMemo } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { useProgressiveReveal } from "@/hooks/useProgressiveReveal";
 import { MarkdownBody } from "@/components/MarkdownBody";
 import { getTicketUrgency, type TicketUrgency } from "@/lib/agent-teams-task-layout";
+import { deriveTicketHistory } from "@/lib/agent-teams-member-history";
+import { formatDurationHuman } from "@/lib/format-units";
 import { formatUpdatedTime } from "@/lib/i18n/format";
 import type { Locale } from "@/lib/i18n/types";
 import type {
@@ -66,23 +69,33 @@ function formatMessageTime(timestamp: string, locale: Locale): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 任务历史三分组（cc-haha groupRunning / groupUpcoming / groupCompleted 语义）：
-// 运行中 / 未开始（blocked + available）/ 已完成（completed + failed，failed 也是 ended）。
+// 任务历史分组（cc-haha groupRunning / groupUpcoming / groupCompleted 语义）：
+// 运行中 / 未开始（blocked + available）/ 失败 / 已完成。
+// 失败票**不再**混进已完成分组，也不计入 completedCount——「完成」必须真的是完成，
+// 否则「3/3 完成」里掺了失败票会误导读者的判断。
 // ─────────────────────────────────────────────────────────────────────────────
 
-type TaskGroup = "running" | "upcoming" | "completed";
+type TaskGroup = "running" | "upcoming" | "failed" | "completed";
 
 function ticketGroup(urgency: TicketUrgency): TaskGroup {
   if (urgency === "running") return "running";
-  if (urgency === "completed" || urgency === "failed") return "completed";
+  if (urgency === "failed") return "failed";
+  if (urgency === "completed") return "completed";
   return "upcoming";
 }
 
 const TASK_GROUPS: ReadonlyArray<{ group: TaskGroup; labelKey: string }> = [
   { group: "running", labelKey: ticketStateLabelKey("running") },
   { group: "upcoming", labelKey: ticketStateLabelKey("available") },
+  { group: "failed", labelKey: "teams.inspector.failed" },
   { group: "completed", labelKey: ticketStateLabelKey("completed") },
 ];
+
+/** lastError 命中「上下文超限」的口径（pi 的报错原文含 "prompt is too long"）。 */
+const CONTEXT_LIMIT_PATTERN = /prompt is too long/i;
+
+/** 空快照常量：检查器未传历史时保持引用稳定，避免 useMemo 反复重算。 */
+const EMPTY_SNAPSHOTS: TeamWorkbenchSnapshot[] = [];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 状态推导（移植 cc-haha currentStatusLabel / recoveryHint 的等价口径）：
@@ -117,6 +130,13 @@ export interface AgentTeamsMemberInspectorProps {
   onBack: () => void;
   /** 打开该成员的会话（无会话时按钮禁用）。 */
   onOpenSession?: (sessionId: string) => void;
+  /**
+   * 可选：工作台历史快照（useTeamTimeline.snapshots）。提供时在任务行右侧显示每票耗时；
+   * 缺省（或空）时不渲染耗时，行为与改动前一致。纯展示，不发起任何请求。
+   */
+  snapshots?: TeamWorkbenchSnapshot[];
+  /** 可选：当前查看的历史帧下标（与 snapshots 配对，默认 -1 表示无历史）。 */
+  selectedIndex?: number;
 }
 
 /**
@@ -130,6 +150,8 @@ export function AgentTeamsMemberInspector({
   isLead,
   onBack,
   onOpenSession,
+  snapshots = EMPTY_SNAPSHOTS,
+  selectedIndex = -1,
 }: AgentTeamsMemberInspectorProps) {
   const { t, locale } = useI18n();
 
@@ -178,6 +200,31 @@ export function AgentTeamsMemberInspector({
     [snapshot.messages, member],
   );
 
+  // 渐进披露：消息长列表先挂载前 REVEAL_PAGE_SIZE 条，底部「显示更早」再翻页。
+  const reveal = useProgressiveReveal(messages.length, member.id);
+  const mountedMessages = messages.slice(0, reveal.limit);
+
+  // 跨帧耗时：仅在提供了历史快照时才有值；无历史时为空 Map（不渲染耗时）。
+  const historyByTicket = useMemo(
+    () => deriveTicketHistory(snapshots, selectedIndex, member.id),
+    [snapshots, selectedIndex, member.id],
+  );
+
+  // 模型列：空 / "inherit" = 继承队长模型；队长模型也未知时显示「模型未知」。
+  const leadModel = (snapshot.members.find((candidate) => candidate.isLead)?.model ?? "").trim();
+  const modelLabel = useMemo(() => {
+    const own = (member.model ?? "").trim();
+    if (own && own.toLowerCase() !== "inherit") return own;
+    if (leadModel && leadModel.toLowerCase() !== "inherit") {
+      return `${t("teams.inspector.modelInherited")} · ${leadModel}`;
+    }
+    return t("teams.inspector.modelUnknown");
+  }, [member.model, leadModel, t]);
+
+  // 上下文超限：pi 的 "prompt is too long" 不是普通故障，恢复提示要换成 /compact 指引，
+  // 并优先于「停止/出错」的通用文案。
+  const contextLimited = CONTEXT_LIMIT_PATTERN.test(member.lastError ?? "");
+
   const workState = toWorkState(member.status);
   const completedCount = ticketHistory.filter((entry) => ticketGroup(entry.urgency) === "completed").length;
   const runningTask = ticketHistory.find((entry) => entry.urgency === "running")?.ticket;
@@ -212,11 +259,14 @@ export function AgentTeamsMemberInspector({
   })();
 
   // 恢复提示：停止/出错时说明怎么恢复（错误原因另由 lastError 如实带出）。
-  const recoveryHint = workState === "stopped"
-    ? t("teams.inspector.status.stoppedHint")
-    : workState === "error"
-      ? t("teams.inspector.status.errorHint")
-      : undefined;
+  // 上下文超限优先于此：/compact 才是真正的出路，「发送消息或重启」会误导。
+  const recoveryHint = contextLimited
+    ? t("teams.inspector.contextLimitHint")
+    : workState === "stopped"
+      ? t("teams.inspector.status.stoppedHint")
+      : workState === "error"
+        ? t("teams.inspector.status.errorHint")
+        : undefined;
 
   return (
     <aside
@@ -270,7 +320,7 @@ export function AgentTeamsMemberInspector({
           </div>
           <div>
             <dt className="agent-teams-member-role">{t("teams.inspector.model")}</dt>
-            <dd style={{ margin: 0, overflowWrap: "anywhere" }}>{member.model ?? "—"}</dd>
+            <dd data-testid="agent-teams-member-model" style={{ margin: 0, overflowWrap: "anywhere" }}>{modelLabel}</dd>
           </div>
           <div>
             <dt className="agent-teams-member-role">{t("teams.inspector.provider")}</dt>
@@ -309,7 +359,7 @@ export function AgentTeamsMemberInspector({
         )}
       </header>
 
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "12px 14px" }}>
+      <div ref={reveal.scrollRootRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "12px 14px" }}>
         <section className="agent-teams-section" aria-label={t("teams.inspector.taskHistory")}>
           <h3 className="agent-teams-section-title">
             {t("teams.inspector.taskHistory")} · {t("teams.status.completed").toLowerCase()} {completedCount}/{ticketHistory.length}
@@ -328,21 +378,34 @@ export function AgentTeamsMemberInspector({
                       {t(labelKey)} · {entries.length}
                     </h4>
                     <ol style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 6 }}>
-                      {entries.map(({ ticket, urgency }) => (
-                        <li
-                          key={ticket.id}
-                          data-testid={`agent-teams-member-task-${ticket.id}`}
-                          data-task-state={urgency}
-                          style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "var(--fs-small)" }}
-                        >
-                          <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", flex: "none" }}>#{ticket.id}</span>
-                          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={ticket.subject}>
-                            {ticket.subject}
-                          </span>
-                          <span className={`agent-teams-board-task-dot`} aria-hidden="true" />
-                          <span style={{ color: "var(--text-muted)", flex: "none" }}>{t(ticketStateLabelKey(urgency))}</span>
-                        </li>
-                      ))}
+                      {entries.map(({ ticket, urgency }) => {
+                        // 跨帧耗时：仅有历史时出现；无法计算（未结束）时不渲染。
+                        const durationText = formatDurationHuman(historyByTicket.get(ticket.id)?.durationMs ?? null);
+                        return (
+                          <li
+                            key={ticket.id}
+                            data-testid={`agent-teams-member-task-${ticket.id}`}
+                            data-task-state={urgency}
+                            style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "var(--fs-small)" }}
+                          >
+                            <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", flex: "none" }}>#{ticket.id}</span>
+                            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={ticket.subject}>
+                              {ticket.subject}
+                            </span>
+                            {durationText ? (
+                              <span
+                                className="agent-teams-member-task-duration"
+                                data-testid={`agent-teams-member-task-${ticket.id}-duration`}
+                                style={{ color: "var(--text-dim)", flex: "none", fontVariantNumeric: "tabular-nums", fontSize: "var(--fs-micro)" }}
+                              >
+                                {t("teams.inspector.duration", { duration: durationText })}
+                              </span>
+                            ) : null}
+                            <span className={`agent-teams-board-task-dot`} aria-hidden="true" />
+                            <span style={{ color: "var(--text-muted)", flex: "none" }}>{t(ticketStateLabelKey(urgency))}</span>
+                          </li>
+                        );
+                      })}
                     </ol>
                   </div>
                 );
@@ -356,16 +419,19 @@ export function AgentTeamsMemberInspector({
         <section className="agent-teams-section" style={{ marginTop: 16 }} aria-label={t("teams.inspector.messages")}>
           <h3 className="agent-teams-section-title">{t("teams.inspector.messages")}</h3>
           {messages.length > 0 ? (
-            <ol
-              data-testid="agent-teams-member-messages"
-              style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8 }}
-            >
-              {messages.map((row) => {
+            <>
+              <ol
+                data-testid="agent-teams-member-messages"
+                data-find-transcript=""
+                style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8 }}
+              >
+                {mountedMessages.map((row) => {
                 const sent = row.sent;
                 return (
                   <li
                     key={row.message.id}
                     data-testid={`agent-teams-member-message-${row.message.id}`}
+                    data-find-row={row.message.id}
                     data-message-direction={sent ? "sent" : "received"}
                     data-message-body={row.body.kind}
                     style={{
@@ -399,8 +465,31 @@ export function AgentTeamsMemberInspector({
                     )}
                   </li>
                 );
-              })}
-            </ol>
+                })}
+              </ol>
+              {reveal.hasMore && (
+                <div style={{ display: "flex", justifyContent: "center", marginTop: 8 }}>
+                  <button
+                    type="button"
+                    className="agent-teams-show-earlier"
+                    data-testid="agent-teams-member-show-earlier"
+                    onClick={reveal.showMore}
+                    style={{
+                      border: "var(--hairline) solid var(--border)",
+                      background: "var(--bg)",
+                      color: "var(--text-muted)",
+                      borderRadius: 999,
+                      padding: "2px 10px",
+                      fontSize: "var(--fs-micro)",
+                      cursor: "pointer",
+                      font: "inherit",
+                    }}
+                  >
+                    {t("teams.inspector.showEarlier", { count: messages.length - mountedMessages.length })}
+                  </button>
+                </div>
+              )}
+            </>
           ) : (
             <p className="scheduled-hint">{t("teams.inspector.noMessages")}</p>
           )}

@@ -3126,6 +3126,11 @@ export function AppShell() {
             sessionCwd={selectedSession?.cwd ?? null}
             onRequestClose={closeWorkspaceView}
             onOpenSession={(sessionId) => void handleOpenSession(sessionId)}
+            // 暂停团队时停掉队长生成：工作台的来源会话就是队长会话，等价于全局 Esc
+            // 停流的那条 abort，但这里只作用于该会话，不会波及别的 tab。
+            onAbortLead={selectedSession
+              ? () => { void sendAgentCommand(selectedSession.id, { type: "abort" }).catch(() => {}); }
+              : undefined}
           />
         )}
         {scheduledOpen && (

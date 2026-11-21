@@ -11,7 +11,12 @@
  * 把全员误判成永久工作中（cc-haha agentTeamsModel.ts:286-320 的原话）。
  */
 
-import type { TeamWorkbenchSnapshot, WorkbenchMember } from "./agent-teams-swimlane";
+import type {
+  TeamWorkbenchSnapshot,
+  WorkbenchMember,
+  WorkbenchMessage,
+  WorkbenchTicket,
+} from "./agent-teams-swimlane";
 import {
   URGENCY_ORDER,
   URGENCY_WEIGHT,
@@ -157,6 +162,15 @@ export interface FormationMember {
   segments: FormationSegment[];
   /** 名下最紧急的票态；无票为 null。 */
   urgency: TicketUrgency | null;
+  /**
+   * 当前正在执行的票：该成员 assignments 中 status=running、lastActivityAt 最新的票。
+   * 没有 running 派活时为 null。
+   */
+  currentTicketId: string | null;
+  /** 当前票 dependencies 中第一个仍未 ended 的依赖票 id；无当前票或依赖都已满足为 null。 */
+  blockedDependencyId: string | null;
+  /** 收件数：快照 messages 中 to/recipients 命中该成员的条数（不含自己发出的）。 */
+  inboxCount: number;
 }
 
 export interface FormationLayout {
@@ -192,6 +206,86 @@ function pickLead(snapshot: TeamWorkbenchSnapshot): WorkbenchMember | null {
 
 function ownedTickets(snapshot: TeamWorkbenchSnapshot, memberId: string) {
   return snapshot.tickets.filter((ticket) => ticket.ownerId === memberId);
+}
+
+/**
+ * 身份别名：同时认全名与 `name@team` 短名（与 lib/agent-teams-flight.ts 的飞行路线
+ * 同口径，避免「通信流认这条消息、编队卡却不认」）。导出给组件复用。
+ */
+export function identityAliases(value: string | undefined): string[] {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (!normalized) return [];
+  const short = normalized.split("@")[0] ?? normalized;
+  return normalized === short ? [normalized] : [normalized, short];
+}
+
+/** 一个消息身份（from/to/recipients 里的一项）是否命中某个成员（id 或 name）。 */
+export function identityMatches(
+  memberId: string,
+  memberName: string,
+  identity: string | undefined,
+): boolean {
+  const target = identityAliases(identity);
+  if (target.length === 0) return false;
+  const own = [...identityAliases(memberId), ...identityAliases(memberName)];
+  return target.some((alias) => own.includes(alias));
+}
+
+/** 该成员当前正在执行的票：assignments 中 status=running 且 lastActivityAt 最新的一张。 */
+function currentTicketFor(
+  snapshot: TeamWorkbenchSnapshot,
+  memberId: string,
+): WorkbenchTicket | null {
+  let best: WorkbenchTicket | null = null;
+  let bestAt = "";
+  for (const ticket of snapshot.tickets) {
+    let candidateAt: string | null = null;
+    for (const assignment of ticket.assignments) {
+      if (assignment.status !== "running" || assignment.memberId !== memberId) continue;
+      const at = assignment.lastActivityAt ?? "";
+      if (candidateAt === null || at > candidateAt) candidateAt = at;
+    }
+    if (candidateAt === null) continue;
+    // 严格大于保证同刻多票时取先出现者，结果稳定可复现。
+    if (best === null || candidateAt > bestAt) {
+      best = ticket;
+      bestAt = candidateAt;
+    }
+  }
+  return best;
+}
+
+/** 票 dependencies 中第一个未 ended 的依赖票 id（缺失/已满足的依赖跳过）。 */
+function firstOpenDependency(
+  ticket: WorkbenchTicket,
+  ticketsById: Map<string, WorkbenchTicket>,
+): string | null {
+  for (const dependencyId of ticket.dependencies) {
+    const dependency = ticketsById.get(dependencyId);
+    // 已从列表消失的依赖视为已解除（与画布/统计口径一致）。
+    if (dependency && dependency.status !== "ended") return dependencyId;
+  }
+  return null;
+}
+
+/** 快照消息中命中该成员收件（to/recipients）的条数；自己发出的不计。 */
+function inboxCountFor(
+  messages: readonly WorkbenchMessage[],
+  member: WorkbenchMember,
+): number {
+  let count = 0;
+  for (const message of messages) {
+    if (identityMatches(member.id, member.name, message.from)) continue;
+    const broadcast = message.kind === "broadcast" || message.to === "*";
+    const explicit = [message.to, ...(message.recipients ?? [])]
+      .filter((identity) => Boolean(identity) && identity !== "*");
+    if (broadcast && explicit.length === 0) {
+      count += 1;
+      continue;
+    }
+    if (explicit.some((identity) => identityMatches(member.id, member.name, identity))) count += 1;
+  }
+  return count;
 }
 
 /** 成员名下票按紧急度分桶；按 URGENCY_ORDER（最紧急在前）输出有序段。 */
@@ -232,9 +326,12 @@ export function layoutFormation(snapshot: TeamWorkbenchSnapshot, width: number):
   // 队长没有独立 runner：用「名册 running + 最近活动」推断其是否在读流，
   // 长时间无活动就显示 idle，别永远假装在干活。
   const leadStreaming = lead ? leadIsStreaming(snapshot, lead) : false;
+  const ticketsById = new Map(snapshot.tickets.map((ticket) => [ticket.id, ticket]));
+  const messages = snapshot.messages ?? [];
 
   const build = (member: WorkbenchMember, isLead: boolean, centerX: number, index: number): FormationMember => {
     const { segments, total, completed, urgency } = memberSegments(snapshot, member.id);
+    const currentTicket = currentTicketFor(snapshot, member.id);
     return {
       member,
       isLead,
@@ -250,6 +347,9 @@ export function layoutFormation(snapshot: TeamWorkbenchSnapshot, width: number):
       percent: total === 0 ? 0 : Math.round((completed / total) * 100),
       segments,
       urgency,
+      currentTicketId: currentTicket ? currentTicket.id : null,
+      blockedDependencyId: currentTicket ? firstOpenDependency(currentTicket, ticketsById) : null,
+      inboxCount: inboxCountFor(messages, member),
     };
   };
 

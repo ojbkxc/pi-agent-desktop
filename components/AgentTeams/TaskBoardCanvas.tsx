@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, type ReactNode } from "react";
+import { memo, useMemo, useState, type ReactNode } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import {
   DEPTH_COLUMN_TOP,
@@ -12,6 +12,8 @@ import {
   type PositionedTeamTask,
   type TicketUrgency,
 } from "@/lib/agent-teams-task-layout";
+import { dependencyChain } from "@/lib/agent-teams-dependency-focus";
+import { ticketProgress, ticketStalled } from "@/lib/agent-teams-task-progress";
 import type { TeamWorkbenchSnapshot, WorkbenchTicket } from "@/lib/agent-teams-swimlane";
 
 /**
@@ -84,15 +86,50 @@ interface Props {
    * 未传时保持原样（指针/键盘语义不变，既有渲染断言不受影响）。
    */
   onSelectTask?: (ticketId: string) => void;
+  /**
+   * 外部聚焦票（可选）：与画布内部的 hovered/键盘焦点合并，优先级
+   * hovered ?? focused ?? 本 prop。命中依赖链的任务卡与连线高亮，链外变暗。
+   */
+  focusedTicketId?: string | null;
+  /**
+   * 上一帧快照（可选）：用来判定「刚解锁」——上一帧 urgency=blocked、本帧
+   * available 的任务卡会短暂高亮。
+   */
+  previousSnapshot?: TeamWorkbenchSnapshot;
 }
+
+/** 底部图例六项（key 供 data 属性 / CSS，labelKey 由 i18n 渲染）。 */
+const LEGEND_ITEMS: ReadonlyArray<{ key: string; labelKey: string }> = [
+  { key: "unmet", labelKey: "teams.legend.unmet" },
+  { key: "satisfied", labelKey: "teams.legend.satisfied" },
+  { key: "running", labelKey: "teams.legend.running" },
+  { key: "failed", labelKey: "teams.legend.failed" },
+  { key: "cycle", labelKey: "teams.legend.cycle" },
+  { key: "flight", labelKey: "teams.legend.flight" },
+];
 
 /**
  * 共享任务列表画布（Agent Teams 页任务区）：上半区是编队带（formation 槽位），
  * 下半区按依赖深度分层，每层一条竖向泳道自左向右排列（根任务 → 中间层 → 收尾）。
  * 泳道底板与依赖连线画在同一个 SVG 里、且底板在连线之前，连线才不会被底板遮挡。
  */
-export function TaskBoardCanvas({ snapshot, requestedWidth = 0, formation, onSelectTask }: Props) {
+export const TaskBoardCanvas = memo(function TaskBoardCanvas({
+  snapshot,
+  requestedWidth = 0,
+  formation,
+  onSelectTask,
+  focusedTicketId = null,
+  previousSnapshot,
+}: Props) {
   const { t } = useI18n();
+  const [hoveredTicketId, setHoveredTicketId] = useState<string | null>(null);
+  const [keyboardFocusId, setKeyboardFocusId] = useState<string | null>(null);
+  // 合并优先级：鼠标悬停 ?? 键盘焦点 ?? 外部传入。都没有则整张画布不做链路滤镜。
+  const effectiveFocus = hoveredTicketId ?? keyboardFocusId ?? focusedTicketId;
+  const chain = useMemo(
+    () => (effectiveFocus ? dependencyChain(snapshot.tickets, effectiveFocus) : null),
+    [snapshot.tickets, effectiveFocus],
+  );
   const layout = useMemo(
     () => layoutTeamWorkbenchTasks(snapshot, requestedWidth),
     [snapshot, requestedWidth],
@@ -101,6 +138,24 @@ export function TaskBoardCanvas({ snapshot, requestedWidth = 0, formation, onSel
     () => new Map(snapshot.members.map((member) => [member.id, member.name])),
     [snapshot.members],
   );
+  // 本帧 / 上一帧的 urgency 口径（同一真源）用于「刚解锁」判定。
+  const urgencyNowById = useMemo(() => {
+    const byId = new Map(snapshot.tickets.map((ticket) => [ticket.id, ticket]));
+    return new Map(snapshot.tickets.map((ticket) => [ticket.id, getTicketUrgency(ticket, byId)]));
+  }, [snapshot.tickets]);
+  const urgencyBeforeById = useMemo(() => {
+    if (!previousSnapshot) return null;
+    const byId = new Map(previousSnapshot.tickets.map((ticket) => [ticket.id, ticket]));
+    return new Map(
+      previousSnapshot.tickets.map((ticket) => [ticket.id, getTicketUrgency(ticket, byId)]),
+    );
+  }, [previousSnapshot]);
+
+  /** 卡片在链路里的状态：null=无 focus；true=链内；false=链外。 */
+  const chainState = (ticketId: string): boolean | null => {
+    if (!chain) return null;
+    return chain.has(ticketId);
+  };
 
   if (snapshot.tickets.length === 0) {
     // 编队带展示的是「成员」，与票无关：成员已 spawn 但还没建票的团队也应看到编队带。
@@ -134,10 +189,13 @@ export function TaskBoardCanvas({ snapshot, requestedWidth = 0, formation, onSel
   const edges = layout.tasks.flatMap((to) => to.ticket.dependencies.flatMap((dependencyId) => {
     const from = positionedById.get(dependencyId);
     if (!from) return [];
+    const inChain = chain !== null && chain.has(dependencyId) && chain.has(to.ticket.id);
     return [{
       key: `${dependencyId}->${to.ticket.id}`,
       path: dependencyPath(from, to),
       satisfied: from.ticket.status === "ended",
+      chainActive: chain !== null && inChain,
+      chainDimmed: chain !== null && !inChain,
     }];
   }));
 
@@ -178,6 +236,8 @@ export function TaskBoardCanvas({ snapshot, requestedWidth = 0, formation, onSel
                 key={edge.key}
                 className={`agent-teams-board-edge${edge.satisfied ? " agent-teams-board-edge--done" : ""}`}
                 d={edge.path}
+                data-chain-active={edge.chainActive ? "true" : undefined}
+                data-chain-dimmed={edge.chainDimmed ? "true" : undefined}
               />
             ))}
           </svg>
@@ -208,16 +268,35 @@ export function TaskBoardCanvas({ snapshot, requestedWidth = 0, formation, onSel
             const ownerName = ticket.ownerId
               ? membersById.get(ticket.ownerId) ?? ticket.ownerId
               : t("teams.unassigned");
+            const progress = ticketProgress(ticket);
+            const stalled = ticketStalled(ticket, snapshot.members);
+            const inChain = chainState(ticket.id);
+            // 上一帧 blocked、本帧 available → 刚解锁。
+            const justUnlocked = urgencyBeforeById?.get(ticket.id) === "blocked"
+              && urgencyNowById.get(ticket.id) === "available";
+            const classNames = [
+              "agent-teams-board-task",
+              taskToneClass(task.urgency),
+              task.cycleId === null ? "" : "agent-teams-board-task--cycle",
+              justUnlocked ? "agent-teams-board-task--unlocked" : "",
+            ].filter(Boolean).join(" ");
             return (
               <article
                 key={ticket.id}
-                className={`agent-teams-board-task ${taskToneClass(task.urgency)}${task.cycleId === null ? "" : " agent-teams-board-task--cycle"}`}
+                className={classNames}
                 data-state={task.urgency}
                 data-ticket-id={ticket.id}
                 data-cycle={task.cycleId === null ? undefined : task.cycleId}
+                data-chain-active={inChain ? "true" : undefined}
+                data-chain-dimmed={inChain === false ? "true" : undefined}
+                data-just-unlocked={justUnlocked ? "true" : undefined}
                 role={onSelectTask ? "button" : undefined}
                 tabIndex={onSelectTask ? 0 : undefined}
                 onClick={onSelectTask ? () => onSelectTask(ticket.id) : undefined}
+                onMouseEnter={() => setHoveredTicketId(ticket.id)}
+                onMouseLeave={() => setHoveredTicketId((current) => (current === ticket.id ? null : current))}
+                onFocus={() => setKeyboardFocusId(ticket.id)}
+                onBlur={() => setKeyboardFocusId((current) => (current === ticket.id ? null : current))}
                 onKeyDown={onSelectTask ? (event) => {
                   if (event.key !== "Enter" && event.key !== " ") return;
                   event.preventDefault();
@@ -227,9 +306,32 @@ export function TaskBoardCanvas({ snapshot, requestedWidth = 0, formation, onSel
               >
                 <span className="agent-teams-board-task-head">
                   <span className="agent-teams-board-task-id">#{ticket.id}</span>
+                  {stalled && (
+                    <span
+                      className="agent-teams-board-task-stalled"
+                      data-stalled="true"
+                      role="img"
+                      title={t("teams.task.stalledOwner")}
+                      aria-label={t("teams.task.stalledOwner")}
+                    />
+                  )}
                   <span className="agent-teams-board-task-dot" aria-hidden="true" />
                 </span>
                 <span className="agent-teams-board-task-subject" title={ticket.subject}>{ticket.subject}</span>
+                {progress.mode !== "none" && (
+                  <span
+                    className="agent-teams-board-task-progress"
+                    data-progress={progress.mode}
+                    data-percent={progress.mode === "determinate" ? progress.percent : undefined}
+                  >
+                    {progress.mode === "determinate" && (
+                      <span
+                        className="agent-teams-board-task-progress-fill"
+                        style={{ width: `${progress.percent}%` }}
+                      />
+                    )}
+                  </span>
+                )}
                 <span className="agent-teams-board-task-foot">
                   <span className="agent-teams-board-task-avatar" aria-hidden="true">{ownerName.slice(0, 1)}</span>
                   <span className="agent-teams-board-task-owner">{ownerName}</span>
@@ -247,6 +349,15 @@ export function TaskBoardCanvas({ snapshot, requestedWidth = 0, formation, onSel
           })}
         </div>
       </div>
+
+      <div data-testid="agent-teams-legend" className="agent-teams-legend">
+        {LEGEND_ITEMS.map((item) => (
+          <span key={item.key} className="agent-teams-legend-item" data-legend={item.key}>
+            <span className="agent-teams-legend-swatch" aria-hidden="true" />
+            {t(item.labelKey)}
+          </span>
+        ))}
+      </div>
     </>
   );
-}
+});

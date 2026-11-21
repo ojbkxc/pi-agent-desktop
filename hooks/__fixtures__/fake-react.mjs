@@ -66,6 +66,17 @@ export function useCallback(fn) {
   return slots[i];
 }
 
+export function useMemo(fn, deps) {
+  const i = cursor++;
+  const prev = slots[i];
+  const changed = !prev
+    || !deps
+    || deps.length !== (prev.deps ? prev.deps.length : -1)
+    || deps.some((dep, j) => dep !== prev.deps[j]);
+  if (changed) slots[i] = { value: fn(), deps };
+  return slots[i].value;
+}
+
 export function useEffect(fn, deps) {
   const i = cursor++;
   const prev = slots[i];

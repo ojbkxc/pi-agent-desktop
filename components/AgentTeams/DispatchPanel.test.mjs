@@ -15,6 +15,8 @@ const {
   outcomeText,
   idleCandidateNames,
   suggestionRowKey,
+  createRequestGate,
+  pruneRowResults,
   MEMBER_NAME_PATTERN,
 } = await jiti.import("./DispatchPanel.tsx");
 
@@ -101,13 +103,84 @@ test("idleCandidateNames：只取 state=idle 的成员（pending 不作接收者
   assert.deepEqual(idleCandidateNames(null), []);
 });
 
-test("suggestionRowKey 稳定：同票同派活唯一，assignmentId 变则 key 变", () => {
-  assert.equal(suggestionRowKey(assignSuggestion), "assign:t1:");
-  assert.equal(suggestionRowKey(reassignSuggestion), "reassign:t2:assign-1");
+test("suggestionRowKey 稳定：同票同派活同代际唯一，assignmentId / expectedUpdatedAt 变则 key 变", () => {
+  assert.equal(suggestionRowKey(assignSuggestion), "assign:t1::");
+  assert.equal(suggestionRowKey(reassignSuggestion), "reassign:t2:assign-1:1762560000000");
   assert.notEqual(
     suggestionRowKey(reassignSuggestion),
     suggestionRowKey({ ...reassignSuggestion, assignmentId: "assign-2" }),
   );
+  // 代际（expectedUpdatedAt）改变 → key 改变：旧代际的失败/冲突结果不会串到新建议行。
+  assert.notEqual(
+    suggestionRowKey(reassignSuggestion),
+    suggestionRowKey({ ...reassignSuggestion, expectedUpdatedAt: 1762569999999 }),
+  );
+});
+
+test("createRequestGate：只认最新一次 begin 的序号（并发/乱序的基础）", () => {
+  const gate = createRequestGate();
+  const first = gate.begin();
+  const second = gate.begin();
+  assert.equal(gate.isLatest(first), false, "旧请求不再是最新");
+  assert.equal(gate.isLatest(second), true, "最新请求有效");
+  const third = gate.begin();
+  assert.equal(gate.isLatest(second), false);
+  assert.equal(gate.isLatest(third), true);
+});
+
+test("refresh 竞态：两个 deferred fetch 先发后到——只采用最新响应", async () => {
+  /**
+   * 复刻组件 refresh 的竞态口径：每次请求 begin() 取序号，响应到达时只有 isLatest 才落地。
+   * 两个 deferred fetch 模拟「先发的后到」：后发（new）先 resolve，先发（old）后 resolve，
+   * 断言最终只采用 new。
+   */
+  function deferred() {
+    let resolve, reject;
+    const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  }
+  const gate = createRequestGate();
+  const applied = [];
+  const load = async (d) => {
+    const id = gate.begin();
+    const data = await d.promise; // 模拟 fetch(url).then(json)
+    if (!gate.isLatest(id)) return; // 旧响应被丢弃
+    applied.push(data);
+  };
+
+  const slow = deferred();   // 先发
+  const fast = deferred();   // 后发
+  const pSlow = load(slow);
+  const pFast = load(fast);
+  fast.resolve({ marker: "new" });  // 后发的先到
+  await pFast;
+  slow.resolve({ marker: "old" });  // 先发的后到
+  await pSlow;
+
+  assert.deepEqual(applied, [{ marker: "new" }], "只采用最新一次请求的响应（旧的被丢弃）");
+});
+
+test("pruneRowResults：刷新后清掉已消失 / 代际变化的行结果，同代际保留", () => {
+  const reassign = { kind: "reassign", ticketId: "t2", assignmentId: "a1", expectedUpdatedAt: 100, reason: "x" };
+  const key = suggestionRowKey(reassign);
+  const prev = {
+    [key]: { phase: "failed", text: "boom", clientRequestId: "r", body: {} },
+    "delivered:gone::": { phase: "delivered", text: "ok" },
+  };
+
+  // 建议仍在但代际变了：旧 key 不在新集合 → 清掉；已消失建议也清掉。
+  const afterGenChange = pruneRowResults(prev, [{ ...reassign, expectedUpdatedAt: 200 }]);
+  assert.equal(afterGenChange[key], undefined, "代际变化清掉旧结果");
+  assert.equal(afterGenChange["delivered:gone::"], undefined, "已消失建议清掉");
+
+  // 同代际仍在 → 保留该行；消失的行清掉。
+  const sameGen = pruneRowResults(prev, [reassign]);
+  assert.equal(sameGen[key].phase, "failed", "同代际结果保留");
+  assert.equal(sameGen["delivered:gone::"], undefined);
+
+  // 无变化：返回原对象引用（避免无谓重渲染）。
+  const steady = { [key]: prev[key] };
+  assert.equal(pruneRowResults(steady, [reassign]), steady);
 });
 
 test("MEMBER_NAME_PATTERN：v5 成员名格式（字母/数字开头，限字母数字点横线下划线，≤64）", () => {
@@ -185,4 +258,19 @@ test("源码钉法：边界三件套——无定时器、workload 失败降级�
   // 投递结果必须消费 delivery.outcome/skipped，不得凭 payload.ok 宣称已唤醒。
   assert.match(source, /delivery\?\.skipped/);
   assert.match(source, /const outcome = delivery\?\.outcome \?\? "failed";/);
+});
+
+// T10：refresh 必须走自增请求闸（并发/乱序只认最新），成功后按建议集合修剪 rowResults。
+test("源码钉法：refresh 用 createRequestGate 自增序号 + 成功刷新后 pruneRowResults", () => {
+  assert.match(source, /createRequestGate/, "使用请求闸");
+  assert.match(source, /const requestId = gate\.begin\(\);/, "每次 refresh 取自增序号");
+  assert.match(source, /gate\.isLatest\(requestId\)/, "只接受最新响应");
+  // 关键路径都过闸：成功落地、错误落地、loading 收尾。
+  const refreshBlock = source.slice(source.indexOf("const refresh = useCallback"), source.indexOf("const execute = useCallback"));
+  assert.ok(
+    (refreshBlock.match(/gate\.isLatest\(requestId\)/g) || []).length >= 3,
+    "成功 / 失败 / finally 三处都过闸",
+  );
+  assert.match(source, /setRowResults\(\(prev\) => pruneRowResults\(prev, data\.suggestions\)\);/,
+    "成功刷新后按建议集合修剪行结果");
 });

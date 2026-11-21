@@ -29,6 +29,8 @@ interface Props {
   onOpen: () => void;
   /** 窄屏紧凑档。 */
   compact?: boolean;
+  /** 拉取失败/超时信息（来自 useActiveTeamStrip）；非空时渲染可见提示。 */
+  error?: string | null;
 }
 
 /** 成员头像字：取名称首字符，拉丁首字母大写；空名回退 "?"。 */
@@ -47,11 +49,26 @@ function phaseLabelKey(phase: TeamStripPhase): string {
   return phase === "failed" ? "teams.status.failed" : `teams.phase.${phase}`;
 }
 
-export function AgentTeamStrip({ snapshot, phase, progress, onOpen, compact = false }: Props) {
+export function AgentTeamStrip({ snapshot, phase, progress, onOpen, compact = false, error = null }: Props) {
   const { t } = useI18n();
+  // teams.loadFailed 已含「正在重试…」：失败时条不应静默消失，用户要能看到卡在哪。
+  const errorText = error ? t("teams.loadFailed") : null;
 
-  // 无快照 / 未进成员就取消的团队：不渲染，不占位。
-  if (!snapshot || phase === "none") return null;
+  // 无快照 / 未进成员就取消的团队：不渲染，不占位。但**拉取失败**是另一种情况——此时
+  // 没有快照可展示，仍给一条可见的错误提示，避免团队条莫名消失。
+  if (!snapshot || phase === "none") {
+    if (!errorText) return null;
+    return (
+      <span
+        className="agent-team-strip agent-team-strip--error"
+        role="status"
+        data-testid="agent-team-strip-error"
+        title={error ?? undefined}
+      >
+        <span className="agent-team-strip-error-text">{errorText}</span>
+      </span>
+    );
+  }
 
   const members = snapshot.members;
   const shown = members.slice(0, MAX_AVATARS);
@@ -114,6 +131,11 @@ export function AgentTeamStrip({ snapshot, phase, progress, onOpen, compact = fa
       <span className="agent-team-strip-progress">
         {t("teams.strip.tasks", { completed: progress.completed, total: progress.total })}
       </span>
+      {errorText ? (
+        <span className="agent-team-strip-error-text" title={error ?? undefined}>
+          {errorText}
+        </span>
+      ) : null}
       <span className="agent-team-strip-open" aria-hidden="true">
         {t("teams.strip.open")}
         <span className="agent-team-strip-open-chevron"> ›</span>

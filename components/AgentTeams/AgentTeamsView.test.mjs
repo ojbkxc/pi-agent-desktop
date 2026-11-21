@@ -98,13 +98,18 @@ test("C9：createdAt 不可解析时退回帧时间，不产生 NaN", () => {
   assert.doesNotMatch(elapsed, /NaN/);
 });
 
-test("C9：live 条的挂载点存在，且用派生结果渲染 hint/时长/时钟", async () => {
-  const source = await readFile(new URL("./AgentTeamsView.tsx", import.meta.url), "utf8");
-  assert.match(source, /data-testid="agent-teams-live-controls"/, "live 条必须有稳定的 testid");
-  assert.match(source, /data-testid="agent-teams-live-controls"[\s\S]*?teams\.live\.following/, "following 徽标在条内");
-  assert.match(source, /liveIndicator\.hint/);
-  assert.match(source, /liveIndicator\.elapsed/);
-  assert.match(source, /liveIndicator\.clock/);
-  // 只在实时跟随时显示（回放不显示）。
-  assert.match(source, /\{timeline\.isLive && liveIndicator && \(/);
+test("C9：live 条挂载在叶子时钟组件里，且用派生结果渲染 hint/时长/时钟", async () => {
+  const view = await readFile(new URL("./AgentTeamsView.tsx", import.meta.url), "utf8");
+  // T7 时钟下沉：视图只在实时跟随时挂载叶子组件，秒级 now 不再进根 state。
+  assert.match(view, /\{timeline\.isLive && \(\s*<AgentTeamsLiveClock\b/);
+  assert.doesNotMatch(view, /const \[now, setNow\]/, "每秒 now 不得留在视图根 state");
+  assert.doesNotMatch(view, /setInterval\(\(\) => setNow/, "秒针定时器不得留在视图根");
+  const clock = await readFile(new URL("./AgentTeamsLiveClock.tsx", import.meta.url), "utf8");
+  assert.match(clock, /data-testid="agent-teams-live-controls"/, "live 条必须有稳定的 testid");
+  assert.match(clock, /data-testid="agent-teams-live-controls"[\s\S]*?teams\.live\.following/, "following 徽标在条内");
+  assert.match(clock, /liveIndicator\.hint/);
+  assert.match(clock, /liveIndicator\.elapsed/);
+  assert.match(clock, /liveIndicator\.clock/);
+  // 只在实时跟随时出现：回放/非实时由上层不挂载该叶子。
+  assert.match(clock, /agent-teams-live-hint/);
 });

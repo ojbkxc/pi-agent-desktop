@@ -3,6 +3,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { deriveTeamStripPhase } from "@/hooks/useActiveTeamStrip";
+import { getTicketUrgency } from "@/lib/agent-teams-task-layout";
 import type { TeamWorkbenchSnapshot } from "@/lib/agent-teams-swimlane";
 
 /**
@@ -138,8 +139,12 @@ export function AgentTeamInlineCard({ sessionId, isError, hasResult, onOpen }: A
       ? "var(--warning)"
       : "var(--accent)";
 
-  const totalTasks = snapshot?.tasks.length ?? 0;
-  const doneTasks = snapshot?.tasks.filter((task) => task.status === "completed").length ?? 0;
+  // 完成口径与画布一致：唯一真源 getTicketUrgency —— 已 ended 但派活失败的票
+  // 算 failed，不计入 completed（否则进度条会把失败算成完成）。
+  const tickets = snapshot?.tickets ?? [];
+  const ticketsById = new Map(tickets.map((ticket) => [ticket.id, ticket]));
+  const totalTasks = tickets.length;
+  const doneTasks = tickets.filter((ticket) => getTicketUrgency(ticket, ticketsById) === "completed").length;
   const memberCount = snapshot?.members.length ?? 0;
 
   return (
