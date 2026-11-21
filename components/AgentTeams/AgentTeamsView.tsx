@@ -837,6 +837,9 @@ export function AgentTeamsView({
               isLead={selectedMemberIsLead}
               onBack={() => setSelectedMemberId(null)}
               onOpenSession={onOpenSession}
+              // 跨帧耗时：历史快照 + 当前帧下标。回放时按当前帧截止，实时跟随时为末帧。
+              snapshots={timeline.snapshots}
+              selectedIndex={timeline.selectedIndex}
             />
           ) : commOpen ? (
             <aside
@@ -941,6 +944,8 @@ export function AgentTeamsView({
           ticketId={selectedTicketId}
           onClose={() => setSelectedTicketId(null)}
           onSelectMember={openMemberInspector}
+          // 依赖/解锁票可点：抽屉直接切到那张票（同一抽屉，不叠开）。
+          onSelectTicket={setSelectedTicketId}
           dockOpen={dockOpen}
         />
       )}
