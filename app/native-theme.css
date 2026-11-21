@@ -9264,7 +9264,7 @@ html.native-desktop :is(
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  width: 100%;
+  width: var(--session-row-height);
   height: 100%;
   padding: 0;
   flex-shrink: 0;
