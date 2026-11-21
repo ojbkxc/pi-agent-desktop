@@ -41,3 +41,28 @@ test("SkillsConfig keeps its superseded-load guard and drops the Error: prefix",
   assert.match(body, /if \(generation === loadSkillsSeqRef\.current\) setLoading\(false\)/);
   assert.match(body, /e instanceof Error \? e\.message : String\(e\)/);
 });
+
+test("ServerSwitchSettingRow ignores a superseded save response", async () => {
+  const source = await read("./ServerSwitchSettingRow.tsx");
+  const start = source.indexOf("const update = (next: boolean) => {");
+  assert.ok(start > 0, "update not found");
+  const body = source.slice(start, source.indexOf("};", source.indexOf(".finally(() =>")));
+  // Rapid toggles: the first PUT may answer last. Without a sequence guard its
+  // value (or its rollback) would overwrite the newer toggle.
+  assert.match(body, /const seq = \+\+saveSeq\.current;/);
+  assert.match(body, /const isCurrent = \(\) => seq === saveSeq\.current;/);
+  assert.match(body, /\.then\(\(data: \{ enabled\?: unknown \}\) => \{\r?\n\s+if \(!isCurrent\(\)\) return;/);
+  const catchStart = body.indexOf(".catch(() => {");
+  const finallyStart = body.indexOf(".finally(");
+  assert.ok(catchStart > 0 && finallyStart > catchStart, "catch/finally blocks found");
+  assert.match(body.slice(catchStart, finallyStart), /if \(!isCurrent\(\)\) return;/);
+  assert.match(body, /if \(isCurrent\(\)\) setSaving\(false\)/);
+});
+
+test("OutageSettings' cancel-all treats a non-OK response as a failure", async () => {
+  const source = await read("./OutageSettings.tsx");
+  const start = source.indexOf('body: JSON.stringify({ action: "cancel-all" }),');
+  assert.ok(start > 0, "cancel-all request not found");
+  const body = source.slice(start, source.indexOf(".finally(", start));
+  assert.match(body, /if \(!response\.ok\) throw new Error\(`HTTP \$\{response\.status\}`\)/);
+});

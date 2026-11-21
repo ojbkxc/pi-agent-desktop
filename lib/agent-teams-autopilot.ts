@@ -78,8 +78,14 @@ export async function autoApproveTeamPlanForSession(input: {
   if (!result.ok) return { approved: false, reason: result.reason ?? "delivery failed" };
 
   delivered.add(key);
-  // The set only guards retries within this process; keep it from growing forever.
-  if (delivered.size > 200) delivered.clear();
+  // The set only guards retries within this process. Evict the oldest key, not
+  // the whole set: clearing would drop the delivery just recorded, so the very
+  // next retry could deliver the same plan revision again.
+  while (delivered.size > 200) {
+    const oldest = delivered.values().next().value;
+    if (oldest === undefined) break;
+    delivered.delete(oldest);
+  }
   console.warn(`[pi-web] autopilot: auto-approved plan ${plan.planId} r${plan.revision} for team ${team}`);
   return { approved: true };
 }

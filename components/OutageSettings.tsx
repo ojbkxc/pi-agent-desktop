@@ -160,7 +160,12 @@ export function OutageSettings() {
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ action: "cancel-all" }),
                 })
-                  .then(() => load())
+                  .then((response) => {
+                    // A 403/500 here means nothing was cancelled; reloading as if it
+                    // worked would leave the waiting rows on screen with no reason why.
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    return load();
+                  })
                   .catch(() => setFailed(true))
                   .finally(() => setBusy(false));
               }}

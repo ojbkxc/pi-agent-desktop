@@ -1,4 +1,5 @@
 import { getPiWebSettingsPath, readStored, updatePiWebSettings } from "./artifact-settings";
+import { AUTOFIX_MAX_ROUNDS } from "./autofix/types";
 
 /**
  * Unattended ("autopilot") mode: let the app keep working without a human in
@@ -27,7 +28,13 @@ export const AUTOPILOT_DEFAULTS: AutopilotSettings = {
   maxAutoFixRounds: 12,
 };
 
-export const MAX_AUTOPILOT_FIX_ROUNDS = 50;
+/**
+ * Round cap accepted by autopilot. It must be the engine's own cap: a larger
+ * value passes the settings validation, then `createAutofixTask` rejects it and
+ * the scheduler's catch swallows the error, so the failed run silently gets no
+ * repair at all.
+ */
+export const MAX_AUTOPILOT_FIX_ROUNDS = AUTOFIX_MAX_ROUNDS;
 
 function readBool(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;

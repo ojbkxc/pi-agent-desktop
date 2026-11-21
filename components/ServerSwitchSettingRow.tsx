@@ -32,6 +32,8 @@ export function ServerSwitchSettingRow({
   const [failed, setFailed] = useState(false);
   const [saved, setSaved] = useState(false);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Monotonic save generation: a response from a superseded toggle must not win. */
+  const saveSeq = useRef(0);
   const read = (data: { enabled?: unknown }) => (typeof data.enabled === "boolean" ? data.enabled : defaultEnabled);
 
   useEffect(() => () => {
@@ -56,6 +58,8 @@ export function ServerSwitchSettingRow({
 
   const update = (next: boolean) => {
     const previous = enabled;
+    const seq = ++saveSeq.current;
+    const isCurrent = () => seq === saveSeq.current;
     setEnabled(next);
     setSaving(true);
     setFailed(false);
@@ -68,15 +72,20 @@ export function ServerSwitchSettingRow({
     })
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
       .then((data: { enabled?: unknown }) => {
+        if (!isCurrent()) return;
         setEnabled(read(data));
         setSaved(true);
         savedTimer.current = setTimeout(() => setSaved(false), 2000);
       })
       .catch(() => {
+        // Only a superseded response may not roll back: the later toggle owns the state.
+        if (!isCurrent()) return;
         setEnabled(previous);
         setFailed(true);
       })
-      .finally(() => setSaving(false));
+      .finally(() => {
+        if (isCurrent()) setSaving(false);
+      });
   };
 
   return (

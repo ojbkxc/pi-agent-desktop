@@ -37,6 +37,9 @@ const INBOX_AUTOFIX_STATUSES: ReadonlySet<AutofixStatus> = new Set(["failed", "e
 /** Terminal scheduled outcomes worth a row; a run that did not fail needs none. */
 const INBOX_SCHEDULED_STATUSES: ReadonlySet<string> = new Set(["failed", "aborted"]);
 
+/** Shared empty default so the scheduled projection allocates no set per call. */
+const EMPTY_KEYS: ReadonlySet<string> = new Set();
+
 /**
  * Rows the sidebar never shows belong in no inbox either: subagent runs report
  * through their parent, scheduled runs live under Scheduled, and a transient
@@ -149,6 +152,8 @@ export function attentionItemsForAutofix(
 /** The slice of a scheduled run the inbox needs (the full record lives in `lib/scheduled-tasks/types.ts`). */
 export interface AttentionScheduledRun {
   taskId: string;
+  /** Run id, used to match an autofix task spawned for this run (see the marker below). */
+  runId?: string;
   status: "running" | "succeeded" | "failed" | "aborted" | "skipped";
   /** The run's own session; a run that never started one has nothing to open. */
   sessionId?: string;
@@ -164,6 +169,19 @@ export interface AttentionScheduledTask {
 }
 
 /**
+ * The marker the scheduler stamps into an autofix task it spawned for a failed
+ * run (`[scheduled:<taskId>:<runId>]`, `lib/scheduled-tasks/scheduler.ts`).
+ * Both ids are uuids, so a colon-free match is exact.
+ */
+const AUTOFIX_SOURCE_MARKER = /\[scheduled:([^:\]\s]+):([^:\]\s]+)\]/;
+
+/** The `<taskId>:<runId>` a repair task was spawned for, or undefined for a manual repair. */
+export function autofixScheduledSourceKey(task: Pick<AttentionAutofixTask, "task">): string | undefined {
+  const match = AUTOFIX_SOURCE_MARKER.exec(task.task);
+  return match ? `${match[1]}:${match[2]}` : undefined;
+}
+
+/**
  * Terminal scheduled-run outcomes as inbox rows. A failed / aborted run is
  * exactly what "Needs you" is for, but its session is a `scheduled` kind the
  * session list hides, so it would never surface from `sessions` alone — the
@@ -171,11 +189,16 @@ export interface AttentionScheduledTask {
  * skipped (the deep link could open nothing; the run stays on the Scheduled
  * page). The title is the owning task's name, falling back to `#<taskId[:8]>`
  * when the task is gone; a run reused by one session keeps the newest outcome.
+ *
+ * `coveredRunKeys` holds `<taskId>:<runId>` values whose failed run already got
+ * an autofix row. That repair opens its own session, so without this the same
+ * failure would land twice — once for the run, once for the repair.
  */
 export function attentionItemsForScheduledRuns(
   runs: readonly AttentionScheduledRun[],
   tasks: readonly AttentionScheduledTask[],
   now = Date.now(),
+  coveredRunKeys: ReadonlySet<string> = EMPTY_KEYS,
 ): AttentionItem[] {
   const taskById = new Map(tasks.map((task) => [task.id, task]));
   const bySession = new Map<string, AttentionItem>();
@@ -183,6 +206,7 @@ export function attentionItemsForScheduledRuns(
     if (!INBOX_SCHEDULED_STATUSES.has(run.status)) continue;
     const sessionId = run.sessionId;
     if (!sessionId) continue;
+    if (run.runId && coveredRunKeys.has(`${run.taskId}:${run.runId}`)) continue;
     const task = taskById.get(run.taskId);
     const parsed = Date.parse(run.endedAt ?? run.startedAt ?? "");
     const updatedAt = Number.isFinite(parsed) && parsed > 0 ? parsed : now;
@@ -299,9 +323,21 @@ export function buildAttentionSnapshot({
   // "completed" rows (or not at all, while running). Each source is capped on
   // its own so neither can swamp the other; a session parked on a dialog stays
   // in `awaiting` only — it is still waiting.
+  const autofixItems = attentionItemsForAutofix(autofixTasks, now);
+  // A repair spawned for a failed run replaces that run's own row: the two have
+  // different sessions, so session-id dedupe below cannot see them as one
+  // failure. Only repairs that actually produce a row may suppress the run —
+  // a repair that never started a session must leave the run's row in place.
+  const rowsByAutofixSession = new Set(autofixItems.map((item) => item.sessionId));
+  const coveredRunKeys = new Set<string>();
+  for (const task of autofixTasks) {
+    if (!task.sessionId || !rowsByAutofixSession.has(task.sessionId)) continue;
+    const key = autofixScheduledSourceKey(task);
+    if (key) coveredRunKeys.add(key);
+  }
   const unattended = [
-    ...attentionItemsForAutofix(autofixTasks, now),
-    ...attentionItemsForScheduledRuns(scheduledRuns, scheduledTasks, now),
+    ...autofixItems,
+    ...attentionItemsForScheduledRuns(scheduledRuns, scheduledTasks, now, coveredRunKeys),
   ].filter((item) => !awaiting.has(item.sessionId));
 
   // A session backing both an autofix task and a scheduled run (or several of
