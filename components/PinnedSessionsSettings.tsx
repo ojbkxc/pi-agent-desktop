@@ -39,7 +39,9 @@ export function PinnedSessionsSettings() {
   const [registryError, setRegistryError] = useState<string | null>(null);
   const [pickedId, setPickedId] = useState("");
   const [pickedRole, setPickedRole] = useState<"router" | "worker">("router");
-  const [busy, setBusy] = useState(false);
+  /** The add form's own submit. Kept separate so one row's unpin does not put every row into "saving". */
+  const [pinning, setPinning] = useState(false);
+  const [unpinning, setUnpinning] = useState<ReadonlySet<string>>(() => new Set());
   const [failed, setFailed] = useState(false);
 
   const load = useCallback(async () => {
@@ -75,7 +77,7 @@ export function PinnedSessionsSettings() {
 
   const pin = async () => {
     if (!pickedId) return;
-    setBusy(true);
+    setPinning(true);
     try {
       const response = await fetch("/api/pinned-sessions", {
         method: "PUT",
@@ -88,12 +90,12 @@ export function PinnedSessionsSettings() {
     } catch {
       setFailed(true);
     } finally {
-      setBusy(false);
+      setPinning(false);
     }
   };
 
   const unpin = async (sessionId: string) => {
-    setBusy(true);
+    setUnpinning((previous) => new Set(previous).add(sessionId));
     try {
       const response = await fetch(`/api/pinned-sessions?id=${encodeURIComponent(sessionId)}`, { method: "DELETE" });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -101,7 +103,11 @@ export function PinnedSessionsSettings() {
     } catch {
       setFailed(true);
     } finally {
-      setBusy(false);
+      setUnpinning((previous) => {
+        const next = new Set(previous);
+        next.delete(sessionId);
+        return next;
+      });
     }
   };
 
@@ -134,16 +140,16 @@ export function PinnedSessionsSettings() {
               value={pickedId}
               onValueChange={setPickedId}
               options={sessionOptions}
-              disabled={busy}
+              disabled={pinning}
             />
             <AppSelect
               aria-label={t("resident.role")}
               value={pickedRole}
               onValueChange={(next) => setPickedRole(next === "worker" ? "worker" : "router")}
               options={roleOptions}
-              disabled={busy}
+              disabled={pinning}
             />
-            <ConfigButton disabled={busy || !pickedId} onClick={() => void pin()}>
+            <ConfigButton disabled={pinning || !pickedId} onClick={() => void pin()}>
               {t("resident.pin")}
             </ConfigButton>
           </span>
@@ -180,7 +186,7 @@ export function PinnedSessionsSettings() {
               label={t("resident.unpin")}
               confirmLabel={t("settings.confirmUnpin")}
               busyLabel={t("i18n.saving")}
-              busy={busy}
+              busy={unpinning.has(entry.sessionId)}
               className="config-button config-button-danger config-button-small"
               onConfirm={() => void unpin(entry.sessionId)}
             />

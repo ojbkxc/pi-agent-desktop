@@ -66,3 +66,17 @@ test("OutageSettings' cancel-all treats a non-OK response as a failure", async (
   const body = source.slice(start, source.indexOf(".finally(", start));
   assert.match(body, /if \(!response\.ok\) throw new Error\(`HTTP \$\{response\.status\}`\)/);
 });
+
+test("PinnedSessionsSettings keeps busy state per row instead of freezing every row", async () => {
+  const source = await read("./PinnedSessionsSettings.tsx");
+  assert.doesNotMatch(source, /const \[busy, setBusy\]/, "共享 busy 会让一行的解除动作把所有行变成保存中");
+  assert.match(source, /const \[pinning, setPinning\]/);
+  assert.match(source, /const \[unpinning, setUnpinning\]/);
+  assert.match(source, /busy=\{unpinning\.has\(entry\.sessionId\)\}/);
+
+  const start = source.indexOf("const unpin = async (sessionId: string) => {");
+  assert.ok(start > 0, "unpin not found");
+  const body = source.slice(start, source.indexOf("\n  };", start));
+  assert.match(body, /setUnpinning\(\(previous\) => new Set\(previous\)\.add\(sessionId\)\)/);
+  assert.match(body, /next\.delete\(sessionId\)/, "完成后只清自己那一行");
+});
