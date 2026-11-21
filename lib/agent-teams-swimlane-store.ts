@@ -186,8 +186,14 @@ async function readAllMessages(teamDir: string, memberNames: readonly string[]):
     seen.add(identity);
     deduped.push(message);
   }
-  // history 在 live 之后，时间序不可靠；按 timestamp 稳定排序。
-  deduped.sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
+  // history 在 live 之后，时间序不可靠；按 timestamp 稳定排序。时间戳是 ISO
+  // 字符串，但时区偏移与精度可以不同（`…+08:00` 与 `…Z`），字符串比较会把
+  // 先后排反，所以先解析成毫秒再比。
+  const timeOf = (message: MailboxMessageLike): number => {
+    const parsed = Date.parse(message.timestamp ?? "");
+    return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
+  };
+  deduped.sort((a, b) => timeOf(a) - timeOf(b));
   return deduped;
 }
 
