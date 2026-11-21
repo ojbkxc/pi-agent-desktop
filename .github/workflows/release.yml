@@ -114,9 +114,10 @@ jobs:
           tagName: v__VERSION__
           releaseName: pi-agent-desktop v__VERSION__
           releaseBody: |
-            ## Pi Agent Desktop 0.8.8 (fork)
+            ## Pi Agent Desktop 0.8.7 (fork)
 
-            **2026-11-21 发布 / release.** 在 0.8.7 基础上的本轮改动：
+            **2026-11-21 覆盖式重发 / re-release.** Same version number; this build replaces the previous v0.8.7 artifacts.
+            本轮改动：
 
             - **无人值守闭环 / unattended loop.** autopilot 默认开启：定时任务失败自动创建并启动修复任务（仅 .git 仓库 + 可探测验证命令）、团队计划自动批准（仅限 `pi-web:scheduled-run` / `pi-web:autofix` 发起的会话）、阻塞扩展对话框（含 `custom` 覆盖层）120s 无人应答后取安全默认值、失败/中止的定时运行与修复结果进入「Needs you」收件箱。
             - **Agent Teams 通讯流对齐 cc-haha / communication feed.** 消息行参与者可点直达成员检查器、超长历史截断提示、检查器重做（身份别名收发匹配、协议叙述不再倾倒 JSON、方向箭头、执行中/等待依赖/等待收尾/卡住等状态推导、任务按运行中/未开始/已完成分组）。
