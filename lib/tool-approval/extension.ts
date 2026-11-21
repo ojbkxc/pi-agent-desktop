@@ -22,6 +22,7 @@
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { requiresApproval, isShellTool, type ApprovalDecision, type ApprovalMode } from "./policy";
 import { readApprovalMode } from "./settings";
+import { recordGate } from "../gate-attribution";
 
 export const TOOL_APPROVAL_EXTENSION_NAME = "pi-web-tool-approval";
 
@@ -106,6 +107,8 @@ export function createToolApprovalExtension(
       const hasUI = (ctx as ApprovalContextLike | undefined)?.hasUI;
       if (hasUI === false || !ui || typeof ui.confirm !== "function") {
         logOnce(`[tool-approval] no confirmation UI for ${event.toolName}; allowing the command (fail-open)`);
+        // 只记录本闸门自己的结论，不参与判定（见 lib/gate-attribution.ts）。
+        recordGate({ layer: "tool-approval", decision: "allowed", reason: "fail-open-no-ui" });
         return undefined;
       }
 
@@ -134,16 +137,20 @@ export function createToolApprovalExtension(
           `[tool-approval] confirm failed (${error instanceof Error ? error.message : String(error)}); ` +
           "allowing the command (fail-open)",
         );
+        recordGate({ layer: "tool-approval", decision: "allowed", reason: "fail-open-confirm-error" });
         return undefined;
       } finally {
         clearTimeout(timer);
       }
       if (timedOut) {
+        recordGate({ layer: "tool-approval", decision: "denied", reason: "timeout" });
         return { block: true, reason: APPROVAL_TIMEOUT_REASON };
       }
       if (confirmed !== true) {
+        recordGate({ layer: "tool-approval", decision: "denied", reason: "rejected" });
         return { block: true, reason: APPROVAL_REJECTED_REASON };
       }
+      recordGate({ layer: "tool-approval", decision: "allowed", reason: "confirmed" });
       return undefined;
     });
   };

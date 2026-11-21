@@ -116,6 +116,35 @@ export function byteLength(text) {
 }
 
 /**
+ * 预设正文不得把「预设」变成「远程加载器」。
+ *
+ * 这些形式无歧义：把远端内容直接交给 shell / PowerShell 解释器执行。它们与「把命令写成
+ * 例子讲解」不同 —— 前者只要模型照做，就会在本机跑一段不由你控制的代码，属于供应链风险，
+ * 不属于内容偏好。上游已有先例（`grok-fast-v2` 被标注 Security quarantine，原因就是旧版
+ * 指示隐蔽下载并执行外部 Windows 可执行文件）。
+ *
+ * 抛错而不是跳过：静默跳过一个被投毒的正文，会让人以为同步成功。
+ */
+const REMOTE_EXECUTION = [
+  /curl\s+[^\n|]{0,200}\|\s*(?:sudo\s+)?(?:ba|z|k)?sh\b/i,
+  /wget\s+[^\n|]{0,200}\|\s*(?:ba|z|k)?sh\b/i,
+  /iwr\b[^\n]{0,200}\|\s*iex\b/i,
+  /Invoke-WebRequest[^\n]{0,200}\|\s*Invoke-Expression/i,
+  /certutil(?:\.exe)?\s+-urlcache/i,
+];
+
+export function assertBodyAllowed(body, label) {
+  for (const pattern of REMOTE_EXECUTION) {
+    if (pattern.test(body)) {
+      throw new Error(
+        `拒绝生成：${label} 命中远程执行规则（${pattern.source}）—— 预设正文不得指示下载并执行远程内容`,
+      );
+    }
+  }
+  return body;
+}
+
+/**
  * 冻结契约要求的 slug 约束：非空、≤128 字节、仅 `[a-z0-9-]`、不以 `-` 首尾。
  * 生成时逐条断言——违反就是来源文件名超出了契约，宁可报错也不产出坏 id。
  */
@@ -192,6 +221,8 @@ export async function collectSourcePresets({ sourceDir = resolveSourceDir() } = 
       skipped.push({ path: relativePath, reason: "正文为空（上游文件没有内容）" });
       continue;
     }
+    // 先过内容门，再把正文当成预设：被投毒的正文不能进目录。
+    assertBodyAllowed(body, relativePath);
 
     const vendor = segments[0];
     const modelSegments = segments.slice(1);
