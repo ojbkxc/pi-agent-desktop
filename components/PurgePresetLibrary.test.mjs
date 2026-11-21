@@ -320,7 +320,9 @@ test("the panel never auto-saves: it only GETs and POSTs to /apply", () => {
   assert.equal(/\/api\/purge"/.test(componentSource), false);
   // The console is what renders it, above the rewrite tables.
   assert.match(consoleSource, /import \{ PurgePresetLibrary, upsertPresetTemplate \} from "\.\/PurgePresetLibrary"/);
-  assert.match(consoleSource, /<PurgePresetLibrary onApplyTemplate=\{applyPresetTemplate\} \/>/);
+  assert.match(consoleSource, /<PurgePresetLibrary\s+[^>]*onApplyTemplate=\{applyPresetTemplate\}/);
+  // 控制台额外取一次默认模型，只为了给行打标记：必须是 GET，不得写成任何写方法。
+  assert.match(consoleSource, /fetch\("\/api\/purge\/active-model", \{ cache: "no-store" \}\)/);
   assert.match(consoleSource, /upsertPresetTemplate\(draft\.structured_templates, name, text\)/);
 });
 

@@ -1417,7 +1417,7 @@ export const enLocale: LocalePlugin = {
     "purge.presetsSearchAria": "Search presets",
     "purge.presetsTotal": "{total} presets",
     "purge.presetsAllVendors": "All",
-    "purge.presetsCurrentModel": "Current model",
+    "purge.presetsCurrentModel": "Default model",
     "purge.disabledHint": "The purge console is off, so requests pass through unchanged.",
     "purge.presetsFilterAria": "Filter by vendor",
     "purge.presetsLoading": "Loading presets…",

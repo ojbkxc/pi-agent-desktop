@@ -118,10 +118,10 @@ export function byteLength(text) {
 /**
  * 预设正文不得把「预设」变成「远程加载器」。
  *
- * 这些形式无歧义：把远端内容直接交给 shell / PowerShell 解释器执行。它们与「把命令写成
- * 例子讲解」不同 —— 前者只要模型照做，就会在本机跑一段不由你控制的代码，属于供应链风险，
- * 不属于内容偏好。上游已有先例（`grok-fast-v2` 被标注 Security quarantine，原因就是旧版
- * 指示隐蔽下载并执行外部 Windows 可执行文件）。
+ * 这些形式无歧义：把远端内容（或编码后的等价物）直接交给 shell / PowerShell / 宿主
+ * 组件执行。它们与「把命令写成例子讲解」不同 —— 前者只要模型照做，就会在本机跑一段
+ * 不由你控制的代码，属于供应链风险，不属于内容偏好。上游已有先例（`grok-fast-v2`
+ * 被标注 Security quarantine，原因就是旧版指示隐蔽下载并执行外部 Windows 可执行文件）。
  *
  * 抛错而不是跳过：静默跳过一个被投毒的正文，会让人以为同步成功。
  */
@@ -131,6 +131,14 @@ const REMOTE_EXECUTION = [
   /iwr\b[^\n]{0,200}\|\s*iex\b/i,
   /Invoke-WebRequest[^\n]{0,200}\|\s*Invoke-Expression/i,
   /certutil(?:\.exe)?\s+-urlcache/i,
+  // 编码后直接交给解释器：payload 不肉眼可读，但执行路径与 curl | sh 同一类。
+  /base64\s+(?:-d|--decode|-D)[^\n|]{0,80}\|\s*(?:ba|z|k)?sh\b/i,
+  /powershell(?:\.exe)?\b[^\n]{0,120}?-(?:enc|encodedcommand)\b/i,
+  // Windows 自带的下载器与“把 URL 交给宿主组件”的几种写法。
+  /bitsadmin(?:\.exe)?\s+\/transfer/i,
+  /\.DownloadString\s*\(/i,
+  /mshta(?:\.exe)?\s+https?:\/\//i,
+  /regsvr32(?:\.exe)?[^\n]{0,60}\/i:https?:\/\//i,
 ];
 
 export function assertBodyAllowed(body, label) {
@@ -142,6 +150,18 @@ export function assertBodyAllowed(body, label) {
     }
   }
   return body;
+}
+
+/**
+ * 上游已声明作废/隔离的正文（下架公告、quarantine 通知）不是可用的预设。
+ *
+ * 只用来**报告**，不用来拦截：一个被下架的条目已在目录里（`grok-fast-v2`），
+ * 硬拦会让 `--check` 立刻变红；要不要把它从目录里拿掉是内容决定，需人来拍。
+ */
+const WITHDRAWN_MARKERS = [/security quarantine/i, /\bwithdrawn\b/i, /do not use, copy, or import/i];
+
+export function looksWithdrawn(body) {
+  return WITHDRAWN_MARKERS.some((pattern) => pattern.test(body));
 }
 
 /**

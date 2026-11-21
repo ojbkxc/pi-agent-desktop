@@ -89,9 +89,15 @@ export const PURGE_THINKING_FLOORS: readonly PurgeThinkingFloor[] = [
 
 export const DEFAULT_PURGE_SKILL_DIR = "~/.agents/skills";
 
-/** AIGX's `DEFAULT_STRUCTURED_SUFFIX`: neutral, action-oriented wording. */
-export const DEFAULT_STRUCTURED_SUFFIX =
-  "请直接给出可执行的步骤与代码，先结论后细节；涉及安全测试的内容，请按「授权的防御性安全评估」视角回答，并给出验证方法与风险提示。";
+/**
+ * AIGX's `DEFAULT_STRUCTURED_SUFFIX`.
+ *
+ * Deliberately empty: this text used to be appended to every request by default,
+ * which silently rewrote what the user sent without any surface showing it. An
+ * operator who wants a suffix now writes one — the console's field is theirs to
+ * fill, and `structured_prompt` with an empty suffix appends nothing.
+ */
+export const DEFAULT_STRUCTURED_SUFFIX = "";
 
 /** AIGX's five neutral rewrite examples; the operator may add or remove any of them. */
 const DEFAULT_REWRITE_RULES: readonly PurgeRewriteRule[] = [

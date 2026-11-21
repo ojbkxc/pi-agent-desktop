@@ -1417,7 +1417,7 @@ export const zhCNLocale: LocalePlugin = {
     "purge.presetsSearchAria": "搜索预设",
     "purge.presetsTotal": "共 {total} 条",
     "purge.presetsAllVendors": "全部",
-    "purge.presetsCurrentModel": "当前模型",
+    "purge.presetsCurrentModel": "默认模型",
     "purge.disabledHint": "破甲控制台当前关闭，请求原样发送、不会被改写。",
     "purge.presetsFilterAria": "按厂商过滤",
     "purge.presetsLoading": "正在加载预设…",

@@ -480,6 +480,21 @@ export function PurgeConsoleSection() {
   const { t, locale } = useI18n();
   const limitHintId = useId();
   const [draft, setDraft] = useState<PurgeSettings>(DEFAULT_PURGE_SETTINGS);
+
+  // 默认模型只用于给预设库打标记：拿不到就不标，不影响任何功能。
+  const [activeModel, setActiveModel] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/purge/active-model", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data: unknown) => {
+        if (cancelled) return;
+        const model = typeof data === "object" && data !== null ? (data as { model?: unknown }).model : undefined;
+        if (typeof model === "string" && model !== "") setActiveModel(model);
+      })
+      .catch(() => {}); // 拿不到就不标记，不报错
+    return () => { cancelled = true; };
+  }, []);
   const [stats, setStats] = useState<PurgeStats | null>(null);
   const [runtime, setRuntime] = useState<PurgeRuntime | null>(null);
   const [limitDraft, setLimitDraft] = useState(String(DEFAULT_PURGE_SETTINGS.skill_inject_limit));
@@ -772,7 +787,7 @@ export function PurgeConsoleSection() {
       </section>
 
       {/* 预设库：浏览第三方公开 prompt 原文，一键落到模板草稿或技能目录。 */}
-      <PurgePresetLibrary onApplyTemplate={applyPresetTemplate} />
+      <PurgePresetLibrary activeModel={activeModel} onApplyTemplate={applyPresetTemplate} />
 
       <PurgeRulesTable
         heading={t("purge.rewriteRulesHeading")}
