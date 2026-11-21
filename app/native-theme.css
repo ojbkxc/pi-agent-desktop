@@ -11495,8 +11495,8 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .agent-teams-right-dock--overlay {
   position: fixed;
   inset: auto 0 0 0;
-  width: 100% !important;
-  height: min(72vh, 620px) !important;
+  width: 100%;
+  height: min(72vh, 620px);
   z-index: var(--z-dropdown);
   border-top: var(--hairline) solid var(--border);
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
@@ -11505,7 +11505,7 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   overflow: hidden;
 }
 
-.agent-teams-comm-panel[data-narrow="true"] { width: 100% !important; }
+.agent-teams-comm-panel[data-narrow="true"] { width: 100%; }
 
 /* 通信流：当前在编队总线上飞过的消息行（与 FormationBand 同一条 activeMessageId）
    与画布聚焦票同票的行。行本身用 Tailwind 内联类，故用带祖先限定的属性选择器
@@ -11808,7 +11808,7 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 }
 
 .agent-teams-board-task-progress[data-progress="indeterminate"] .agent-teams-board-task-progress-fill {
-  width: 40% !important;
+  width: 40%;
   animation: agent-teams-progress-indeterminate 1.2s ease-in-out infinite;
 }
 
