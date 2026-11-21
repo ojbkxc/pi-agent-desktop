@@ -114,9 +114,9 @@ jobs:
           tagName: v__VERSION__
           releaseName: pi-agent-desktop v__VERSION__
           releaseBody: |
-            ## Pi Agent Desktop 0.8.8 (fork)
+            ## Pi Agent Desktop 0.8.7 (fork)
 
-            **2026-11-21 发版.** 承接 0.8.7，修复团队工作台「查看配置」弹框宽度等问题。
+            **2026-11-21 覆盖式重发（第三次）/ re-release.** Same version number; this build replaces the previous v0.8.7 artifacts.
 
             - **计划弹框宽度 / plan dialog width.** 「查看配置」弹框现与聊天输入框等宽（`min(820px, 聊天列−滚动条−32, 100%)`），窄窗口/窄聊天列下不再横跨屏幕；布局改用容器查询断点（弹框收窄时正确切单列），模型生成长文本加 `overflow-wrap:anywhere` 防撑宽。
             - **细节 / polish.** 会话列表「…」按钮点击区固定 28px。
