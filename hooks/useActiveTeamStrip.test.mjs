@@ -200,6 +200,7 @@ function mountHook(...initialArgs) {
   let latest;
   const render = () => {
     ReactFake.__beginRender();
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- 模拟渲染器，非真实组件/自定义 hook
     latest = useActiveTeamStrip(...args);
   };
   ReactFake.__setNotify(() => render());
