@@ -35,5 +35,8 @@ export async function GET(req: Request) {
     q: textParam(searchParams, "q"),
     vendor: textParam(searchParams, "vendor"),
     limit: limitParam(searchParams),
+    // 给了就每项多带一个 `modelMatch`，让面板能标出「写给这个模型的」；
+    // 不筛选、不重排，因此没有它时响应与以前完全一致。
+    model: textParam(searchParams, "model"),
   }));
 }

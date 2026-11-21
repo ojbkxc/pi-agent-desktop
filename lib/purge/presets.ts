@@ -15,6 +15,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expandHome } from "./governance";
 import { BUILTIN_PRESETS, type BuiltinPreset } from "./preset-catalog";
+import { presetMatchForModel, type PresetMatch } from "./preset-match";
 import type { PurgeSettings } from "./types";
 
 /** Default page size for `listPresets`. */
@@ -32,6 +33,13 @@ export interface PresetSummary {
   tags: string[];
   bytes: number;
   preview: string;
+  /**
+   * 当前模型与该预设目标模型的匹配强度。
+   *
+   * 仅当调用方传了 `model` 时出现：不传就没有这个字段，默认响应逐字节不变。
+   * 它只用于让面板把「写给这个模型的」标出来，不参与排序（目录原序是面板顺序的唯一真源）。
+   */
+  modelMatch?: PresetMatch;
 }
 
 export interface PresetDetail extends PresetSummary {
@@ -48,6 +56,11 @@ export interface PresetListOptions {
   q?: string;
   vendor?: string;
   limit?: number;
+  /**
+   * 当前模型标识。给了就在每一项上附 `modelMatch`；不给就什么也不变。
+   * 它不筛选、不重排、不做任何动作 —— 只是把匹配结果告诉调用方。
+   */
+  model?: string;
 }
 
 /** One page plus the facets the panel renders around it. */
@@ -106,8 +119,8 @@ export function previewOf(body: string): string {
   return Array.from(body).slice(0, PREVIEW_CHARS).join("");
 }
 
-function toSummary(preset: BuiltinPreset): PresetSummary {
-  return {
+function toSummary(preset: BuiltinPreset, model?: string): PresetSummary {
+  const summary: PresetSummary = {
     id: preset.id,
     vendor: preset.vendor,
     model: preset.model,
@@ -118,6 +131,11 @@ function toSummary(preset: BuiltinPreset): PresetSummary {
     bytes: preset.bytes,
     preview: previewOf(preset.body),
   };
+  // 只在调用方问了「当前模型」时才加这个字段：默认响应逐字节不变。
+  if (typeof model === "string" && model.trim()) {
+    summary.modelMatch = presetMatchForModel(preset, model);
+  }
+  return summary;
 }
 
 function normalizeLimit(limit: unknown): number {
@@ -147,6 +165,8 @@ function matchesQuery(preset: BuiltinPreset, needle: string): boolean {
  * Items keep the catalog's own order: the generator sorts by (vendor, model, id)
  * case-insensitively, and re-sorting here would make the panel's order depend on
  * two different collations. Paging is therefore a stable prefix of that order.
+ * A `model` option adds `modelMatch` to each item and changes nothing else — not
+ * the order, not the page, not the facets.
  */
 export function listPresetPage(
   catalog: readonly BuiltinPreset[],
@@ -176,7 +196,7 @@ export function listPresetPage(
 
   const limit = normalizeLimit(options.limit);
   return {
-    items: filtered.slice(0, limit).map(toSummary),
+    items: filtered.slice(0, limit).map((preset) => toSummary(preset, options.model)),
     vendors,
     total: filtered.length,
   };
