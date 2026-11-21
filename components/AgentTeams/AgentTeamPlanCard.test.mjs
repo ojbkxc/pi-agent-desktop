@@ -249,6 +249,23 @@ test("overlay 用 --z-modal 令牌（不是 literal 60，不得掉到顶栏 90 �
   assert.match(html, /aria-modal="true"/, "模态语义保留");
 });
 
+// 宽度：弹框与输入框等宽，跟随聊天内容列实际宽度（--chat-content-region-width，
+// ChatWindow 用 ResizeObserver 写入）；聊天列窄时同步收窄，宽于上限时取
+// --chat-content-max-width。旧的 720 固定封顶会横跨屏幕（用户反馈）。
+test("dialog 宽度与输入框等宽：跟随聊天内容列，不再 720 固定封顶", async () => {
+  const { readFile } = await jiti.import("node:fs/promises");
+  const source = (await readFile(new URL("./AgentTeamPlanCard.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+  assert.match(
+    source,
+    /width: "min\(var\(--chat-content-max-width, 820px\), var\(--chat-content-region-width, 100%\), 100%\)"/,
+    "与输入框同一公式",
+  );
+  assert.match(source, /--chat-content-region-width/, "宽度跟随聊天内容列");
+  assert.doesNotMatch(source, /720px/, "不得再用 720 固定封顶");
+  assert.match(source, /className="team-plan-dialog"/, "弹框挂载容器查询/换行规则的类名");
+  assert.match(source, /overflowWrap: "anywhere"/, "长文本可断行，防撑宽弹框");
+});
+
 test("状态标签键与徽标色覆盖四态（纯函数输出）", () => {
   assert.equal(planStateLabelKey("review_pending"), "teams.plan.state.review_pending");
   assert.equal(planStateToneColor("review_pending"), "var(--accent)");

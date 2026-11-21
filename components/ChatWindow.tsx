@@ -1066,6 +1066,38 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
     };
   }, [isEmptyNew, scrollContainerRef]);
 
+  // Dialogs and popovers portal to document.body, so they sit outside the chat
+  // column's DOM and cannot inherit its width. Publish the column's inner width
+  // as a global CSS variable: the agent-team plan dialog sizes itself to
+  // min(--chat-content-max-width, --chat-content-region-width, 100%), so it
+  // stays exactly as wide as the composer and narrows with the column instead
+  // of the viewport. Subtract the scrollbar gutter on both sides as well: the
+  // composer wrapper mirrors the message scrollbar with
+  // `paddingInline: scrollbarGutter`, so leaving it out makes the dialog wider
+  // than the input by 2 × the gutter in a narrow column.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const region = chatContentRegionRef.current;
+    if (!region) return;
+    const apply = (width: number) => {
+      const inner = Math.max(0, Math.round(width - scrollbarGutter * 2 - CHAT_COLUMN_PADDING * 2));
+      document.documentElement.style.setProperty("--chat-content-region-width", `${inner}px`);
+    };
+    apply(region.getBoundingClientRect().width);
+    if (typeof ResizeObserver === "undefined") {
+      return () => document.documentElement.style.removeProperty("--chat-content-region-width");
+    }
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) apply(entry.contentRect.width);
+    });
+    observer.observe(region);
+    return () => {
+      observer.disconnect();
+      document.documentElement.style.removeProperty("--chat-content-region-width");
+    };
+  }, [scrollbarGutter]);
+
   // hasStreamingContent now comes from the streaming store selectors above.
   const messageCwd = chatOnly ? chatFolderCwd : session?.cwd ?? newSessionCwd ?? undefined;
   // Keys that do not change when a sent or streamed message gets its entry id

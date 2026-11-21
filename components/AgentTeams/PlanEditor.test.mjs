@@ -12,7 +12,7 @@ import { createJiti } from "jiti";
  */
 
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
-const { splitModelRef, joinModelRef, diffPlanEdits, draftFromPlan, isDraftDirty, planEditorColumns } =
+const { splitModelRef, joinModelRef, diffPlanEdits, draftFromPlan, isDraftDirty } =
   await jiti.import("./PlanEditor.tsx");
 
 const member = (over = {}) => ({
@@ -153,23 +153,33 @@ test("diffPlanEdits：模型没变的成员不进 PATCH（避免无谓 revision+
 // ── interaction.md P2 #4：窄屏横向溢出 ────────────────────────────────────────
 // 外层固定 minmax(220,280) + minmax(0,1fr)、任务行再固定 minmax(160,220)：400px
 // 视口下右列只剩约 60px，负责人下拉被挤出视口，dialog 出现横向滚动。
-test("planEditorColumns：宽屏两列 / 窄屏单列（任务行同样改上下排列）", () => {
-  const wide = planEditorColumns(false);
-  assert.match(wide.grid, /minmax\(220px, 280px\)/, "宽屏保留名册列");
-  assert.match(wide.taskRow, /minmax\(160px, 220px\)/, "宽屏负责人列保留");
-
-  const narrow = planEditorColumns(true);
-  assert.doesNotMatch(narrow.grid, /minmax\(220px/, "窄屏不得再有固定 220px 列");
-  assert.match(narrow.grid, /minmax\(0, 1fr\)$/);
-  assert.equal(narrow.taskRow, "minmax(0, 1fr)", "任务行窄屏单列（上下排列）");
+// 弹框现在与输入框等宽（可能远窄于视口），断点必须跟随 **弹框内容宽**，所以改成
+// CSS 容器查询，而不是视口 matchMedia（视口仍宽时不会切单列 → 内容被挤扁）。
+test("列布局改用 CSS 容器查询，PlanEditor 不再按视口切列", async () => {
+  const source = (await readFile(new URL("./PlanEditor.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+  assert.doesNotMatch(source, /matchMedia/, "不得再按视口宽切列");
+  assert.doesNotMatch(source, /useNarrowEditorGrid|planEditorColumns/, "旧视口断点逻辑已移除");
+  // 容器挂点
+  assert.match(source, /data-testid="team-plan-editor" className="team-plan-editor"/, "编辑器根元素建立 CSS 容器");
+  assert.match(source, /className="team-plan-editor-grid"/, "名册/详情两列网格");
+  assert.match(source, /className="team-plan-detail-column"/, "详情列自建容器（560 断点相对右列）");
+  assert.match(source, /className="team-plan-assignment-grid"/, "成员字段网格");
+  assert.match(source, /className="team-plan-task-row"/, "任务行");
+  // 旧的行内两列定义必须从 JSX/style 里消失（否则容器查询会被行内样式覆盖）。
+  assert.doesNotMatch(source, /gridTemplateColumns: "minmax\(220px/, "行内固定两列会覆盖容器查询");
 });
 
-test("窄屏接线：PlanEditor 用 720px 断点喂几何，任务行按列配置切换", async () => {
+test("容器查询规则落在 app/native-theme.css（760 / 560 断点 + 长文本换行）", async () => {
+  const css = (await readFile(new URL("../../app/native-theme.css", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+  assert.match(css, /\.team-plan-editor\s*\{[^}]*container-type:\s*inline-size/, "编辑器根元素是查询容器");
+  assert.match(css, /@container \(min-width: 760px\)[\s\S]*?\.team-plan-editor-grid[^{]*\{[^}]*minmax\(220px, 280px\)/, "760 两列");
+  assert.match(css, /@container \(min-width: 560px\)[\s\S]*?\.team-plan-task-row[^{]*\{[^}]*minmax\(160px, 220px\)/, "560 任务行两列");
+  assert.match(css, /\.team-plan-detail-column\s*\{[^}]*container-type:\s*inline-size/, "详情列自建容器");
+  assert.match(css, /\.team-plan-editor[\s\S]*?overflow-wrap:\s*anywhere/, "长 identifier/path 必须能断行");
+});
+
+test("模型生成的长文本字段带 overflowWrap:anywhere（防撑宽弹框）", async () => {
   const source = (await readFile(new URL("./PlanEditor.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
-  assert.match(source, /max-width: 720px/, "断点 720（全局 640 是移动工具栏的，不是本网格的）");
-  assert.match(source, /planEditorColumns\(useNarrowEditorGrid\(\)\)/);
-  assert.match(source, /gridTemplateColumns: columns\.grid/, "外层网格必须用同一配置");
-  assert.match(source, /columns\.taskRow === NARROW_TASK_ROW \? S\.taskRowNarrow : S\.taskRow/, "任务行按配置切换");
-  // 旧的裸两列定义必须从 JSX 里消失（否则窄屏仍会溢出）。
-  assert.doesNotMatch(source, /gridTemplateColumns: "minmax\(220px, 280px\) minmax\(0, 1fr\)"/);
+  const inline = (source.match(/overflowWrap: "anywhere"/g) ?? []).length;
+  assert.ok(inline >= 3, `成员名 / 模型行 / 批量区 / 任务标题 / 成员 brief 至少覆盖若干处，实际 ${inline}`);
 });

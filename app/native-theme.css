@@ -11097,6 +11097,52 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .agent-team-cost-confirm { border-color: var(--accent); background: var(--accent); color: var(--bg); }
 .agent-team-cost-confirm:hover { opacity: 0.9; }
 
+/* Agent-team plan dialog (components/AgentTeams/AgentTeamPlanCard.tsx +
+   PlanEditor.tsx). The dialog sizes itself to the chat composer's width via
+   --chat-content-region-width (written by ChatWindow), so it can get narrow
+   even on a wide viewport. Layout therefore keys off the dialog's own width
+   with CSS container queries, mirroring cc-haha's AgentTeamsPlanCard
+   (@container at the editor root, @min-[760px] for the roster/detail split,
+   @min-[560px] for the assignment fields and task rows).
+   Plan text is model-written: a long identifier/path/URL has no break
+   opportunity, so overflow-wrap:anywhere both wraps it and lowers min-content
+   so grid/flex items can shrink (#1523 in cc-haha). */
+.team-plan-editor {
+  container-type: inline-size;
+  overflow-wrap: anywhere;
+}
+
+.team-plan-editor-grid,
+.team-plan-task-row,
+.team-plan-assignment-grid {
+  /* Base: one column. The two-column layouts only appear once the DIALOG is
+     wide enough, not the viewport. */
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* The detail column is its own container so the 560px fields below respond to
+   the right-hand column width rather than the whole dialog. */
+.team-plan-detail-column {
+  container-type: inline-size;
+  min-width: 0;
+}
+
+@container (min-width: 760px) {
+  .team-plan-editor-grid {
+    grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  }
+}
+
+@container (min-width: 560px) {
+  .team-plan-assignment-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 0.8fr);
+  }
+
+  .team-plan-task-row {
+    grid-template-columns: minmax(0, 1fr) minmax(160px, 220px);
+  }
+}
+
 /* Workspace-overlay back button in the topbar (AppShell). */
 .app-topbar-back {
   display: inline-flex;

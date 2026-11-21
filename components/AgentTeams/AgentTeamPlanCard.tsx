@@ -94,7 +94,7 @@ const S: Record<string, CSSProperties> = {
   icon: { flex: "0 0 auto", color: "var(--text-muted)" },
   text: { display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 },
   label: { fontSize: "var(--fs-micro)", color: "var(--text-dim)" },
-  name: { fontSize: "var(--fs-body)", fontWeight: "var(--fw-semibold)", color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  name: { fontSize: "var(--fs-body)", fontWeight: "var(--fw-semibold)", color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", overflowWrap: "anywhere" },
   meta: { display: "flex", alignItems: "center", gap: 6, fontSize: "var(--fs-caption)", color: "var(--text-muted)" },
   badge: { padding: "1px 7px", borderRadius: 999, border: "1px solid var(--border)", fontSize: "var(--fs-micro)" },
   review: {
@@ -124,14 +124,17 @@ const S: Record<string, CSSProperties> = {
     zIndex: "var(--z-modal)",
   },
   dialog: {
-    // 固定舒适宽度 720px 封顶，**不再**只跟随聊天区内容宽（--chat-content-max-width，
-    // 默认 820px）：用户把聊天宽度调大后，这个配置表单不该被一起拉宽成一整屏。仍保留
-    // 100% 让窄窗口不溢出（min 取三者最小值）。
+    // 与输入框等宽：跟随聊天内容列的实际宽度（--chat-content-region-width 由 ChatWindow
+    // 的 ResizeObserver 写入 = 聊天列容器宽 - 左右内边距），聊天列变窄时弹框同步收窄；
+    // 聊天列宽于上限时取 --chat-content-max-width。100% 仍保留，让窄窗口不溢出（取三者最小值）。
+    // "team-plan-dialog" 供功能域样式/静态断言定位；编辑器容器查询与长文本换行规则在
+    // app/native-theme.css 的 .team-plan-editor / @container 上。
     // `boxSizing: border-box` 必须保留：content-box 下 width 不含 padding/border，
     // 100% 宽时每侧会多出 16px，弹框在窄窗口里左右各溢出一截。
-    width: "min(720px, var(--chat-content-max-width, 820px), 100%)",
+    width: "min(var(--chat-content-max-width, 820px), var(--chat-content-region-width, 100%), 100%)",
     maxWidth: "100%",
     boxSizing: "border-box",
+    overflowWrap: "anywhere",
     maxHeight: "min(78vh, 640px)",
     overflow: "auto",
     background: "var(--bg-panel)",
@@ -144,11 +147,11 @@ const S: Record<string, CSSProperties> = {
   section: { marginTop: 14 },
   h4: { fontSize: "var(--fs-caption)", fontWeight: "var(--fw-semibold)", color: "var(--text-muted)", margin: "0 0 6px" },
   member: { padding: "6px 0", borderTop: "1px solid var(--border)" },
-  memberName: { fontSize: "var(--fs-body)", fontWeight: "var(--fw-semibold)", color: "var(--text)" },
-  mono: { fontFamily: "var(--font-mono)", fontSize: "var(--fs-micro)", color: "var(--text-muted)" },
-  muted: { fontSize: "var(--fs-caption)", color: "var(--text-muted)" },
-  prompt: { fontFamily: "var(--font-mono)", fontSize: "var(--fs-micro)", color: "var(--text-dim)", whiteSpace: "pre-wrap", margin: "4px 0 0" },
-  task: { padding: "6px 0", borderTop: "1px solid var(--border)", fontSize: "var(--fs-caption)", color: "var(--text)" },
+  memberName: { fontSize: "var(--fs-body)", fontWeight: "var(--fw-semibold)", color: "var(--text)", overflowWrap: "anywhere" },
+  mono: { fontFamily: "var(--font-mono)", fontSize: "var(--fs-micro)", color: "var(--text-muted)", overflowWrap: "anywhere" },
+  muted: { fontSize: "var(--fs-caption)", color: "var(--text-muted)", overflowWrap: "anywhere" },
+  prompt: { fontFamily: "var(--font-mono)", fontSize: "var(--fs-micro)", color: "var(--text-dim)", whiteSpace: "pre-wrap", margin: "4px 0 0", overflowWrap: "anywhere" },
+  task: { padding: "6px 0", borderTop: "1px solid var(--border)", fontSize: "var(--fs-caption)", color: "var(--text)", overflowWrap: "anywhere" },
   alert: { color: "var(--danger)", fontSize: "var(--fs-caption)", margin: "6px 0" },
   confirmRow: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "6px 0", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--danger)", background: "var(--bg-panel)" },
   footer: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 },
@@ -230,6 +233,7 @@ export function planModalView(
     <div style={S.overlay} data-testid="team-plan-overlay" onClick={requestClose}>
       <div
         ref={options.panelRef}
+        className="team-plan-dialog"
         style={S.dialog}
         role="dialog"
         aria-modal="true"
@@ -294,7 +298,7 @@ export function planModalView(
               ) : (
                 plan.tasks.map((task) => (
                   <div key={task.id} style={S.task} data-task-id={task.id}>
-                    <div>{task.subject}</div>
+                    <div style={{ overflowWrap: "anywhere" }}>{task.subject}</div>
                     <div style={S.mono}>
                       {t("teams.plan.owner")}: {ownerName(task.ownerId)}
                       {task.dependencies.length > 0

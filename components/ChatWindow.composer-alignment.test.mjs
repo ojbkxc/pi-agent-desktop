@@ -75,3 +75,29 @@ test("composer and message columns share one padding and one max width", () => {
   );
   assert.equal(inputSource.split(maxWidth).length - 1, 1, "the composer shares the appearance width");
 });
+
+test("publishes the chat column's inner width for portal dialogs", () => {
+  // Dialogs portal to document.body, outside the chat column. The plan dialog
+  // sizes itself to this variable so it stays exactly as wide as the composer.
+  assert.match(
+    source,
+    /const inner = Math\.max\(0, Math\.round\(width - scrollbarGutter \* 2 - CHAT_COLUMN_PADDING \* 2\)\);/,
+    "the published width is the column minus the composer's two insets",
+  );
+  assert.match(
+    source,
+    /document\.documentElement\.style\.setProperty\("--chat-content-region-width", `\$\{inner\}px`\);/,
+    "written as a px value on the document root so the body portal inherits it",
+  );
+  assert.match(source, /new ResizeObserver\(\(entries\) => \{/, "tracks column resizes");
+  assert.match(
+    source,
+    /document\.documentElement\.style\.removeProperty\("--chat-content-region-width"\);/,
+    "cleaned up on unmount",
+  );
+  // The composer mirrors the message scrollbar with paddingInline:scrollbarGutter,
+  // so the variable must subtract it too, and the effect must recompute when the
+  // gutter appears/disappears (a message list that starts scrolling).
+  assert.match(source, /const inner = Math\.max\(0, Math\.round\(width - scrollbarGutter \* 2/, "gutter subtracted on both sides");
+  assert.match(source, /\}, \[scrollbarGutter\]\);/, "re-runs when the gutter changes");
+});

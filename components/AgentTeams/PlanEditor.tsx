@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { useModelCatalog } from "@/hooks/useModelCatalog";
 import { AppSelect } from "@/components/AppSelect";
@@ -151,45 +151,12 @@ interface Props {
   onDirtyChange?: (dirty: boolean) => void;
 }
 
-/** 成员名册 / 任务分配两列布局：窄屏（<720）改单列，任务行也改上下排列。 */
-const WIDE_EDITOR_GRID = "minmax(220px, 280px) minmax(0, 1fr)";
-const NARROW_EDITOR_GRID = "minmax(0, 1fr)";
-const WIDE_TASK_ROW = "minmax(0,1fr) minmax(160px, 220px)";
-const NARROW_TASK_ROW = "minmax(0, 1fr)";
-
-/**
- * `repeat(auto-fit, minmax(...))` 之外的选择：外列 220+1fr 在 400px 视口下
- * 右列只剩约 60px（负责人下拉被挤到屏外、dialog 出横向滚动）。窄屏改单列
- * 是最小改动且不需要 CSS 文件（本组只用行内样式）。
+/** 成员名册 / 任务分配两列布局由 **CSS 容器查询** 控制（app/native-theme.css 的
+ * `.team-plan-editor` / `@container` 规则）：两列在编辑器容器宽 ≥760px 时出现，
+ * 任务行与成员字段在 ≥560px 时排成两列。不能按视口宽切列——弹框现在与聊天
+ * 输入框等宽，聊天列被收窄而视口仍宽时，视口断点不会切单列，内容反而被挤扁
+ * （对齐 cc-haha AgentTeamsPlanCard.tsx 的 @container / @min-[760px] / @min-[560px]）。
  */
-export function planEditorColumns(narrow: boolean): { grid: string; taskRow: string } {
-  return narrow
-    ? { grid: NARROW_EDITOR_GRID, taskRow: NARROW_TASK_ROW }
-    : { grid: WIDE_EDITOR_GRID, taskRow: WIDE_TASK_ROW };
-}
-
-/** 编辑器网格断点（720）：两列在更窄的视口里一定放不下负责人下拉。 */
-const NARROW_EDITOR_QUERY = "(max-width: 720px)";
-
-/**
- * 本地 matchMedia 订阅（与 hooks/useIsMobile 同款实现，但断点是 720 而不是
- * 全局的 640——那是移动工具栏的断点，不是本编辑器两列能否放下的判据）。
- * SSR 安全：服务端与首帧按宽屏渲染，hydration 后同步。
- */
-function useNarrowEditorGrid(): boolean {
-  const subscribe = useCallback((cb: () => void) => {
-    if (typeof window === "undefined" || !window.matchMedia) return () => {};
-    const mql = window.matchMedia(NARROW_EDITOR_QUERY);
-    mql.addEventListener("change", cb);
-    return () => mql.removeEventListener("change", cb);
-  }, []);
-  return useSyncExternalStore(
-    subscribe,
-    () => (typeof window !== "undefined" && window.matchMedia ? window.matchMedia(NARROW_EDITOR_QUERY).matches : false),
-    () => false,
-  );
-}
-
 const S = {
   roster: { display: "flex", flexDirection: "column", gap: 4, minWidth: 0 },
   row: (active: boolean) => ({
@@ -197,15 +164,15 @@ const S = {
     background: active ? "var(--bg-selected)" : "transparent", cursor: "pointer",
   }),
   rowMeta: { display: "flex", flexDirection: "column", gap: 1, minWidth: 0, flex: 1 },
-  name: { fontSize: "var(--fs-body)", fontWeight: "var(--fw-semibold)", color: "var(--text)" },
-  mono: { fontFamily: "var(--font-mono)", fontSize: "var(--fs-micro)", color: "var(--text-muted)" },
+  name: { fontSize: "var(--fs-body)", fontWeight: "var(--fw-semibold)", color: "var(--text)", overflowWrap: "anywhere" },
+  mono: { fontFamily: "var(--font-mono)", fontSize: "var(--fs-micro)", color: "var(--text-muted)", overflowWrap: "anywhere" },
   section: { marginTop: 16 },
   h4: { fontSize: "var(--fs-caption)", fontWeight: "var(--fw-semibold)", color: "var(--text-muted)", margin: "0 0 6px" },
   field: { display: "flex", flexDirection: "column", gap: 4, minWidth: 0 },
   label: { fontSize: "var(--fs-micro)", color: "var(--text-muted)" },
-  batch: { marginTop: 10, padding: "8px 10px", borderRadius: 10, background: "var(--bg-subtle, var(--bg-panel))", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" },
-  taskRow: { display: "grid", gap: 8, gridTemplateColumns: "minmax(0,1fr) minmax(160px, 220px)", alignItems: "start", padding: "6px 0", borderTop: "1px solid var(--border)" },
-  taskRowNarrow: { display: "grid", gap: 6, gridTemplateColumns: "minmax(0, 1fr)", alignItems: "start", padding: "6px 0", borderTop: "1px solid var(--border)" },
+  batch: { marginTop: 10, padding: "8px 10px", borderRadius: 10, background: "var(--bg-subtle, var(--bg-panel))", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", overflowWrap: "anywhere" },
+  // 列数由 `.team-plan-task-row` 的容器查询切换（app/native-theme.css）。
+  taskRow: { display: "grid", gap: 8, alignItems: "start", padding: "6px 0", borderTop: "1px solid var(--border)" },
   footer: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12, flexWrap: "wrap" },
   alert: { color: "var(--danger)", fontSize: "var(--fs-caption)", margin: "6px 0" },
   hint: { fontSize: "var(--fs-micro)", color: "var(--text-dim)", margin: "4px 0 0" },
@@ -213,10 +180,6 @@ const S = {
 
 export function PlanEditor({ plan, cwd = null, editable, saving = false, saveError = null, onDraftChange, conflict = false, onReload, onDirtyChange }: Props) {
   const { t } = useI18n();
-  // 窄屏（≤720）改单列：固定两列在 400px 视口下把负责人下拉挤出视口，
-  // dialog 出现横向滚动（interaction.md P2 #4）。与 useIsMobile 的 640 不同——
-  // 这里是编辑器网格本身的断点，720 以下是「两列一定不够用」的宽度。
-  const columns = planEditorColumns(useNarrowEditorGrid());
   // cwd 必须传下去：不带 cwd 时 `/api/models` 退回**进程** cwd（打包版是
   // `resources/server`，不在文件白名单里）→ 400 → 目录为空，「已选 N 名」旁边的
   // 模型下拉一个选项都没有。
@@ -341,7 +304,7 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
   }));
 
   return (
-    <div data-testid="team-plan-editor" style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+    <div data-testid="team-plan-editor" className="team-plan-editor" style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
       <p style={S.hint}>{t("teams.plan.editorHint")}</p>
       {conflict ? (
         <div role="alert" data-testid="team-plan-conflict" style={S.alert}>
@@ -354,7 +317,7 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
         </div>
       ) : null}
 
-      <div style={{ display: "grid", gap: 16, gridTemplateColumns: columns.grid, alignItems: "start" }}>
+      <div className="team-plan-editor-grid" style={{ display: "grid", gap: 16, alignItems: "start" }}>
         {/* 左：成员名册（勾选 + 当前模型） */}
         <section aria-label={t("teams.plan.roster")} style={S.roster}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
@@ -435,11 +398,11 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
         </section>
 
         {/* 右：选中成员详情 + 任务分配 */}
-        <div style={{ minWidth: 0 }}>
+        <div className="team-plan-detail-column" style={{ minWidth: 0 }}>
           {activeMember && (
             <section aria-label={t("teams.plan.configureMember", { name: activeMember.name })}>
               <h4 style={S.h4}>{t("teams.plan.assignment")} · {activeMember.name}</h4>
-              <div style={{ display: "grid", gap: 10, gridTemplateColumns: "minmax(0,1fr) minmax(0,1.2fr) minmax(0,0.8fr)" }}>
+              <div className="team-plan-assignment-grid" style={{ display: "grid", gap: 10 }}>
                 <div style={S.field}>
                   <span style={S.label}>{t("teams.plan.agent")}</span>
                   {agents.length > 0 ? (
@@ -495,7 +458,7 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
               {activeMember.prompt ? (
                 <details style={{ marginTop: 8 }}>
                   <summary style={{ cursor: "pointer", fontSize: "var(--fs-micro)", color: "var(--text-muted)" }}>{t("teams.plan.memberBrief")}</summary>
-                  <p style={{ ...S.mono, whiteSpace: "pre-wrap", marginTop: 6 }}>{activeMember.prompt}</p>
+                  <p style={{ ...S.mono, whiteSpace: "pre-wrap", marginTop: 6, overflowWrap: "anywhere" }}>{activeMember.prompt}</p>
                 </details>
               ) : null}
             </section>
@@ -507,9 +470,9 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
               <p style={S.hint}>{t("teams.plan.noTasks")}</p>
             ) : (
               plan.tasks.map((task) => (
-                <div key={task.id} style={columns.taskRow === NARROW_TASK_ROW ? S.taskRowNarrow : S.taskRow} data-task-id={task.id}>
+                <div key={task.id} className="team-plan-task-row" style={S.taskRow} data-task-id={task.id}>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: "var(--fs-caption)", color: "var(--text)" }}>{task.subject}</div>
+                    <div style={{ fontSize: "var(--fs-caption)", color: "var(--text)", overflowWrap: "anywhere" }}>{task.subject}</div>
                     {task.dependencies.length > 0 && (
                       <div style={S.mono}>{t("teams.plan.dependencies")}: {task.dependencies.join(", ")}</div>
                     )}
