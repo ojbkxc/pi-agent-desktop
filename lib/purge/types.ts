@@ -12,6 +12,22 @@
 /** Reasoning effort the panel may clamp a request down to. `off` strips the ask. */
 export type PurgeThinkingFloor = "off" | "low" | "medium" | "high" | "xhigh";
 
+/**
+ * 自动套用时，预设文本落在宿主提示词的哪一侧。
+ *
+ * 只有两种：预设本身是一整份 system prompt，替换掉宿主提示词会把工具说明、
+ * 项目指令一起抹掉，所以这里只允许「前插」和「后附」。
+ */
+export type PurgeAutoPresetMode = "prepend" | "append";
+
+/**
+ * 自动套用允许的匹配强度。
+ *
+ * - `exact`：只认同名模型，宁可套不上，也不把写给别的模型的 prompt 塞进来。
+ * - `vendor`：没有同名预设时退到同厂商的第一条。
+ */
+export type PurgeAutoPresetMatch = "exact" | "vendor";
+
 /** One literal `from` → `to` text rewrite. */
 export interface PurgeRewriteRule {
   from: string;
@@ -68,6 +84,17 @@ export interface PurgeSettings {
    * that no longer exists) falls back to `structured_suffix`.
    */
   active_template: string;
+  /**
+   * 按当前模型自动套用破甲预设：打开后每个请求都现查预设库，命中就把预设正文
+   * 拼进系统提示词。关闭时零改动；查找只发生在开启的时候。
+   */
+  auto_preset: boolean;
+  /** 预设正文前插还是后附在宿主提示词上。 */
+  auto_preset_mode: PurgeAutoPresetMode;
+  /** 允许的匹配强度：`exact` 只认同名模型，`vendor` 允许退到同厂商。 */
+  auto_preset_match: PurgeAutoPresetMatch;
+  /** 固定套用的预设 id；空串表示按当前模型自动匹配。 */
+  auto_preset_id: string;
 }
 
 export interface PurgeLimits {
@@ -88,6 +115,12 @@ export const PURGE_THINKING_FLOORS: readonly PurgeThinkingFloor[] = [
 ];
 
 export const DEFAULT_PURGE_SKILL_DIR = "~/.agents/skills";
+
+/** Every valid `auto_preset_mode`, in the order the UI offers them. */
+export const PURGE_AUTO_PRESET_MODES: readonly PurgeAutoPresetMode[] = ["prepend", "append"];
+
+/** Every valid `auto_preset_match`, in the order the UI offers them. */
+export const PURGE_AUTO_PRESET_MATCHES: readonly PurgeAutoPresetMatch[] = ["exact", "vendor"];
 
 /**
  * AIGX's `DEFAULT_STRUCTURED_SUFFIX`.
@@ -124,7 +157,8 @@ function copyRules(rules: readonly PurgeRewriteRule[]): PurgeRewriteRule[] {
 /** A fresh defaults object each call, so a caller can never mutate shared state. */
 export function defaultPurgeSettings(): PurgeSettings {
   return {
-    enabled: false,
+    // 总闸默认打开：装好即可用；不想要改写的操作者可以一键关掉，关掉就是纯转发。
+    enabled: true,
     system_normalize: false,
     dead_zone_rewrite: false,
     synonym_enabled: false,
@@ -140,5 +174,11 @@ export function defaultPurgeSettings(): PurgeSettings {
     structured_suffix: DEFAULT_STRUCTURED_SUFFIX,
     structured_templates: [],
     active_template: "",
+    // 自动套用默认打开：装好就按模型生效。它仍受 `enabled` 总闸约束 —— 总闸关着
+    // 时数据面是纯转发，自动套用也一行都不跑。
+    auto_preset: true,
+    auto_preset_mode: "prepend",
+    auto_preset_match: "exact",
+    auto_preset_id: "",
   };
 }

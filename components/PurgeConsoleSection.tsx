@@ -7,6 +7,12 @@ import { ConfigButton, ConfigSwitch } from "./SettingsUi";
 
 export type PurgeReasoningFloor = "off" | "low" | "medium" | "high" | "xhigh";
 
+/** 自动套用时预设文本落在宿主提示词的哪一侧。 */
+export type PurgeAutoPresetMode = "prepend" | "append";
+
+/** 自动套用允许的匹配强度：只认同名模型，或退到同厂商。 */
+export type PurgeAutoPresetMatch = "exact" | "vendor";
+
 /** One rewrite row: the text an incoming request contains, and what it is replaced with. */
 export interface PurgeRule {
   from: string;
@@ -47,6 +53,14 @@ export interface PurgeSettings {
   structured_templates: PurgeTemplate[];
   /** Template `structured_prompt` appends; empty means `structured_suffix`. */
   active_template: string;
+  /** 按当前模型自动套用破甲预设：开则每次请求现查预设库。 */
+  auto_preset: boolean;
+  /** 预设正文前插还是后附在宿主提示词上。 */
+  auto_preset_mode: PurgeAutoPresetMode;
+  /** `exact` 只认同名模型，`vendor` 允许退到同厂商。 */
+  auto_preset_match: PurgeAutoPresetMatch;
+  /** 固定套用的预设 id；空串表示按模型自动匹配。 */
+  auto_preset_id: string;
 }
 
 /** Counter snapshot: cumulative since the process started, never reset per request. */
@@ -57,6 +71,7 @@ export interface PurgeStats {
   skill_hits: number;
   reasoning_clamps: number;
   structured_appends: number;
+  auto_preset_hits: number;
   started_at: string;
 }
 
@@ -64,6 +79,17 @@ export interface PurgeStats {
 export interface PurgeRuntime {
   pid: number;
   uptime_secs: number;
+}
+
+/**
+ * `GET /api/purge/auto-preset` 的回答：本机默认模型下，自动套用会挑中哪一条。
+ *
+ * 面板只拿它做一行提示，不参与任何判定 —— 真正的套用在服务端的每个请求里发生。
+ */
+export interface PurgeAutoPresetPreview {
+  model: string | null;
+  active: boolean;
+  preset: { id: string; title: string; vendor: string; model: string; match: string } | null;
 }
 
 /**
@@ -120,6 +146,22 @@ export const PURGE_REASONING_FLOOR_LABEL_KEYS: Record<PurgeReasoningFloor, strin
   xhigh: "purge.floorXHigh",
 };
 
+/** 自动套用的两种拼接方式，顺序即面板按钮顺序。 */
+export const PURGE_AUTO_PRESET_MODES: readonly PurgeAutoPresetMode[] = ["prepend", "append"];
+
+export const PURGE_AUTO_PRESET_MODE_LABEL_KEYS: Record<PurgeAutoPresetMode, string> = {
+  prepend: "purge.autoModePrepend",
+  append: "purge.autoModeAppend",
+};
+
+/** 自动套用的两种匹配强度，顺序即面板按钮顺序（默认第一个）。 */
+export const PURGE_AUTO_PRESET_MATCHES: readonly PurgeAutoPresetMatch[] = ["exact", "vendor"];
+
+export const PURGE_AUTO_PRESET_MATCH_LABEL_KEYS: Record<PurgeAutoPresetMatch, string> = {
+  exact: "purge.autoMatchExact",
+  vendor: "purge.autoMatchVendor",
+};
+
 /** The range `PUT /api/purge` clamps `skill_inject_limit` to. */
 export const PURGE_SKILL_INJECT_LIMIT_MIN = 16;
 export const PURGE_SKILL_INJECT_LIMIT_MAX = 20_000;
@@ -130,7 +172,8 @@ export const PURGE_SKILL_INJECT_LIMIT_MAX = 20_000;
  * succeeds, so these values never reach the server.
  */
 export const DEFAULT_PURGE_SETTINGS: PurgeSettings = {
-  enabled: false,
+  // 与 lib/purge/types.ts 的默认值一致：总闸打开、自动套用打开。
+  enabled: true,
   system_normalize: false,
   dead_zone_rewrite: false,
   synonym_enabled: false,
@@ -148,6 +191,12 @@ export const DEFAULT_PURGE_SETTINGS: PurgeSettings = {
   structured_suffix: "",
   structured_templates: [],
   active_template: "",
+  // 与 lib/purge/types.ts 的默认值一致：自动套用默认打开（仍受总闸约束），
+  // 拼接默认前插，匹配默认精确。
+  auto_preset: true,
+  auto_preset_mode: "prepend",
+  auto_preset_match: "exact",
+  auto_preset_id: "",
 };
 
 /** Counter rows of the read-only block, in render order. */
@@ -158,6 +207,7 @@ const PURGE_STAT_ROWS: readonly { labelKey: string; pick: (stats: PurgeStats) =>
   { labelKey: "purge.statSkillHits", pick: (stats) => stats.skill_hits },
   { labelKey: "purge.statReasoningClamps", pick: (stats) => stats.reasoning_clamps },
   { labelKey: "purge.statStructuredAppends", pick: (stats) => stats.structured_appends },
+  { labelKey: "purge.statAutoPresetHits", pick: (stats) => stats.auto_preset_hits },
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -181,6 +231,20 @@ export function asReasoningFloor(raw: unknown): PurgeReasoningFloor {
   return typeof raw === "string" && (PURGE_REASONING_FLOORS as readonly string[]).includes(raw)
     ? (raw as PurgeReasoningFloor)
     : DEFAULT_PURGE_SETTINGS.reasoning_floor;
+}
+
+/** 不认识的拼接方式读作默认的「前插」，与服务器归一化同一规则。 */
+export function asAutoPresetMode(raw: unknown): PurgeAutoPresetMode {
+  return typeof raw === "string" && (PURGE_AUTO_PRESET_MODES as readonly string[]).includes(raw)
+    ? (raw as PurgeAutoPresetMode)
+    : DEFAULT_PURGE_SETTINGS.auto_preset_mode;
+}
+
+/** 不认识的匹配强度读作默认的「精确」，绝不把 `vendor` 当成默认兜底。 */
+export function asAutoPresetMatch(raw: unknown): PurgeAutoPresetMatch {
+  return typeof raw === "string" && (PURGE_AUTO_PRESET_MATCHES as readonly string[]).includes(raw)
+    ? (raw as PurgeAutoPresetMatch)
+    : DEFAULT_PURGE_SETTINGS.auto_preset_match;
 }
 
 /**
@@ -307,7 +371,7 @@ export function formatPurgeUptime(
 export function asPurgeSettings(raw: unknown): PurgeSettings | null {
   if (!isRecord(raw)) return null;
   return {
-    enabled: asBoolean(raw.enabled),
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_PURGE_SETTINGS.enabled,
     system_normalize: asBoolean(raw.system_normalize),
     dead_zone_rewrite: asBoolean(raw.dead_zone_rewrite),
     synonym_enabled: asBoolean(raw.synonym_enabled),
@@ -323,6 +387,10 @@ export function asPurgeSettings(raw: unknown): PurgeSettings | null {
     structured_suffix: asString(raw.structured_suffix),
     structured_templates: normalizePurgeTemplates(raw.structured_templates),
     active_template: asString(raw.active_template).trim(),
+    auto_preset: typeof raw.auto_preset === "boolean" ? raw.auto_preset : DEFAULT_PURGE_SETTINGS.auto_preset,
+    auto_preset_mode: asAutoPresetMode(raw.auto_preset_mode),
+    auto_preset_match: asAutoPresetMatch(raw.auto_preset_match),
+    auto_preset_id: asString(raw.auto_preset_id).trim(),
   };
 }
 
@@ -335,6 +403,7 @@ export function asPurgeStats(raw: unknown): PurgeStats | null {
     skill_hits: asCount(raw.skill_hits),
     reasoning_clamps: asCount(raw.reasoning_clamps),
     structured_appends: asCount(raw.structured_appends),
+    auto_preset_hits: asCount(raw.auto_preset_hits),
     started_at: asString(raw.started_at),
   };
 }
@@ -343,6 +412,25 @@ export function asPurgeRuntime(raw: unknown): PurgeRuntime | null {
   if (!isRecord(raw)) return null;
   if (typeof raw.pid !== "number" || !Number.isFinite(raw.pid)) return null;
   return { pid: Math.trunc(raw.pid), uptime_secs: asCount(raw.uptime_secs) };
+}
+
+/** 自动套用预览：拿不到就返回 null，面板显示「预览不可用」而不是编一条。 */
+export function asAutoPresetPreview(raw: unknown): PurgeAutoPresetPreview | null {
+  if (!isRecord(raw)) return null;
+  const preset = isRecord(raw.preset) && typeof raw.preset.id === "string" && typeof raw.preset.title === "string"
+    ? {
+      id: raw.preset.id,
+      title: raw.preset.title,
+      vendor: asString(raw.preset.vendor),
+      model: asString(raw.preset.model),
+      match: asString(raw.preset.match),
+    }
+    : null;
+  return {
+    model: typeof raw.model === "string" && raw.model !== "" ? raw.model : null,
+    active: raw.active === true,
+    preset,
+  };
 }
 
 /**
@@ -369,6 +457,10 @@ export function purgeSavePayload(draft: PurgeSettings): PurgeSettings {
     structured_suffix: asString(draft.structured_suffix),
     structured_templates: normalizePurgeTemplates(draft.structured_templates),
     active_template: asString(draft.active_template).trim(),
+    auto_preset: draft.auto_preset === true,
+    auto_preset_mode: asAutoPresetMode(draft.auto_preset_mode),
+    auto_preset_match: asAutoPresetMatch(draft.auto_preset_match),
+    auto_preset_id: asString(draft.auto_preset_id).trim(),
   };
 }
 
@@ -481,20 +573,11 @@ export function PurgeConsoleSection() {
   const limitHintId = useId();
   const [draft, setDraft] = useState<PurgeSettings>(DEFAULT_PURGE_SETTINGS);
 
-  // 默认模型只用于给预设库打标记：拿不到就不标，不影响任何功能。
-  const [activeModel, setActiveModel] = useState<string | undefined>(undefined);
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/purge/active-model", { cache: "no-store" })
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data: unknown) => {
-        if (cancelled) return;
-        const model = typeof data === "object" && data !== null ? (data as { model?: unknown }).model : undefined;
-        if (typeof model === "string" && model !== "") setActiveModel(model);
-      })
-      .catch(() => {}); // 拿不到就不标记，不报错
-    return () => { cancelled = true; };
-  }, []);
+  // 默认模型只从 auto-preset 预览里取：一次请求同时给「当前模型」和「将套用哪条」，
+  // 两处不会再各读一次文件、也不会出现徽标与预览互相矛盾的时刻。
+  const [autoPreview, setAutoPreview] = useState<PurgeAutoPresetPreview | null>(null);
+  // 保存后让预览按新设置重算一次（表单本身已经是响应里的值，不必整页重读）。
+  const [previewKey, setPreviewKey] = useState(0);
   const [stats, setStats] = useState<PurgeStats | null>(null);
   const [runtime, setRuntime] = useState<PurgeRuntime | null>(null);
   const [limitDraft, setLimitDraft] = useState(String(DEFAULT_PURGE_SETTINGS.skill_inject_limit));
@@ -535,6 +618,16 @@ export function PurgeConsoleSection() {
     return () => { cancelled = true; };
   }, [applySettings, reloadKey]);
 
+  // 预览单独读一次：读失败只是一行「预览不可用」，不影响表单。
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/purge/auto-preset", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data: unknown) => { if (!cancelled) setAutoPreview(asAutoPresetPreview(data)); })
+      .catch(() => { if (!cancelled) setAutoPreview(null); });
+    return () => { cancelled = true; };
+  }, [reloadKey, previewKey]);
+
   const edit = useCallback((next: Partial<PurgeSettings>) => {
     setDraft((current) => ({ ...current, ...next }));
     setDirty(true);
@@ -563,6 +656,8 @@ export function PurgeConsoleSection() {
         applySettings(asPurgeSettings(isRecord(data) ? data.settings : undefined) ?? payload);
         setDirty(false);
         setStatus("saved");
+        // 预览按新设置重算：否则面板会拿着保存前的那一行继续说「将套用 X」。
+        setPreviewKey((key) => key + 1);
       })
       .catch(() => setStatus("saveFailed"))
       .finally(() => setSaving(false));
@@ -596,6 +691,14 @@ export function PurgeConsoleSection() {
     hours: t("purge.uptimeHours"),
     days: t("purge.uptimeDays"),
   }) : "";
+  const autoPreviewText = autoPreview === null
+    ? t("purge.autoPresetUnavailable")
+    : autoPreview.active !== true
+      // 开关没开（或总闸关着）时说清楚：这一行不是「即将套用」。
+      ? t("purge.autoPresetIdle")
+      : autoPreview.preset !== null
+        ? t("purge.autoPresetResolved", { model: autoPreview.model ?? "—", title: autoPreview.preset.title })
+        : t("purge.autoPresetNone", { model: autoPreview.model ?? "—" });
 
   return (
     <div className="settings-general settings-purge">
@@ -630,6 +733,69 @@ export function PurgeConsoleSection() {
           ))}
         </div>
         <p className="settings-general-description">{t("purge.masterNote")}</p>
+      </section>
+
+      <section className="settings-general-section">
+        <h3 className="settings-general-heading">{t("purge.autoHeading")}</h3>
+        <p className="settings-general-description">{t("purge.autoHint")}</p>
+        <div className="settings-option-list">
+          <div className="settings-option">
+            <span className="settings-option-text">
+              <span className="settings-option-title">{t("purge.autoEnable")}</span>
+              <span className="settings-option-hint">{t("purge.autoEnableHint")}</span>
+            </span>
+            <ConfigSwitch
+              checked={draft.auto_preset}
+              disabled={disabled}
+              label={t("purge.autoEnable")}
+              onChange={(next) => edit({ auto_preset: next })}
+            />
+          </div>
+        </div>
+        {/* 拼接方式与匹配强度同思考强度：按钮组平铺，当前值与全部候选一眼可见。 */}
+        <div className="settings-purge-floor" role="group" aria-label={t("purge.autoMode")}>
+          {PURGE_AUTO_PRESET_MODES.map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={`settings-purge-floor-btn${draft.auto_preset_mode === mode ? " is-active" : ""}`}
+              aria-pressed={draft.auto_preset_mode === mode}
+              disabled={disabled}
+              onClick={() => edit({ auto_preset_mode: mode })}
+            >
+              {t(PURGE_AUTO_PRESET_MODE_LABEL_KEYS[mode])}
+            </button>
+          ))}
+        </div>
+        <div className="settings-purge-floor" role="group" aria-label={t("purge.autoMatch")}>
+          {PURGE_AUTO_PRESET_MATCHES.map((match) => (
+            <button
+              key={match}
+              type="button"
+              className={`settings-purge-floor-btn${draft.auto_preset_match === match ? " is-active" : ""}`}
+              aria-pressed={draft.auto_preset_match === match}
+              disabled={disabled}
+              onClick={() => edit({ auto_preset_match: match })}
+            >
+              {t(PURGE_AUTO_PRESET_MATCH_LABEL_KEYS[match])}
+            </button>
+          ))}
+        </div>
+        <div className="settings-purge-field">
+          <label htmlFor="settings-purge-auto-preset-id">{t("purge.autoPresetId")}</label>
+          <input
+            id="settings-purge-auto-preset-id"
+            className="settings-chats-control"
+            type="text"
+            aria-label={t("purge.autoPresetId")}
+            placeholder={t("purge.autoPresetIdPlaceholder")}
+            value={draft.auto_preset_id}
+            disabled={disabled}
+            onChange={(event) => edit({ auto_preset_id: event.target.value })}
+          />
+          <span className="settings-chats-hint">{t("purge.autoPresetIdHint")}</span>
+        </div>
+        <p className="settings-general-description" role="status">{autoPreviewText}</p>
       </section>
 
       <section className="settings-general-section">
@@ -787,7 +953,7 @@ export function PurgeConsoleSection() {
       </section>
 
       {/* 预设库：浏览第三方公开 prompt 原文，一键落到模板草稿或技能目录。 */}
-      <PurgePresetLibrary activeModel={activeModel} onApplyTemplate={applyPresetTemplate} />
+      <PurgePresetLibrary activeModel={autoPreview?.model ?? undefined} onApplyTemplate={applyPresetTemplate} />
 
       <PurgeRulesTable
         heading={t("purge.rewriteRulesHeading")}

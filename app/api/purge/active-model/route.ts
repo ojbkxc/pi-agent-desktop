@@ -52,7 +52,7 @@ export function readDefaultModel(agentDir = getAgentDir()): DefaultModel | null 
  * 只读：本机的默认模型标识。
  *
  * 只用于让预设库标出「哪条预设是写给这个模型的」。它不应用任何预设、不写设置、
- * 不参与判定 —— 人工点击应用依旧是唯一入口。
+ * 不参与判定 —— 自动套用由 `auto_preset` 开关在请求路径上决定，与这个只读接口无关。
  */
 export function activeModelPayload(agentDir?: string) {
   return { model: readDefaultModel(agentDir)?.modelId ?? null };

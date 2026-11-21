@@ -12,8 +12,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * The console snapshot: the effective settings, the in-process counters, and the
  * server's own pid/uptime so the panel can show "running since".
+ *
+ * Gated like every other purge read: the console's settings carry the operator's
+ * rewrite tables and skill directory, and a page on another origin must not be
+ * able to read them just because it can reach the port.
  */
-export async function GET() {
+export async function GET(req: Request) {
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
   return NextResponse.json({
     settings: readPurgeSettings(),
     stats: purgeStatsSnapshot(),

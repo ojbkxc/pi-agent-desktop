@@ -2,12 +2,11 @@
  * 「模型 → 预设」的**查询**层：给定当前模型标识，返回候选预设及其匹配强度。
  *
  * 这里只回答「哪个预设是写给这个模型的」，**不做任何动作**：不应用预设、不写设置、
- * 不改发出去的请求。存在的理由是让面板能把「当前模型可用的预设」排到前面，而不是
- * 让宿主在用户选完模型后静默套上破甲文本 —— 后者需要用户明确点击，永远不由模型
- * 标识自动触发。
+ * 不改发出去的请求。动作在 `auto-apply.ts`：它先过 `settings.auto_preset` 开关，
+ * 才把命中的正文拼进系统提示词。两个模块都不碰控制面（工具审批、项目信任、沙箱），
+ * 那条边界由 `governance-boundary.test.mjs` 钉住。
  *
- * 因此本模块**不得**被 `before_agent_start` 或 `context` 引用；`governance-boundary.test.mjs`
- * 会把这条单向边界钉住。匹配规则是纯字符串比较，不读盘、不联网。
+ * 匹配规则是纯字符串比较，不读盘、不联网。
  */
 
 /** 预设需要的最小形状：目录里带 vendor 与 model 就够。 */
@@ -35,14 +34,29 @@ export function normalizeModelId(value: string): string {
 
 /** 给一个预设和当前模型，判定匹配强度。 */
 export function presetMatchForModel(preset: ModelTarget, activeModel: string): PresetMatch {
-  const target = normalizeModelId(preset.model);
-  const active = normalizeModelId(activeModel);
+  return presetMatchForNormalizedModel(
+    normalizeModelId(preset.model),
+    normalizeModelId(preset.vendor),
+    normalizeModelId(activeModel),
+  );
+}
+
+/**
+ * 已经归一化过的入参：判定规则与 `presetMatchForModel` 是同一份。
+ *
+ * 存在的理由是自动套用要在一次请求里拿同一个模型比完整个目录（53 条），
+ * 归一化只该做一次；两条路径共用这一份比较，规则不会分叉。
+ */
+export function presetMatchForNormalizedModel(
+  target: string,
+  vendor: string,
+  active: string,
+): PresetMatch {
   if (!target || !active) return "unknown";
 
   // 目录里有 `deepseekv4.1 and v4.1-1017` 这种一行覆盖两个模型的写法，取双向包含。
   if (active === target || active.includes(target) || target.includes(active)) return "exact";
 
-  const vendor = normalizeModelId(preset.vendor);
   if (vendor && active.includes(vendor)) return "vendor";
   return "mismatch";
 }

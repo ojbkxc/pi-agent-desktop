@@ -38,6 +38,7 @@ const ZERO_STATS = {
   skill_hits: 0,
   reasoning_clamps: 0,
   structured_appends: 0,
+  auto_preset_hits: 0,
   started_at: "",
 };
 
@@ -59,6 +60,10 @@ const CONTRACT_FIELDS = [
   "structured_suffix",
   "structured_templates",
   "active_template",
+  "auto_preset",
+  "auto_preset_mode",
+  "auto_preset_match",
+  "auto_preset_id",
 ];
 
 test("declares exactly the seven governance switches of the settings contract", () => {
@@ -87,9 +92,10 @@ test("declares exactly the seven governance switches of the settings contract", 
   }
 });
 
-test("first paint renders the master switch and the six governance switches", () => {
+test("first paint renders the master switch, the six governance switches and the auto-apply switch", () => {
   const html = renderFirstPaint();
-  assert.equal((html.match(/role="switch"/g) ?? []).length, 7, "expected 7 switches on first paint");
+  // 七道治理开关 + 「按模型自动套用」：后者不属于治理词表，但同样是开关。
+  assert.equal((html.match(/role="switch"/g) ?? []).length, 8, "expected 8 switches on first paint");
   assert.match(html, /Purge Console/);
   assert.match(html, /Purge master switch/);
   for (const key of purge.PURGE_TOGGLE_KEYS) {
@@ -297,9 +303,10 @@ test("the counter block lists every field the API counts", () => {
     skill_hits: 4,
     reasoning_clamps: 5,
     structured_appends: 6,
+    auto_preset_hits: 7,
     started_at: "t",
   });
-  assert.deepEqual(rows.map((row) => row.value), [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(rows.map((row) => row.value), [1, 2, 3, 4, 5, 6, 7]);
   assert.deepEqual(rows.map((row) => row.labelKey), [
     "purge.statRequests",
     "purge.statRewriteHits",
@@ -307,6 +314,7 @@ test("the counter block lists every field the API counts", () => {
     "purge.statSkillHits",
     "purge.statReasoningClamps",
     "purge.statStructuredAppends",
+    "purge.statAutoPresetHits",
   ]);
   // `started_at` and the runtime uptime are shown by the render, not by this list.
   assert.match(componentSource, /t\("purge\.statStartedAt"\)/);
@@ -342,6 +350,43 @@ test("every purge translation key exists in all three language packs", () => {
   for (const key of Object.values(purge.PURGE_TOGGLE_LABEL_KEYS)) {
     assert.ok(keys.includes(key), `component does not reference ${key}`);
   }
+});
+
+test("the auto-apply controls carry their own enum whitelists", () => {
+  assert.deepEqual([...purge.PURGE_AUTO_PRESET_MODES], ["prepend", "append"]);
+  assert.deepEqual([...purge.PURGE_AUTO_PRESET_MATCHES], ["exact", "vendor"]);
+  assert.deepEqual(Object.keys(purge.PURGE_AUTO_PRESET_MODE_LABEL_KEYS), [...purge.PURGE_AUTO_PRESET_MODES]);
+  assert.deepEqual(Object.keys(purge.PURGE_AUTO_PRESET_MATCH_LABEL_KEYS), [...purge.PURGE_AUTO_PRESET_MATCHES]);
+  for (const key of [
+    ...Object.values(purge.PURGE_AUTO_PRESET_MODE_LABEL_KEYS),
+    ...Object.values(purge.PURGE_AUTO_PRESET_MATCH_LABEL_KEYS),
+  ]) {
+    assert.match(key, /^purge\./);
+  }
+  assert.equal(purge.asAutoPresetMode("append"), "append");
+  assert.equal(purge.asAutoPresetMode("wild"), "prepend");
+  assert.equal(purge.asAutoPresetMatch("vendor"), "vendor");
+  assert.equal(purge.asAutoPresetMatch("wild"), "exact");
+  // 自动套用默认打开（总闸仍默认关闭），固定 id 默认留空。
+  assert.equal(purge.DEFAULT_PURGE_SETTINGS.auto_preset, true);
+  assert.equal(purge.DEFAULT_PURGE_SETTINGS.auto_preset_mode, "prepend");
+  assert.equal(purge.DEFAULT_PURGE_SETTINGS.auto_preset_match, "exact");
+  assert.equal(purge.DEFAULT_PURGE_SETTINGS.auto_preset_id, "");
+
+  const parsed = purge.asPurgeSettings({
+    auto_preset: "yes",
+    auto_preset_mode: "append",
+    auto_preset_match: "vendor",
+    auto_preset_id: "  deepseek-v4  ",
+  });
+  // 只有真布尔才算数；字符串退回默认值（默认是打开）。
+  assert.equal(parsed.auto_preset, true);
+  assert.equal(parsed.auto_preset_mode, "append");
+  assert.equal(parsed.auto_preset_match, "vendor");
+  assert.equal(parsed.auto_preset_id, "deepseek-v4");
+  assert.deepEqual(purge.purgeSavePayload(parsed), parsed);
+  // 显式的 false 仍然能关掉。
+  assert.equal(purge.asPurgeSettings({ auto_preset: false }).auto_preset, false);
 });
 
 test("Settings gains the purge section last, without reordering earlier values", () => {

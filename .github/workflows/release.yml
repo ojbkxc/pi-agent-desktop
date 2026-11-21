@@ -116,12 +116,21 @@ jobs:
           releaseBody: |
             ## Pi Agent Desktop 0.8.7 (fork)
 
-            **2026-11-21 覆盖式重发（第三次）/ re-release.** Same version number; this build replaces the previous v0.8.7 artifacts.
+            **2026-11-22 覆盖式重发（第四次）/ re-release.** Same version number; this build replaces the previous v0.8.7 artifacts.
+
+            ### 本次构建 / this build
+
+            - **破甲控制台默认开启 / purge console on by default.** 总闸 `enabled` 与「按模型自动套用」都默认打开：新装即按当前会话模型套用对应预设；把总闸关掉仍是纯转发（不判定、不重写、不改一个字）。
+            - **按模型自动套用 / auto-apply the preset written for the model.** 请求发出前按会话模型在 53 条内置预设里查一次，命中就把正文原样拼在系统提示词之前（或之后，可选）。`exact` 只认同名模型，`vendor` 才退到同厂商；也可以固定某条预设 id。预设正文不会被词表改写，拿不到模型或未命中就什么都不套。
+            - **面板 / panel.** 设置 › 破甲控制台新增「按模型自动套用」一节：开关、前后位置、匹配强度、固定 id，以及「默认模型 X → 将套用 Y」的实时预览；命中次数进入只读统计。
+            - **性能与边界 / performance and boundaries.** 匹配时模型只归一化一次、每条预设的归一化结果按行缓存（53 条 × 2 次正则 → 每个进程一次）；默认模型只读一次请求（页面同时拿到「当前模型」与「将套用哪条」）；`GET /api/purge` 补上与其余读接口一致的 Host/Origin 门。
+
+            ### 上一版 0.8.7 的说明（同样包含在本次构建里）/ carried over from the previous v0.8.7 build
 
             - **计划弹框宽度 / plan dialog width.** 「查看配置」弹框现与聊天输入框等宽（`min(820px, 聊天列−滚动条−32, 100%)`），窄窗口/窄聊天列下不再横跨屏幕；布局改用容器查询断点（弹框收窄时正确切单列），模型生成长文本加 `overflow-wrap:anywhere` 防撑宽。
             - **细节 / polish.** 会话列表「…」按钮点击区固定 28px。
 
-            以下为历史发布说明。
+            本版更早的说明（同样包含在本次构建里）。
 
             - **本次重发新增 / what this re-release adds.** cc-haha 风格的工具调用聚合行（默认收起、回合尾动词摘要 `读取 2 个文件、运行 1 条命令`）、团队状态条从顶栏移到消息列上方整宽横幅、上下文环方形用量面板（含本会话真实压缩触发点与立即压缩）、压缩阈值回归档位占比（均衡 50% / 长上下文 80%，压缩后不再贴线重触发）、团队会话标题剥离 `<agent-team-request>` 指令块、团队模型下拉修复（cwd 未传导致目录为空）、配置横条改单行短版、泳道连线终点锚定收件方 + 箭头与流动虚线、破甲控制台（请求治理网关：提示词归一化 / 措辞改写 / 技能注入 / 思考预算封顶，设置 › 破甲控制台）。
 
@@ -201,6 +210,8 @@ jobs:
             Bundled components: pi 1.5.2, pi-web 0.10.0 (the fork's pinned base; this build carries the upstream v0.10 → v0.17 changes).
 
             ---
+
+            以下为历史发布说明（更早的版本）。
 
             ## Pi Agent Desktop 0.8.6（fork）
 

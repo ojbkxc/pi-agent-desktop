@@ -34,8 +34,14 @@ function putRequest(body, { contentType = "application/json", origin, host = "lo
   });
 }
 
+function getRequest({ origin, host = "localhost" } = {}) {
+  const headers = { Host: host };
+  if (origin) headers.Origin = origin;
+  return new Request("http://localhost/api/purge", { headers });
+}
+
 test("GET returns the settings, the stats and the runtime block", async () => {
-  const response = await GET();
+  const response = await GET(getRequest());
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /application\/json/);
 
@@ -43,6 +49,7 @@ test("GET returns the settings, the stats and the runtime block", async () => {
   assert.deepEqual(body.settings, defaultPurgeSettings());
 
   assert.deepEqual(Object.keys(body.stats).sort(), [
+    "auto_preset_hits",
     "reasoning_clamps",
     "requests",
     "rewrite_hits",
@@ -86,7 +93,7 @@ test("PUT accepts a bare settings object and returns the normalized settings", a
   const stored = JSON.parse(readFileSync(settingsPath, "utf8"));
   assert.equal(stored.purge.enabled, true);
   assert.equal(JSON.stringify(stored).includes("bogus_key"), false);
-  const viaGet = await (await GET()).json();
+  const viaGet = await (await GET(getRequest())).json();
   assert.deepEqual(viaGet.settings, body.settings);
 });
 
@@ -138,4 +145,11 @@ test("PUT refuses a cross-site origin with 403", async () => {
   assert.equal(response.status, 403);
   const body = await response.json();
   assert.equal(body.error, "Untrusted API request");
+});
+
+test("GET refuses a cross-site origin with 403", async () => {
+  // 读设置也要过同一道门：改写词表与技能目录不该因为端口可达就能被别的源读走。
+  const response = await GET(getRequest({ origin: "http://evil.example.com" }));
+  assert.equal(response.status, 403);
+  assert.equal((await response.json()).error, "Untrusted API request");
 });

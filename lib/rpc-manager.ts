@@ -3580,6 +3580,9 @@ export async function startRpcSession(
     const chatSessionRef: {
       current?: { resourceLoader: { getSkills(): { skills: { filePath: string; baseDir: string }[] } } };
     } = {};
+    // 破甲控制台的「按模型自动套用」要按当前会话的模型查预设库；模型可以在会话
+    // 中途被换掉，所以这里存会话对象本身，扩展侧每次请求现取 `model.id`。
+    const purgeSessionRef: { current?: { model?: { id?: string } } } = {};
     // Trusted only by the folder's decision, as `syncProjectTrust()` reads it: created trusted
     // by default, a session that resolves no trust on load (a subagent that loads no
     // resources, Chat only) read the project settings of a folder never trusted.
@@ -3686,7 +3689,7 @@ export async function startRpcSession(
                 // 整体替换（SDK 把它写成 forceSystemPrompt，不带 sections），只有先于它注册的
                 // handler 改的段会活下来；放末尾治理的就是最终要发的那份提示词，聊天指令/日期/
                 // 团队段都不会被抹平。每次请求现读配置，关闭时零改动。
-                createPurgeExtension(),
+                createPurgeExtension({ readModel: () => purgeSessionRef.current?.model?.id }),
               ],
               // An unlocked chat has every tool, so extensions that hand work to an agent may load too.
               ...(chatUnlocked
@@ -3727,7 +3730,7 @@ export async function startRpcSession(
               }),
               // 破甲控制台（请求治理）：排在最后，理由同 workspace-chat 分支的同一注释
               // （forceSystemPrompt 是整体替换，先注册的 handler 改动才不会丢）。关闭时零改动。
-              createPurgeExtension(),
+              createPurgeExtension({ readModel: () => purgeSessionRef.current?.model?.id }),
             ],
             extensionsOverride: (base) => preferUserPowerShellExtension(
               preferUserBashExtension(preferPiWebSubagentExtension(base)),
@@ -3789,6 +3792,7 @@ export async function startRpcSession(
     });
 
     chatSessionRef.current = inner;
+    purgeSessionRef.current = inner;
 
     // A pinned selection replaces only the coding tools of the SDK's initial loadout, which
     // already holds the extension tools pi activates on registration and whatever

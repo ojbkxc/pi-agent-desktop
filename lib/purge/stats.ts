@@ -24,6 +24,8 @@ export interface PurgeStats {
   reasoning_clamps: number;
   /** Times `structured_suffix` was appended to the last user text. */
   structured_appends: number;
+  /** 按模型自动套用破甲预设、且真的改写了系统提示词的次数。 */
+  auto_preset_hits: number;
   /** `Date.now()` of the process that owns these counters. */
   started_at: number;
 }
@@ -35,6 +37,7 @@ const TRACKED_KEYS = [
   "skill_hits",
   "reasoning_clamps",
   "structured_appends",
+  "auto_preset_hits",
 ] as const;
 
 type TrackedKey = (typeof TRACKED_KEYS)[number];
@@ -47,6 +50,7 @@ const counters: Record<TrackedKey, number> = {
   skill_hits: 0,
   reasoning_clamps: 0,
   structured_appends: 0,
+  auto_preset_hits: 0,
 };
 
 let requests = 0;
@@ -80,6 +84,7 @@ export function purgeStatsSnapshot(): PurgeStats {
     skill_hits: counters.skill_hits,
     reasoning_clamps: counters.reasoning_clamps,
     structured_appends: counters.structured_appends,
+    auto_preset_hits: counters.auto_preset_hits,
     started_at: startedAt,
   };
 }

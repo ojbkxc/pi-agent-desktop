@@ -18,11 +18,16 @@
  * request without a session reload. Nothing here is session-scoped: there is no
  * `session_start` handler, because the configuration is global and no state is
  * cached across sessions.
+ *
+ * 自动套用（`auto_preset`）也走这一条路：模型标识由宿主注入的 `readModel` 每次现读，
+ * 命中的预设正文原样拼在治理后的系统提示词上。关掉开关就是零改动。
  */
 
 import type { ContextEvent, ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 import { readPurgeSettings } from "../purge-settings";
+import { composeAutoPreset, resolveAutoPreset } from "./auto-apply";
 import { governSystemText, governUserText } from "./governance";
+import { BUILTIN_PRESETS } from "./preset-catalog";
 import { recordPurgeTurn } from "./stats";
 import type { PurgeSettings } from "./types";
 
@@ -49,6 +54,14 @@ function thinkingRank(level: unknown): number | undefined {
 export interface PurgeExtensionOptions {
   /** Defaults to reading the `purge` block of Pi Web's settings file on every event. */
   readSettings?: () => PurgeSettings;
+  /**
+   * 当前会话的模型标识，自动套用预设时用来查目录。
+   *
+   * 由宿主注入：`before_agent_start` 的事件里没有模型字段，而模型可以在会话中途
+   * 被换掉，所以这里必须是每次调用现读的函数，不能是构造时的快照。返回空串或
+   * undefined 时自动套用不生效（其余治理照常）。
+   */
+  readModel?: () => string | undefined;
 }
 
 /** The last user text in the request plus a copy-on-write way to replace it. */
@@ -108,8 +121,16 @@ function findLastUserText(messages: readonly ContextMessage[]): LastUserText | u
 }
 
 /**
- * The `before_agent_start` half: govern the system prompt and, when asked, clamp
- * an explicit high reasoning level down to `reasoning_floor`.
+ * The `before_agent_start` half: govern the system prompt, apply the preset the
+ * current model is written for (when that switch is on) and, when asked, clamp an
+ * explicit high reasoning level down to `reasoning_floor`.
+ *
+ * Order matters twice:
+ *
+ * - 治理（归一化/改写）只跑在宿主提示词上，预设正文随后原样拼接，第三方 prompt
+ *   因此永远不会被词表改写成另一个版本。
+ * - 自动套用排在治理之后、返回之前：返回的 `systemPrompt` 是整体替换，最后拼上
+ *   的那份就是真正发出去的那份。
  *
  * Returns `undefined` when the console is off, so the host sends its own prompt
  * unchanged. Other extensions may also return `systemPrompt` (exact prompt,
@@ -119,6 +140,7 @@ function handleBeforeAgentStart(
   pi: ExtensionAPI,
   event: { systemPrompt?: unknown },
   readSettings: () => PurgeSettings,
+  readModel: (() => string | undefined) | undefined,
 ): { systemPrompt: string } | undefined {
   try {
     const settings = readSettings();
@@ -126,6 +148,17 @@ function handleBeforeAgentStart(
     if (typeof event.systemPrompt !== "string") return undefined;
 
     const governed = governSystemText(event.systemPrompt, settings);
+    let text = governed.text;
+    let autoApplies = 0;
+    if (settings.auto_preset) {
+      const model = readModel ? readModel() : undefined;
+      const hit = resolveAutoPreset(BUILTIN_PRESETS, settings, typeof model === "string" ? model : "");
+      if (hit) {
+        const composed = composeAutoPreset(text, hit.preset.body, settings.auto_preset_mode);
+        if (composed !== text) autoApplies = 1;
+        text = composed;
+      }
+    }
 
     let clamps = 0;
     if (settings.reduce_reasoning) {
@@ -145,9 +178,10 @@ function handleBeforeAgentStart(
       skill_hits: governed.skill_hits,
       reasoning_clamps: clamps,
       structured_appends: 0,
+      auto_preset_hits: autoApplies,
     });
 
-    return { systemPrompt: governed.text };
+    return { systemPrompt: text };
   } catch {
     // The governance layer must never take a session down: fall back to the host's prompt.
     return undefined;
@@ -197,11 +231,12 @@ function handleContext(
  */
 export function createPurgeExtension(options: PurgeExtensionOptions = {}): InlineExtension {
   const readSettings = options.readSettings ?? readPurgeSettings;
+  const readModel = options.readModel;
   return {
     name: PURGE_EXTENSION_NAME,
     hidden: true,
     factory: (pi) => {
-      pi.on("before_agent_start", (event) => handleBeforeAgentStart(pi, event, readSettings));
+      pi.on("before_agent_start", (event) => handleBeforeAgentStart(pi, event, readSettings, readModel));
       pi.on("context", (event) => handleContext(event, readSettings));
     },
   };

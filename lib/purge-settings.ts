@@ -1,8 +1,12 @@
 import { getPiWebSettingsPath, readStored, updatePiWebSettings } from "./artifact-settings";
 import {
+  PURGE_AUTO_PRESET_MATCHES,
+  PURGE_AUTO_PRESET_MODES,
   PURGE_LIMITS,
   PURGE_THINKING_FLOORS,
   defaultPurgeSettings,
+  type PurgeAutoPresetMatch,
+  type PurgeAutoPresetMode,
   type PurgeRewriteRule,
   type PurgeSettings,
   type PurgeTemplate,
@@ -104,6 +108,25 @@ function activeTemplateOr(value: unknown, fallback: string): string {
   return typeof value === "string" ? value.trim() : fallback;
 }
 
+/** 自动套用的拼接方式；不认识的值一律退回默认的「前插」。 */
+function autoPresetModeOr(value: unknown, fallback: PurgeAutoPresetMode): PurgeAutoPresetMode {
+  return (PURGE_AUTO_PRESET_MODES as readonly unknown[]).includes(value)
+    ? value as PurgeAutoPresetMode
+    : fallback;
+}
+
+/** 自动套用的匹配强度；只有显式写了 `vendor` 才会退到厂商兜底。 */
+function autoPresetMatchOr(value: unknown, fallback: PurgeAutoPresetMatch): PurgeAutoPresetMatch {
+  return (PURGE_AUTO_PRESET_MATCHES as readonly unknown[]).includes(value)
+    ? value as PurgeAutoPresetMatch
+    : fallback;
+}
+
+/** 固定预设 id：去空白，其余原样（id 由目录校验，不在这里猜）。 */
+function autoPresetIdOr(value: unknown, fallback: string): string {
+  return typeof value === "string" ? value.trim() : fallback;
+}
+
 function skillInjectLimitOr(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   const { min, max } = PURGE_LIMITS.skill_inject_limit;
@@ -135,6 +158,10 @@ export function normalizePurgeSettings(input: unknown): PurgeSettings {
     structured_suffix: suffixOr(input.structured_suffix, defaults.structured_suffix),
     structured_templates: templatesOr(input.structured_templates, defaults.structured_templates),
     active_template: activeTemplateOr(input.active_template, defaults.active_template),
+    auto_preset: boolOr(input.auto_preset, defaults.auto_preset),
+    auto_preset_mode: autoPresetModeOr(input.auto_preset_mode, defaults.auto_preset_mode),
+    auto_preset_match: autoPresetMatchOr(input.auto_preset_match, defaults.auto_preset_match),
+    auto_preset_id: autoPresetIdOr(input.auto_preset_id, defaults.auto_preset_id),
   };
 }
 

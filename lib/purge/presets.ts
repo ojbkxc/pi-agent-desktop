@@ -8,7 +8,8 @@
  *
  * The preset text is third-party public research material: it is served
  * verbatim. Nothing here filters, rewrites or judges it, and applying one is a
- * deliberate operator action, never an automatic rewrite of a live request.
+ * deliberate operator action — the only automatic path is the explicit
+ * `auto_preset` switch, and it lives in `auto-apply.ts`, never here.
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
