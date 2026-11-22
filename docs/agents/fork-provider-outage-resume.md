@@ -2,7 +2,15 @@
 
 目标：模型 API 连续不可用（几分钟到几小时）时，会话/任务**挂起等待**而不是判失败；服务恢复后自动接着干，轮次预算不被故障烧掉；进程重启后仍能接续。
 
-现状结论（2026-11-16 调研）：**做不到**。三层各有地基但缺关键一环。
+> **状态更新（2026-11-22 核实）：已实现。** 本文写于 2026-11-16，当时的结论「做不到 / 未实现」**已被后续实现推翻**。现状：`lib/outage/` 提供故障四分类（`classify.ts`，纯函数 + 测试）、退避（`backoff.ts`）、挂起记录原子落盘（`store.ts`，`~/.pi/agent/pi-web/outages/<sessionId>.json`）、两段式探测调度（`scheduler.ts`），由 `instrumentation-node.ts:34-40` 经 `lib/outage/live.ts` 的 `startLiveOutageScheduler` 启动（受 `PI_WEB_DISABLE_SCHEDULER=1` 静默）。已接入四个驱动点：
+> - **普通会话**：`lib/outage/rpc-hook.ts`（`agent_end` 后分类并写记录）；
+> - **goal**：`lib/goal/goal-extension.ts:176-194,369-378`（`isSessionSuspended` + `classifyOutageError` 双判，中断不续跑、不烧预算）；
+> - **autofix**：`lib/autofix/runner.ts:24-39,427-507`（`suspendForProviderOutage`，**中断不消耗轮次**，转 `waiting-provider`）；
+> - **scheduled**：`lib/scheduled-tasks/runner.ts:60-64,176-183`（中断不计入「连续失败 5 次停用」）。
+>
+> 下面「历史现状结论（2026-11-16）」一段作为**当时的设计输入**保留，不再代表当前状态；§1–§11 的字段/退避/测试设计基本按此落地（详见各文件与 `*.test.mjs`）。
+
+历史现状结论（2026-11-16 调研，**已被实现推翻**，仅供追溯）：当时判定「做不到」。三层各有地基但缺关键一环。
 
 | 层 | 现状 | 缺口 |
 |---|---|---|
@@ -98,6 +106,7 @@
 - 调度器启动时扫描 `outages/`：孤儿记录按 §2 判据接续。
 - 续跑提示统一用 `buildRecoveryNote()` 生成（核对工作目录真实状态、跳过已完成步骤），避免重复劳动。
 - ⚠️ **待验证的前置问题**：用户消息在 SDK 何时落盘。若 `prompt()` 调用后立刻落盘，则续跑用 followUp 提示是安全的；若只随 `message_end` 落盘，则「用户消息 + 中断」的记录可能缺失，需要在挂起记录里存一份原 prompt 作为兜底。**实现前必须写脚本验证**（构造一个立即失败的上游，看 `.jsonl` 里有无该 user 条目），不要凭推断。
+  - **落地结论（2026-11-22）**：`lib/outage/scheduler.ts:194-211` 用 `chooseResumeMessage()` 选择续跑文本，并以 `promptPersisted`（记录里显式标记或会话已有最后一条 user 消息）区分「重放原 prompt」与「只发接续提示」；记录结构 `resume.{mode,promptText?,promptPersisted?}` 位于 `lib/outage/types.ts`。续跑发送用 `{type:"prompt", streamingBehavior:"followUp"}`（不能发 `follow_up`——空闲会话不会因此开跑，见 `scheduler.ts:200-206` 注释与实测）。
 
 ## 6. UI 与设置
 
