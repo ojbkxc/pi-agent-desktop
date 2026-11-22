@@ -104,21 +104,83 @@ async function readJson(path) {
   return JSON.parse(await readFile(path, "utf8"));
 }
 
+/** The file Tauri resolves the desktop version from (`tauri.conf.json` → `version`). */
+export const TAURI_VERSION_SOURCE = "pi-agent-desktop-package.json";
+
+/**
+ * The desktop crate version as recorded in Cargo.lock.
+ *
+ * `scripts/bump-pi-agent-desktop-version.mjs` writes Cargo.lock separately from
+ * Cargo.toml and needs a `\r?`-aware pattern to do it on a Windows checkout. When
+ * that match misses, Cargo.toml moves on and the lock stays behind: the release
+ * workflow builds without `--locked`, so Cargo silently re-resolves the lock in
+ * the runner and the signed build is compiled from a lock state nobody reviewed.
+ * Only CI's `cargo test --locked` jobs notice, and they run before the version
+ * needs to be right.
+ */
+export function readCargoLockVersion(cargoLock, name = "pi-agent-desktop") {
+  const pattern = new RegExp(
+    `\\[\\[package\\]\\]\\r?\\nname = "${name}"\\r?\\nversion = "([^"]+)"`,
+  );
+  return pattern.exec(cargoLock)?.[1] ?? null;
+}
+
+/**
+ * Every committed carrier of the desktop version must agree, and Tauri must read
+ * it from the package file instead of a literal no other file knows about.
+ * Returns human-readable problems so callers can report all of them at once.
+ */
+export function desktopVersionProblems({
+  expected,
+  cargoManifestVersion,
+  cargoLockVersion,
+  tauriVersionSource,
+}) {
+  const problems = [];
+  if (cargoManifestVersion !== expected) {
+    problems.push(
+      `src-tauri/Cargo.toml says ${cargoManifestVersion ?? "missing"}, expected ${expected}`,
+    );
+  }
+  if (cargoLockVersion !== expected) {
+    problems.push(
+      `src-tauri/Cargo.lock says ${cargoLockVersion ?? "missing"}, expected ${expected} (Cargo treats the lock as stale; \`cargo test --locked\` fails and a release build silently re-resolves it)`,
+    );
+  }
+  if (tauriVersionSource !== TAURI_VERSION_SOURCE) {
+    problems.push(
+      `src-tauri/tauri.conf.json reads its version from ${tauriVersionSource ?? "missing"}, expected ${TAURI_VERSION_SOURCE}`,
+    );
+  }
+  return problems;
+}
+
 export async function readLocalComponentVersions() {
-  const [desktopPackage, appPackage, piPackage, cargoManifest] = await Promise.all([
-    readJson(join(rootDir, "src-tauri", "pi-agent-desktop-package.json")),
-    readJson(join(rootDir, "package.json")),
-    readJson(join(rootDir, "node_modules", "@earendil-works", "pi-coding-agent", "package.json")),
-    readFile(join(rootDir, "src-tauri", "Cargo.toml"), "utf8"),
-  ]);
+  const [desktopPackage, appPackage, piPackage, cargoManifest, cargoLock, tauriConfig] =
+    await Promise.all([
+      readJson(join(rootDir, "src-tauri", "pi-agent-desktop-package.json")),
+      readJson(join(rootDir, "package.json")),
+      readJson(join(rootDir, "node_modules", "@earendil-works", "pi-coding-agent", "package.json")),
+      readFile(join(rootDir, "src-tauri", "Cargo.toml"), "utf8"),
+      readFile(join(rootDir, "src-tauri", "Cargo.lock"), "utf8"),
+      readJson(join(rootDir, "src-tauri", "tauri.conf.json")),
+    ]);
   const cargoVersion = /^version\s*=\s*"([^"]+)"/m.exec(cargoManifest)?.[1];
   const versions = {
     "pi-agent-desktop": normalizeVersion(desktopPackage.version),
     pi: normalizeVersion(piPackage.version),
     "pi-web": normalizeVersion(appPackage.version),
   };
-  if (cargoVersion !== versions["pi-agent-desktop"]) {
-    throw new Error(`Cargo version ${cargoVersion ?? "missing"} does not match pi-agent-desktop ${versions["pi-agent-desktop"]}.`);
+  const problems = desktopVersionProblems({
+    expected: versions["pi-agent-desktop"],
+    cargoManifestVersion: cargoVersion,
+    cargoLockVersion: readCargoLockVersion(cargoLock),
+    tauriVersionSource: tauriConfig.version,
+  });
+  if (problems.length > 0) {
+    throw new Error(
+      `Desktop version ${versions["pi-agent-desktop"]} is not carried consistently:\n- ${problems.join("\n- ")}`,
+    );
   }
   return versions;
 }
