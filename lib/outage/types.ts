@@ -69,7 +69,7 @@ export const OUTAGE_DEFAULT_QUOTA_MAX_WAIT_HOURS = 24;
 export type OutageKind = "transient" | "outage" | "quota" | "terminal";
 
 /** 挂起的来源作用域（决定恢复时由谁驱动）。 */
-export type OutageScope = "chat" | "goal" | "autofix" | "scheduled" | "team";
+export type OutageScope = "chat" | "goal" | "autofix" | "scheduled" | "team" | "campaign";
 
 /** 记录生命周期状态。`waiting` 是唯一会被调度器推进的状态。 */
 export type OutageStatus =

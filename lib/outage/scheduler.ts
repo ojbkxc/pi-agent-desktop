@@ -68,10 +68,11 @@ export type OutageTickOutcome =
   | "skipped-not-due"
   | "skipped-busy"
   /**
-   * scope="autofix" 的记录只是预算/退避账本：驱动者是 autofix sweep（它还要跑验证
-   * 命令并推进 round），通用调度器绝不能自己去续跑那个会话，否则会双驱动。
+   * scope="autofix" / "campaign" 的记录只是预算/退避账本：驱动者是各自的 sweep（它们还要跑
+   * 验证命令并推进轮次），通用调度器绝不能自己去续跑那个会话，否则会双驱动。
    */
   | "skipped-autofix"
+  | "skipped-campaign"
   | "superseded"
   | "expired"
   | "probe-unavailable"
@@ -120,6 +121,8 @@ async function handleRecord(
   const sessionId = record.sessionId;
   // autofix 自己驱动（每轮还要跑验证命令），通用调度器只读不动。
   if (record.scope === "autofix") return { sessionId, outcome: "skipped-autofix" };
+  // campaign 同理：由 campaign sweep 驱动（逐项推进 + 验证），通用调度器不抢。
+  if (record.scope === "campaign") return { sessionId, outcome: "skipped-campaign" };
 
   // 归属判定：别的活进程拥有 ⇒ 不抢；本进程重启后旧 pid 已死 ⇒ 接续。
   //

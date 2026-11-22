@@ -74,7 +74,7 @@ export function isStoredOutageRecord(value: unknown): value is OutageRecord {
   if (!isOutageRecord(value)) return false;
   const record = value as unknown as Record<string, unknown>;
   if (typeof record.reason !== "string") return false;
-  if (!["chat", "goal", "autofix", "scheduled", "team"].includes(record.scope as string)) return false;
+  if (!["chat", "goal", "autofix", "scheduled", "team", "campaign"].includes(record.scope as string)) return false;
   if (!isRecord(record.origin)) return false;
   if (!isRecord(record.resume) || record.resume.mode !== "followup" || typeof record.resume.note !== "string") return false;
   if (!isRecord(record.guard)) return false;
