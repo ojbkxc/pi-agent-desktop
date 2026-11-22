@@ -1,5 +1,13 @@
 import { NextResponse } from "next/server";
-import { resolveModelDiscoveryAuth } from "@/lib/model-discovery-auth";
+import { resolveModelDiscoveryAuth, type ModelDiscoveryAuth } from "@/lib/model-discovery-auth";
+import {
+  disallowsStoredDiscoveryAuth,
+  isSameDiscoveryBaseUrl,
+  readStoredProvider,
+  requestedDiscoveryBaseUrls,
+  resolveSavedDiscoveryBaseUrl,
+  validateDiscoveryBaseUrl,
+} from "@/lib/model-discovery-target";
 import { isApiRequestAllowed, hasJsonContentType } from "@/lib/request-security";
 import { buildModelsListUrl, collectModelPages, parseDiscoveredModels, type ModelPageFetchResult } from "@/lib/model-discovery";
 
@@ -16,6 +24,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function hasHeader(headers: Headers, name: string): boolean {
   return headers.has(name);
+}
+
+function stringRecord(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 }
 
 function buildHeaders(api: string, apiKey: string | undefined, configured: Record<string, string>): Headers {
@@ -50,17 +63,48 @@ export async function POST(req: Request) {
     const configuredBaseUrl = typeof body.provider.baseUrl === "string" ? body.provider.baseUrl.trim() : "";
     const configuredApi = typeof body.provider.api === "string" && body.provider.api ? body.provider.api : "";
 
-    let auth: Awaited<ReturnType<typeof resolveModelDiscoveryAuth>>;
-    try {
-      auth = await resolveModelDiscoveryAuth(providerName, body.provider);
-    } catch (error) {
-      // Without a configured Base URL, pi's catalog was the only other source of
-      // one; for a custom provider it fails with an error about the placeholder model.
-      if (!configuredBaseUrl) return NextResponse.json({ error: "Base URL is required" }, { status: 400 });
-      throw error;
+    // A request that introduces a Base URL other than the saved one must not be
+    // authenticated with this machine's stored credentials (auth.json); otherwise
+    // an authenticated client could point a saved provider at its own host and
+    // read the stored key off the outgoing request.
+    const requestedUrls = requestedDiscoveryBaseUrls(body.provider);
+    const savedBaseUrl = await resolveSavedDiscoveryBaseUrl(providerName, readStoredProvider(providerName));
+
+    // SSRF guard: a newly introduced target may not be a literal local/private
+    // address. The provider's own saved endpoint (a local Ollama, say) is exempt —
+    // the user configured it and it is not an SSRF vector. Scheme is always checked.
+    for (const url of requestedUrls) {
+      const invalid = validateDiscoveryBaseUrl(url, { allowPrivate: isSameDiscoveryBaseUrl(url, savedBaseUrl) });
+      if (invalid) return NextResponse.json({ error: invalid }, { status: 400 });
     }
-    if (typeof body.provider.apiKey === "string" && body.provider.apiKey.trim() && !auth.apiKey) {
-      return NextResponse.json({ error: `No API key found for "${providerName}"` }, { status: 400 });
+
+    const useStoredAuth = !disallowsStoredDiscoveryAuth(requestedUrls, savedBaseUrl);
+
+    let auth: ModelDiscoveryAuth;
+    if (useStoredAuth) {
+      try {
+        auth = await resolveModelDiscoveryAuth(providerName, body.provider);
+      } catch (error) {
+        // Without a configured Base URL, pi's catalog was the only other source of
+        // one; for a custom provider it fails with an error about the placeholder model.
+        if (!configuredBaseUrl) return NextResponse.json({ error: "Base URL is required" }, { status: 400 });
+        throw error;
+      }
+      if (typeof body.provider.apiKey === "string" && body.provider.apiKey.trim() && !auth.apiKey) {
+        return NextResponse.json({ error: `No API key found for "${providerName}"` }, { status: 400 });
+      }
+    } else {
+      // Unsaved endpoint: no stored credentials. Only a key the request itself
+      // typed is used, passed through verbatim (`!cmd` / `$ENV` left as-is).
+      const literalApiKey = typeof body.provider.apiKey === "string" && body.provider.apiKey.trim()
+        ? body.provider.apiKey
+        : undefined;
+      auth = {
+        apiKey: literalApiKey,
+        headers: stringRecord(body.provider.headers),
+        baseUrl: configuredBaseUrl || undefined,
+        api: configuredApi || undefined,
+      };
     }
 
     // Fall back to pi's provider catalog so built-in providers, and entries

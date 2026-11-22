@@ -124,3 +124,142 @@ test("Test model falls back to the stored literal apiKey when the editor omits i
   assert.equal(result.ok, true, result.error);
   assert.equal(requests[0].headers.get("authorization"), "Bearer sk_stored_literal");
 });
+
+async function seedSavedProvider() {
+  await writeFile(join(testAgentDir, "models.json"), JSON.stringify({
+    providers: {
+      "saved-provider": { baseUrl: "https://saved.test/v1", api: "openai-completions" },
+    },
+  }, null, 2), "utf8");
+  await writeFile(join(testAgentDir, "auth.json"), JSON.stringify({
+    "saved-provider": { type: "api_key", key: "sk_auth_secret" },
+  }, null, 2), { mode: 0o600 });
+}
+
+test("a different Base URL never spends the stored auth.json credential", async (t) => {
+  // Regression: the probe used to authenticate with this machine's stored key,
+  // then send it to whatever Base URL the request supplied (key exfiltration).
+  await seedSavedProvider();
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async (input, init) => {
+    requests.push(new Request(input, init));
+    return completionStream();
+  });
+
+  const response = await POST(new Request("http://localhost/api/models-config/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Host: "localhost" },
+    body: JSON.stringify({
+      providerName: "saved-provider",
+      provider: { baseUrl: "https://evil.test/v1", api: "openai-completions" },
+      model: { id: "m", api: "openai-completions", input: ["text"] },
+    }),
+  }));
+
+  const result = await response.json();
+  assert.equal(result.ok, false, "no stored key means no probe");
+  assert.match(String(result.error), /No API key/i);
+  assert.equal(requests.length, 0, "nothing may be sent to the unsaved endpoint");
+  assert.ok(
+    requests.every((request) => !request.headers.get("authorization") && !request.headers.get("x-api-key")),
+    "no stored credential on any outgoing request",
+  );
+});
+
+test("the saved Base URL still uses the stored auth.json credential", async (t) => {
+  await seedSavedProvider();
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async (input, init) => {
+    requests.push(new Request(input, init));
+    return completionStream();
+  });
+
+  const response = await POST(new Request("http://localhost/api/models-config/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Host: "localhost" },
+    body: JSON.stringify({
+      providerName: "saved-provider",
+      provider: { baseUrl: "https://saved.test/v1", api: "openai-completions" },
+      model: { id: "m", api: "openai-completions", input: ["text"] },
+    }),
+  }));
+
+  const result = await response.json();
+  assert.equal(result.ok, true, result.error);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://saved.test/v1/chat/completions");
+  assert.equal(requests[0].headers.get("authorization"), "Bearer sk_auth_secret");
+});
+
+test("rejects a loopback / private Base URL (SSRF guard)", async () => {
+  const response = await POST(new Request("http://localhost/api/models-config/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Host: "localhost" },
+    body: JSON.stringify({
+      providerName: "unsaved-guard",
+      provider: { baseUrl: "http://127.0.0.1:11434/v1", api: "openai-completions" },
+      model: { id: "m", api: "openai-completions", input: ["text"] },
+    }),
+  }));
+  assert.equal(response.status, 400);
+  const result = await response.json();
+  assert.equal(result.ok, false);
+  assert.match(String(result.error), /local or private/i);
+});
+
+test("rejects a non-http(s) Base URL", async () => {
+  const response = await POST(new Request("http://localhost/api/models-config/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Host: "localhost" },
+    body: JSON.stringify({
+      providerName: "unsaved-guard",
+      provider: { baseUrl: "ftp://example.test/v1", api: "openai-completions" },
+      model: { id: "m", api: "openai-completions", input: ["text"] },
+    }),
+  }));
+  assert.equal(response.status, 400);
+  const result = await response.json();
+  assert.match(String(result.error), /http and https/i);
+});
+
+test("a saved loopback provider is testable (the user's own local endpoint)", async (t) => {
+  await writeFile(join(testAgentDir, "models.json"), JSON.stringify({
+    providers: {
+      "local-ollama": { baseUrl: "http://127.0.0.1:11434/v1", api: "openai-completions" },
+    },
+  }, null, 2), "utf8");
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async (input, init) => {
+    requests.push(new Request(input, init));
+    return completionStream();
+  });
+
+  const response = await POST(new Request("http://localhost/api/models-config/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Host: "localhost" },
+    body: JSON.stringify({
+      providerName: "local-ollama",
+      provider: { baseUrl: "http://127.0.0.1:11434/v1", api: "openai-completions", apiKey: "local_key" },
+      model: { id: "m", api: "openai-completions", input: ["text"] },
+    }),
+  }));
+
+  const result = await response.json();
+  assert.equal(result.ok, true, result.error);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "http://127.0.0.1:11434/v1/chat/completions");
+});
+
+test("an unsaved loopback Base URL is still rejected", async () => {
+  const response = await POST(new Request("http://localhost/api/models-config/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Host: "localhost" },
+    body: JSON.stringify({
+      providerName: "brand-new-local",
+      provider: { baseUrl: "http://127.0.0.1:11434/v1", api: "openai-completions" },
+      model: { id: "m", api: "openai-completions", input: ["text"] },
+    }),
+  }));
+  assert.equal(response.status, 400);
+  assert.match(String((await response.json()).error), /local or private/i);
+});

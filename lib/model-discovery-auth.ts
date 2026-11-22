@@ -26,13 +26,28 @@ function stringRecord(value: unknown): Record<string, string> {
   return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 }
 
-export async function resolveModelDiscoveryAuth(
+type DiscoveryModel = NonNullable<ReturnType<ModelRuntime["getModel"]>>;
+
+interface DiscoveryRuntime {
+  modelRuntime: ModelRuntime;
+  model: DiscoveryModel;
+  baseUrl?: string;
+  api?: string;
+  cleanup: () => void;
+}
+
+/**
+ * Compose a throwaway ModelRuntime for one provider entry, the same way pi
+ * composes a real one (temp models.json + the shipping provider catalog).
+ * Does **not** resolve credentials, so it is safe to call just to learn the
+ * effective endpoint of a saved provider.
+ */
+async function buildDiscoveryRuntime(
   providerName: string,
   provider: Record<string, unknown>,
-): Promise<ModelDiscoveryAuth> {
-  let tempDir: string | undefined;
+): Promise<DiscoveryRuntime> {
+  const tempDir = mkdtempSync(join(tmpdir(), "pi-web-model-discovery-"));
   try {
-    tempDir = mkdtempSync(join(tmpdir(), "pi-web-model-discovery-"));
     const modelsPath = join(tempDir, "models.json");
     const discoveryModelId = "__pi_web_model_discovery__";
     writeFileSync(modelsPath, JSON.stringify({
@@ -58,6 +73,41 @@ export async function resolveModelDiscoveryAuth(
       || undefined;
     const api = model.api ?? modelRuntime.getModels(providerName)[0]?.api;
 
+    return {
+      modelRuntime,
+      model,
+      baseUrl,
+      api,
+      cleanup: () => rmSync(tempDir, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    rmSync(tempDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+/**
+ * The effective endpoint and protocol of a provider entry, without touching
+ * credentials. Used to compare a request's Base URL against the saved one.
+ */
+export async function resolveModelDiscoveryTarget(
+  providerName: string,
+  provider: Record<string, unknown>,
+): Promise<{ baseUrl?: string; api?: string }> {
+  const built = await buildDiscoveryRuntime(providerName, provider);
+  try {
+    return { baseUrl: built.baseUrl, api: built.api };
+  } finally {
+    built.cleanup();
+  }
+}
+
+export async function resolveModelDiscoveryAuth(
+  providerName: string,
+  provider: Record<string, unknown>,
+): Promise<ModelDiscoveryAuth> {
+  const { modelRuntime, model, baseUrl, api, cleanup } = await buildDiscoveryRuntime(providerName, provider);
+  try {
     const resolved = await modelRuntime.getAuth(model);
     if (resolved) {
       return {
@@ -74,6 +124,6 @@ export async function resolveModelDiscoveryAuth(
       api,
     };
   } finally {
-    if (tempDir) rmSync(tempDir, { recursive: true, force: true });
+    cleanup();
   }
 }

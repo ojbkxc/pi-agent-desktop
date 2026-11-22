@@ -6,6 +6,13 @@ import { randomUUID } from "crypto";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { readModelsConfig } from "@/lib/models-config-store";
+import {
+  disallowsStoredDiscoveryAuth,
+  isSameDiscoveryBaseUrl,
+  requestedDiscoveryBaseUrls,
+  resolveSavedDiscoveryBaseUrl,
+  validateDiscoveryBaseUrl,
+} from "@/lib/model-discovery-target";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
@@ -65,17 +72,41 @@ export async function POST(req: Request) {
     } catch {
       // Unreadable models.json: the runtime still resolves auth.json credentials.
     }
+
+    // SSRF / credential-exfiltration guard: a request that points at a Base URL
+    // other than the saved provider endpoint must not carry this machine's stored
+    // credentials. A newly introduced literal local/private target is rejected;
+    // the provider's own saved endpoint (a local Ollama, say) is exempt.
+    const requestedUrls = requestedDiscoveryBaseUrls(body.provider, body.model);
+    const savedBaseUrl = await resolveSavedDiscoveryBaseUrl(providerName, storedProvider);
+    for (const url of requestedUrls) {
+      const invalid = validateDiscoveryBaseUrl(url, { allowPrivate: isSameDiscoveryBaseUrl(url, savedBaseUrl) });
+      if (invalid) return NextResponse.json({ ok: false, error: invalid }, { status: 400 });
+    }
+    const useStoredAuth = !disallowsStoredDiscoveryAuth(requestedUrls, savedBaseUrl);
+
+    // With a saved endpoint, fold the stored provider back in (the editor omits
+    // the redacted literal apiKey). For an unsaved endpoint, keep only what the
+    // request itself sent so no stored credential is spent on it.
+    const providerForRuntime = useStoredAuth
+      ? { ...storedProvider, ...body.provider }
+      : { ...body.provider };
+
     writeFileSync(modelsPath, JSON.stringify({
       providers: {
         [providerName]: {
-          ...storedProvider,
-          ...body.provider,
+          ...providerForRuntime,
           models: [{ ...body.model, id: modelId }],
         },
       },
     }, null, 2), "utf8");
 
-    const modelRuntime = await ModelRuntime.create({ modelsPath });
+    // For an unsaved endpoint, point the runtime at an empty credential store so
+    // `completeSimple` cannot resolve this provider's auth.json credential onto
+    // it. Only literal values still present in the temp models.json authenticate.
+    const modelRuntime = await ModelRuntime.create(useStoredAuth
+      ? { modelsPath }
+      : { modelsPath, authPath: join(tempDir, "empty-auth.json") });
     const loadError = modelRuntime.getError();
     if (loadError) return NextResponse.json({ ok: false, error: loadError });
 
