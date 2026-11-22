@@ -40,7 +40,15 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const parsed = parseSkillId(decodeURIComponent(id));
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(id);
+  } catch {
+    // Same URIError as the detail route: an undecodable segment is a bad id, not
+    // an internal failure, so it must answer 400 instead of an HTML 500.
+    return NextResponse.json({ error: "无效的技能 id" }, { status: 400 });
+  }
+  const parsed = parseSkillId(decoded);
   if (!parsed) return NextResponse.json({ error: "无效的技能 id" }, { status: 400 });
 
   const { searchParams } = new URL(request.url);

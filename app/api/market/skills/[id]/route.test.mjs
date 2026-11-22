@@ -138,3 +138,33 @@ test("owner 与目录不一致：不套用精选结论", async () => {
   assert.equal(skill.securityStatus, "benign");
   assert.equal(skill.curated, undefined);
 });
+
+// ── 回归：无法解码的 id 必须是 400，不是 500 ──────────────────────
+// 缺陷：`parseSkillId(decodeURIComponent(id))` 在 try 之外；id 里带无效百分号转义
+// （`clawhub:%ZZ`，用 curl 直接请求即可）时 decodeURIComponent 抛 URIError，
+// 整个 handler 未捕获 → 框架回 500 且 body 不是 JSON。
+const BAD_ID = "clawhub:%ZZ";
+
+test("id 含无效百分号转义：detail 路由回 400 + JSON", async () => {
+  const response = await GET(
+    new Request(`http://localhost/api/market/skills/${BAD_ID}`),
+    { params: Promise.resolve({ id: BAD_ID }) },
+  );
+  assert.equal(response.status, 400);
+  assert.match(response.headers.get("content-type") ?? "", /application\/json/);
+  const payload = await response.json();
+  assert.equal(typeof payload.error, "string");
+});
+
+test("id 含无效百分号转义：file 路由同样回 400 + JSON", async () => {
+  const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, moduleCache: false });
+  const { GET: fileGET } = await jiti.import("./file/route.ts");
+  const response = await fileGET(
+    new Request(`http://localhost/api/market/skills/${BAD_ID}/file?path=SKILL.md`),
+    { params: Promise.resolve({ id: BAD_ID }) },
+  );
+  assert.equal(response.status, 400);
+  assert.match(response.headers.get("content-type") ?? "", /application\/json/);
+  const payload = await response.json();
+  assert.equal(typeof payload.error, "string");
+});

@@ -36,7 +36,13 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
   }
   try {
-    const body = await req.json() as { serverPort?: unknown };
+    const parsed: unknown = await req.json();
+    // A `null` body is legal JSON: `parsed.serverPort` used to throw a TypeError
+    // that the catch below reported as 500, when the payload is simply invalid.
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return NextResponse.json({ error: "Expected a JSON object" }, { status: 400, headers: NO_STORE });
+    }
+    const body = parsed as { serverPort?: unknown };
     if (!isServerPort(body.serverPort)) {
       return NextResponse.json({ error: "serverPort must be an integer from 1024 to 65535" }, { status: 400 });
     }

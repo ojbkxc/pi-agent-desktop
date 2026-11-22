@@ -8,6 +8,7 @@ import {
   pruneStaleEnabledModels,
   renameModelPatterns,
   renameProviderPatterns,
+  samePatterns,
   setModelsEnabled,
   type EnabledModelsEdit,
   type ProviderRename,
@@ -191,18 +192,20 @@ async function resyncAfterModelsConfigSave(
     .flatMap((id) => context.models.filter((model) => model.provider === id).map(modelRef));
   const edit = setModelsEnabled(current, refs, true);
   if (!edit.ok) return edit;
-  return { ok: true, patterns: edit.patterns, changed: !samePatternList(edit.patterns, original) };
-}
-
-function samePatternList(a: string[] | undefined, b: string[] | undefined): boolean {
-  if (a === undefined || b === undefined) return a === b;
-  return a.length === b.length && a.every((pattern, index) => pattern === b[index]);
+  return { ok: true, patterns: edit.patterns, changed: !samePatterns(edit.patterns, original) };
 }
 
 export async function PUT(req: Request) {
   let body: EnabledModelsRequest;
   try {
-    body = await req.json() as EnabledModelsRequest;
+    const parsed: unknown = await req.json();
+    // A `null` body is legal JSON, so the read succeeds; `body.op` below then
+    // threw a TypeError outside every try and the panel received a 500 with a
+    // non-JSON body instead of the 400 that says what is wrong with the payload.
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return Response.json({ error: "Expected a JSON object" }, { status: 400 });
+    }
+    body = parsed as EnabledModelsRequest;
   } catch {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }

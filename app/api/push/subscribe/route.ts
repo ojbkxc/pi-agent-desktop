@@ -23,7 +23,14 @@ function isValidSubscription(subscription: Partial<PushSubscriptionRecord> | und
 export async function POST(req: Request): Promise<Response> {
   let body: SubscribeRequestBody;
   try {
-    body = await req.json();
+    const parsed: unknown = await req.json();
+    // `null` / a primitive is legal JSON: reading `body.subscription` off it used
+    // to throw a TypeError outside the guard, so the caller got a 500 without a
+    // JSON body instead of the 400 that describes the actual mistake.
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return Response.json({ error: "Expected a JSON object" }, { status: 400 });
+    }
+    body = parsed as SubscribeRequestBody;
   } catch {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }

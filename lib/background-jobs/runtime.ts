@@ -14,7 +14,7 @@
  *    也走同一条路，避免「stop 后还收到一条 completed」。
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
 import {
   appendOutput,
@@ -136,8 +136,16 @@ export function startBackgroundJob(request: StartJobRequest): StartJobResult {
       windowsHide: true,
     });
   } catch (error) {
-    // 输出文件已经建好，删掉它，别留孤儿文件。
+    // 输出文件已经建好，删掉它，别留孤儿文件。只清内存计数是不够的：这条路径上
+    // 没有写 job 记录，pruneJobs() 永远扫不到这个 id，空的 `.log` 会一直留在
+    // jobs/ 里。触发条件是 spawn 同步抛（例如命令里带 NUL，Node 直接
+    // ERR_INVALID_ARG_VALUE），异步的 'error' 事件不走这里。
     forgetOutputBytes(id);
+    try {
+      unlinkSync(outputPath);
+    } catch {
+      // 已被外部删除：没什么可清理的。
+    }
     throw new BackgroundJobError("spawn", error instanceof Error ? error.message : String(error));
   }
 

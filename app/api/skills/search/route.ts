@@ -99,7 +99,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
   }
   try {
-    const { query, limit: rawLimit } = await req.json() as { query?: string; limit?: unknown };
+    const parsed: unknown = await req.json();
+    // 解构 `null` 会抛 TypeError，而这里的 catch 是「API 搜索失败 → 退回 npx」的
+    // 兜底分支：它会把内部 TypeError 原文当成 500 的 error 回给前端，状态码也错。
+    // 形状不对本身就是 400。
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return NextResponse.json({ error: "Expected a JSON object" }, { status: 400 });
+    }
+    const { query, limit: rawLimit } = parsed as { query?: string; limit?: unknown };
     if (!query?.trim()) return NextResponse.json({ error: "query required" }, { status: 400 });
     const limit = parseLimit(rawLimit);
 

@@ -31,7 +31,16 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const parsed = parseSkillId(decodeURIComponent(id));
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(id);
+  } catch {
+    // A lone `%` segment (…/skills/clawhub:%ZZ) makes decodeURIComponent throw
+    // URIError. It used to escape the handler, so the caller saw a 500 with an
+    // HTML body — the id is merely invalid, which is a 400.
+    return NextResponse.json({ error: "无效的技能 id" }, { status: 400 });
+  }
+  const parsed = parseSkillId(decoded);
   if (!parsed) {
     return NextResponse.json({ error: "无效的技能 id" }, { status: 400 });
   }

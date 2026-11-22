@@ -23,7 +23,14 @@ export async function POST(
   const { provider } = await params;
   let body: { token?: string; code?: string };
   try {
-    body = (await req.json()) as { token?: string; code?: string };
+    const parsed: unknown = await req.json();
+    // `null`, a number or a string is legal JSON, so the parse above succeeds and
+    // the destructuring below used to throw a TypeError outside the guard: the
+    // route answered 500 with a non-JSON body instead of a 400 with `{ error }`.
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return Response.json({ error: "Expected a JSON object" }, { status: 400 });
+    }
+    body = parsed as { token?: string; code?: string };
   } catch {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
