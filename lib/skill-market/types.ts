@@ -52,8 +52,6 @@ export interface MarketCategory {
   count: number;
 }
 
-export type SourceHealthStatus = "ok" | "degraded" | "failed" | "cached";
-
 export type NotInstallableReason =
   | "empty-file-list"
   | "file-too-large"

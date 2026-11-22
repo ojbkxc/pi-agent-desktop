@@ -10,6 +10,7 @@ import {
   SECRET_MASK,
   urlSecretParts,
 } from "./mcp-secrets";
+import { escapeRegExp } from "./text-utils.ts";
 import { guardedCredentialStore, mcpOAuthUrl, mcpSignInKey, mcpSignOutCount, mcpSignOutGuard, type McpSignInWriteGuard } from "./mcp-sign-out";
 import { recordMcpStatus } from "./mcp-status";
 import { createPiWebMcpTransportFactory, resolvedConfigValues } from "./mcp-transport";
@@ -170,10 +171,6 @@ export function runsShellCommand(config: unknown, internals: Pick<PiSdkInternals
 // ---------------------------------------------------------------------------
 
 const AUTHORIZATION_SCHEME = /^(?:bearer|basic|token)$/i;
-
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 /** One text to replace: everywhere, or (`word`) only where it is not part of a longer word. */
 interface Replacement {

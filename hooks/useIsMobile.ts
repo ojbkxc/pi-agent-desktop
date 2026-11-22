@@ -4,8 +4,6 @@ import { useSyncExternalStore } from "react";
 
 // Mobile breakpoint shared with app/globals.css (max-width: 640px).
 const MOBILE_QUERY = "(max-width: 640px)";
-// Narrow phones keep secondary toolbar actions behind the More button.
-const NARROW_MOBILE_QUERY = "(max-width: 480px)";
 
 function subscribeToQuery(query: string, cb: () => void): () => void {
   if (typeof window === "undefined" || !window.matchMedia) return () => {};
@@ -21,8 +19,6 @@ function queryMatches(query: string): boolean {
 
 const subscribeMobile = (cb: () => void) => subscribeToQuery(MOBILE_QUERY, cb);
 const getMobileSnapshot = () => queryMatches(MOBILE_QUERY);
-const subscribeNarrowMobile = (cb: () => void) => subscribeToQuery(NARROW_MOBILE_QUERY, cb);
-const getNarrowMobileSnapshot = () => queryMatches(NARROW_MOBILE_QUERY);
 
 function getServerSnapshot(): boolean {
   return false;
@@ -35,9 +31,4 @@ function getServerSnapshot(): boolean {
  */
 export function useIsMobile(): boolean {
   return useSyncExternalStore(subscribeMobile, getMobileSnapshot, getServerSnapshot);
-}
-
-/** Returns true when the compact mobile toolbar should collapse extra actions. */
-export function useIsNarrowMobile(): boolean {
-  return useSyncExternalStore(subscribeNarrowMobile, getNarrowMobileSnapshot, getServerSnapshot);
 }

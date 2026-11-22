@@ -304,63 +304,6 @@ export async function saveLocalFileAs(
   return true;
 }
 
-export type DesktopImageAttachment = {
-  name: string;
-  mimeType: string;
-  data: string;
-  previewUrl: string;
-};
-
-/** Read image files selected via native dialog into chat attachment payloads. */
-export async function readDesktopImageAttachments(paths: string[]): Promise<DesktopImageAttachment[]> {
-  if (paths.length === 0) return [];
-  const response = await fetch("/api/desktop/read-images", {
-    method: "POST",
-    headers: await desktopApiHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ paths }),
-  });
-  const data = await response.json().catch(() => ({})) as {
-    error?: string;
-    files?: Array<{ name: string; mimeType: string; data: string }>;
-  };
-  if (!response.ok) {
-    throw new Error(data.error || `Failed to read images (HTTP ${response.status})`);
-  }
-  return (data.files ?? []).map((file) => ({
-    ...file,
-    previewUrl: `data:${file.mimeType};base64,${file.data}`,
-  }));
-}
-
-export type DesktopImportResult = {
-  uploaded: string[];
-  skipped: string[];
-  errors: Array<{ name: string; error: string }>;
-};
-
-/** Copy local source paths into a project directory (desktop native import). */
-export async function importLocalFiles(options: {
-  destDirectory: string;
-  sourcePaths: string[];
-  conflict: "error" | "overwrite" | "skip";
-  encodeDestPath: (path: string) => string;
-}): Promise<{ status: number; data: DesktopImportResult & { error?: string; conflicts?: string[]; nonReplaceable?: string[] } }> {
-  const response = await fetch(
-    `/api/files/${options.encodeDestPath(options.destDirectory)}?type=import&conflict=${options.conflict}`,
-    {
-      method: "POST",
-      headers: await desktopApiHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ sourcePaths: options.sourcePaths }),
-    },
-  );
-  const data = await response.json().catch(() => ({})) as DesktopImportResult & {
-    error?: string;
-    conflicts?: string[];
-    nonReplaceable?: string[];
-  };
-  return { status: response.status, data };
-}
-
 /** Intercept primary clicks on external anchors so desktop uses the system browser. */
 export function handleExternalLinkClick(
   event: {
@@ -414,12 +357,6 @@ export async function clearAppCacheNative(): Promise<number> {
   return invoke<number>("clear_app_cache");
 }
 
-export async function showMainWindowNative(): Promise<void> {
-  if (!isTauriDesktop()) return;
-  const { invoke } = await import("@tauri-apps/api/core");
-  await invoke("show_main_window_cmd");
-}
-
 let desktopReadyReported = false;
 
 /**
@@ -445,47 +382,6 @@ export async function relaunchAppNative(): Promise<void> {
   if (!isTauriDesktop()) return;
   const { relaunch } = await import("@tauri-apps/plugin-process");
   await relaunch();
-}
-
-/**
- * Read an image from the system clipboard as a PNG File.
- *
- * WebKitGTK (Linux) delivers an empty `clipboardData.items` list on paste even
- * when the clipboard holds an image (WebKit bug 320303), so the browser-side
- * paste handler cannot recover it. This native fallback uses the Tauri
- * clipboard-manager `readImage()` command, converts the raw RGBA bytes to a
- * PNG via an offscreen canvas, and returns a File the rest of the paste path
- * can consume exactly like a browser-provided image item.
- *
- * Returns null when there is no image in the clipboard or the runtime is not
- * a Tauri desktop shell.
- */
-export async function readClipboardImageFileNative(): Promise<File | null> {
-  if (!isTauriDesktop()) return null;
-  try {
-    const { readImage } = await import("@tauri-apps/plugin-clipboard-manager");
-    const img = await readImage();
-    const rgba = await img.rgba();
-    const { width, height } = await img.size();
-    if (!width || !height || rgba.byteLength < width * height * 4) return null;
-    // RGBA -> PNG via an offscreen canvas.
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return null;
-    const imageData = new ImageData(new Uint8ClampedArray(rgba), width, height);
-    ctx.putImageData(imageData, 0, 0);
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, "image/png"),
-    );
-    if (!blob) return null;
-    const stamp = new Date().toISOString().replace(/[-:.]/g, "").slice(0, 14);
-    return new File([blob], `clipboard-${stamp}.png`, { type: "image/png" });
-  } catch {
-    // Clipboard has no image or read failed — not an error worth surfacing.
-    return null;
-  }
 }
 
 export { isTauriDesktop };

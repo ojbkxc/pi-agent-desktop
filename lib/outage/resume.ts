@@ -9,7 +9,6 @@
  *    磁盘上，按 `sessionId` 重新打开即可（`lib/autofix/runner.ts:589` 是同一做法）。
  * 3. **绝不重入**：会话正在跑就跳过这次尝试（下一 tick 再来），不 steer 打断。
  */
-import { existsSync } from "node:fs";
 import { buildRecoveryNote } from "../keepalive/resume";
 import {
   capOutageText,
@@ -36,48 +35,6 @@ export function buildOutageResumeNote(record: OutageRecord, now: number): string
   ].join("\n");
 }
 
-export interface OutageResumeDeps {
-  /** 按会话 id 取活跃 wrapper；返回 undefined 表示需要重开。 */
-  getSession(sessionId: string): OutageResumeSession | undefined;
-  /** 重新打开会话（重启接续）；返回一个可 send 的 wrapper。 */
-  openSession(record: OutageRecord): Promise<OutageResumeSession>;
-  /**
-   * 轻量探针：确认 provider 已恢复（前 3 次跳过，直接续跑）。
-   * 成功返回 true。抛错按「仍不可用」处理。
-   */
-  probe(record: OutageRecord): Promise<boolean>;
-  /** 会话最后一条 user 消息的 entry id（防抢跑校验）。读不到返回 null。 */
-  lastUserMessageId(sessionId: string): string | null;
-  now(): number;
-}
-
-/** resume 需要的最小会话面（`AgentSessionWrapper` 结构满足它）。 */
-export interface OutageResumeSession {
-  isAlive?(): boolean;
-  isRunning?(): boolean;
-  send(command: Record<string, unknown>): Promise<unknown>;
-}
-
-export type OutageResumeOutcome =
-  | { kind: "skipped"; reason: "not-waiting" | "not-due" | "superseded" | "busy" | "probe-pending" }
-  | { kind: "failed"; error: string }
-  | { kind: "resumed" };
-
-/**
- * 执行一次续跑尝试的**前置检查**（不做，交给 scheduler 做实际 send，因为调度器
- * 还要在同一处记账 attempts）。这里只给纯判据，让测试可以锁死语义。
- */
-export function shouldAttemptResume(
-  record: OutageRecord,
-  input: { now: number; sessionLastUserMessageId: string | null },
-  superseded: (record: OutageRecord, current: string | null) => boolean,
-): { attempt: boolean; reason?: "not-waiting" | "not-due" | "superseded" } {
-  if (record.status !== "waiting") return { attempt: false, reason: "not-waiting" };
-  if (input.now < record.budget.nextAttemptAt) return { attempt: false, reason: "not-due" };
-  if (superseded(record, input.sessionLastUserMessageId)) return { attempt: false, reason: "superseded" };
-  return { attempt: true };
-}
-
 /**
  * 把续跑的文本决定出来：
  * - 原 prompt 已确认落盘（`promptPersisted === true`）或能从会话读到最后一条 user
@@ -101,9 +58,4 @@ export function chooseResumeMessage(
 /** 供 rpc-hook 使用的 reason 摘要（capped）。 */
 export function outageReasonText(error: string): string {
   return capOutageText(error || "Provider unavailable", OUTAGE_REASON_MAX_CHARS);
-}
-
-/** 会话文件是否存在（重启接续前的廉价检查）。 */
-export function outageSessionFileExists(record: OutageRecord): boolean {
-  return Boolean(record.sessionFile && existsSync(record.sessionFile));
 }

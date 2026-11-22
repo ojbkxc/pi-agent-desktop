@@ -115,11 +115,6 @@ export interface SubagentResultMetadata {
   worktreeCleanupError?: string;
 }
 
-export interface SubagentStatusMetadata {
-  version: 1;
-  status: Extract<SubagentStatus, "queued" | "running">;
-}
-
 export interface SubagentRunInfo {
   sessionId: string;
   sessionPath: string;

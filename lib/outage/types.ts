@@ -33,10 +33,6 @@ export const OUTAGE_JITTER_RATIO = 0.2;
 /** 前 N 次探测直接重发续跑提示（连接失败不产生 token，成本≈0）；之后改轻量探针。 */
 export const OUTAGE_DIRECT_RETRY_ATTEMPTS = 3;
 
-/** 默认等待上限：outage 6 小时，quota 24 小时。触顶转 expired。 */
-export const OUTAGE_DEFAULT_MAX_WAIT_MS = 6 * 3_600_000;
-export const OUTAGE_QUOTA_DEFAULT_MAX_WAIT_MS = 24 * 3_600_000;
-
 /** 默认尝试次数上限（与 deadline 双闸，谁先到谁是顶）。 */
 export const OUTAGE_DEFAULT_MAX_ATTEMPTS = 40;
 
@@ -266,28 +262,9 @@ export function classifyOutageRecord(
   return now - updatedAt >= staleMs ? "resumable" : "waiting";
 }
 
-/** 本进程内由调度器接管的条件：没有活着的别的 owner，且没到死的是 stale 判据。 */
-export function isOutageResumable(
-  record: OutageRecord,
-  options: { now?: number; staleMs?: number; alive?: (pid: number) => boolean; selfPid?: number } = {},
-): boolean {
-  if (!isWaitingOutage(record.status)) return false;
-  const disposition = classifyOutageRecord(record, options);
-  if (disposition === "resumable") return true;
-  const selfPid = options.selfPid ?? process.pid;
-  // pid 是本进程：重启后重新扫到的记录也归本进程（旧 pid 已死，上面的 resumable 命中；
-  // 这条分支覆盖「同一进程内 scheduler 重启/多实例」的情况）。
-  return disposition === "owned" && record.pid === selfPid;
-}
-
 /** 记录是否已过期（死线或尝试次数），与 store 的 expire 判定一致。 */
 export function isOutageExpired(record: Pick<OutageRecord, "budget">, now: number): boolean {
   return now >= record.budget.deadlineAt || record.budget.attempts >= record.budget.maxAttempts;
-}
-
-/** 剩余等待毫秒（不为负）。 */
-export function outageRemainingMs(record: Pick<OutageRecord, "budget">, now: number): number {
-  return Math.max(0, record.budget.deadlineAt - now);
 }
 
 /** 收窄一份未知形状的落盘记录；关键字段缺失返回 null（坏 JSON 降级用）。 */

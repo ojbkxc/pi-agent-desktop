@@ -13,11 +13,7 @@ import { resolveSessionPath } from "../session-reader";
 /** 尾部探测窗口：64 KiB 足够覆盖若干条消息。 */
 const TAIL_BYTES = 64 * 1024;
 
-/** 一个会话文件里最后一条 user 条目的 entry id（`message.role === "user"`）。 */
-export function lastUserMessageEntryIdInFile(filePath: string): string | null {
-  return scanSessionTail(filePath).lastUserMessageId;
-}
-
+/** 一次尾部扫描读出的事实（续跑判据与探针都用它）。 */
 export interface SessionTailFacts {
   /** 最后一条 user 消息的 entry id（防抢跑守卫）。 */
   lastUserMessageId: string | null;

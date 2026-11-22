@@ -272,12 +272,3 @@ export function startOutageSchedulerLoop(
   timer.unref?.();
   holder[LOOP_KEY] = { timer, ticking };
 }
-
-/** 停掉循环（测试 / 关闭开关后热更新）。 */
-export function stopOutageSchedulerLoop(): void {
-  const holder = globalThis as unknown as Record<symbol, OutageLoopHandle | undefined>;
-  const handle = holder[LOOP_KEY];
-  if (!handle) return;
-  clearInterval(handle.timer);
-  holder[LOOP_KEY] = undefined;
-}

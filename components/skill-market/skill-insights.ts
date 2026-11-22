@@ -134,33 +134,3 @@ export function detectCapabilities(input: {
   const order: CapabilityKind[] = ["shell", "hooks", "secrets", "network", "writes", "binaries"];
   return order.filter((kind) => found.has(kind)).map((kind) => ({ kind, level: LEVEL_OF[kind], evidence: found.get(kind) ?? [] }));
 }
-
-/**
- * SKILL.md 描述里常带的「何时使用」清单：
- * `Use when (1) …, (2) …` / `Use when: …; …` / `当……时使用`。
- */
-export function extractTriggers(description: string | undefined): string[] {
-  if (!description) return [];
-  const text = description.replace(/\s+/g, " ").trim();
-  const english = /\b(?:use|activate|trigger(?:ed)?)\s+(?:it\s+|this\s+)?when\b:?\s*(.+)$/i.exec(text);
-  let body = english?.[1];
-  if (body === undefined) {
-    const chinese = /(?:适用于|使用场景[:：]|触发场景[:：]|当)(.+?)(?:时(?:使用|触发|调用)|$)/.exec(text);
-    body = chinese?.[1];
-  }
-  if (body === undefined) return [];
-  const numbered = body.split(/\s*\(\d+\)\s*|\s*（\d+）\s*|\s*\d+[.、)]\s+/).map((item) => item.trim()).filter(Boolean);
-  const items = numbered.length > 1 ? numbered : body.split(/[;；。]|,\s*or\s+|、/);
-  return items
-    .map((item) => item.replace(/^(?:or|and|或|以及)\s+/i, "").replace(/[,，;；.。]+$/, "").trim())
-    .filter((item) => item.length >= 3)
-    .map((item) => (item.length > 64 ? `${item.slice(0, 63)}…` : item))
-    .slice(0, 5);
-}
-
-/** 粗略阅读时长：每分钟约 400 个 CJK 字符或约 220 个拉丁词。 */
-export function readingMinutes(markdown: string): number {
-  const cjk = (markdown.match(/[㐀-鿿]/g) ?? []).length;
-  const words = (markdown.replace(/[㐀-鿿]/g, " ").match(/[A-Za-z0-9_]+/g) ?? []).length;
-  return Math.max(1, Math.round(cjk / 400 + words / 220));
-}

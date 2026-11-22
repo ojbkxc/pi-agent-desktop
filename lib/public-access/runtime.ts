@@ -13,10 +13,6 @@ function shared(): PublicAccessGlobal {
   return globalThis as PublicAccessGlobal;
 }
 
-export function getPublicAccessManager(): PublicAccessManager | null {
-  return shared().__piPublicAccessManager ?? null;
-}
-
 /** 取现成的管理器；没有就建一个（不自动开启隧道）。 */
 export function ensurePublicAccessManager(): PublicAccessManager {
   const state = shared();
@@ -39,10 +35,4 @@ export function restartPublicAccessFromConfig(): Promise<PublicAccessManager | n
   });
   state.__piPublicAccessStarting = next;
   return next;
-}
-
-/** 本服务器对外的本机来源（隧道指向它）。 */
-export function publicAccessLocalPort(): number {
-  const parsed = Number(process.env.PORT);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : 30141;
 }

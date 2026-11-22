@@ -2,6 +2,7 @@ import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { getProjectDisplayNames } from "./project-display.ts";
 import type { SessionInfo } from "./types";
+import { escapeRegExp } from "./text-utils.ts";
 
 const MAX_FILES = 500;
 const MAX_RESULTS = 30;
@@ -25,11 +26,6 @@ export interface SessionSearchResult {
 export interface SessionSearchResponse {
   results: SessionSearchResult[];
   truncated: boolean;
-}
-
-/** Escape every regex operator so each needle stays a literal substring match. */
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**

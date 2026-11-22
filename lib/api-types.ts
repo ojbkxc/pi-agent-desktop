@@ -684,9 +684,6 @@ export interface McpErrorResponse {
   trustKept?: true;
 }
 
-/** What `POST /api/mcp` can do to a server of either file (ADR 0006: Add, a switch, Remove, Undo, and Sign out). */
-export type McpServerAction = "enable" | "disable" | "remove" | "undo" | "set-enabled" | "sign-out" | "add";
-
 export interface McpServerRef {
   scope: McpScope;
   name: string;

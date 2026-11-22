@@ -63,9 +63,3 @@ export function usePreviewRuntime(enabled: boolean): PreviewRuntimeState {
   }, [enabled]);
   return state;
 }
-
-/** Test hook. */
-export function resetPreviewRuntime(): void {
-  pending = null;
-  loaded = null;
-}

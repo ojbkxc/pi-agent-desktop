@@ -1,6 +1,7 @@
 import { type McpImportFormat, type McpImportNote, nameFromUrl, ServerDraft, setLiteralUrl } from "./mcp-import-core";
 import { type EntryOutcome, isRecord, mapServerEntry, readInputs, siblingMcpUrl, sseRefusal } from "./mcp-import-json";
 import { parseJsonc } from "./jsonc";
+import { safeDecode } from "./text-utils.ts";
 
 // A pasted address: an MCP endpoint, or an install link that carries a server
 // config (Cursor, LM Studio, VS Code and its web redirects, Visual Studio,
@@ -20,14 +21,6 @@ function queryParams(search: string): Map<string, string> {
     params.set(safeDecode(name), safeDecode(value));
   }
   return params;
-}
-
-function safeDecode(text: string): string {
-  try {
-    return decodeURIComponent(text);
-  } catch {
-    return text;
-  }
 }
 
 /** Base64 (standard or URL-safe, padding optional) decoded as UTF-8; undefined when it is not. */

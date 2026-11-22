@@ -135,11 +135,6 @@ export function isActiveAutofixStatus(status: AutofixStatus): boolean {
   return status === "queued" || status === "running" || status === "verifying" || status === "waiting-provider";
 }
 
-/** 纯判定：状态是否已终结。 */
-export function isTerminalAutofixStatus(status: AutofixStatus): boolean {
-  return !isActiveAutofixStatus(status);
-}
-
 /** 纯判定：是否在等上游恢复（由 outage 记录而不是 pid/staleness 决定何时重试）。 */
 export function isWaitingProviderStatus(status: AutofixStatus): boolean {
   return status === "waiting-provider";

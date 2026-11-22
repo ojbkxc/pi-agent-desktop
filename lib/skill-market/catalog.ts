@@ -95,13 +95,6 @@ export function catalogCategories(): MarketCategory[] {
     .filter((category) => category.count > 0);
 }
 
-/** clawhub 上目录钉住的 owner，供 provider 做 slug 消歧。 */
-export function catalogClawhubOwners(): Array<readonly [string, string]> {
-  return catalog.skills
-    .filter((entry) => entry.source === "clawhub")
-    .map((entry) => [entry.slug, entry.owner] as const);
-}
-
 /** 把一条目录项投影成列表卡片。卡片持有副本，标注安装态时不会改到共享快照。 */
 export function catalogEntryToSkill(entry: CatalogEntry): NormalizedSkill {
   return {

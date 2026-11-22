@@ -321,11 +321,3 @@ export function classifyRetryAfter(retryAfterMs: number): OutageClassification {
     ? { kind: "outage", suspend: true, matched: "outage" }
     : { kind: "transient", suspend: false, matched: "status" };
 }
-
-/** 供测试读取的编译产物（不对外承诺）。 */
-export const __outageClassifierPatterns = {
-  nonRetryableLimitPattern,
-  retryablePattern,
-  outagePattern,
-  terminalPattern,
-};

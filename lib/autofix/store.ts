@@ -23,7 +23,6 @@ import {
   AUTOFIX_TASK_MAX_LENGTH,
   AUTOFIX_VERIFY_MAX_LENGTH,
   AutofixValidationError,
-  isActiveAutofixStatus,
   type AutofixRound,
   type AutofixStatus,
   type AutofixTask,
@@ -236,9 +235,4 @@ export function deleteAutofixTask(id: string, agentDir: string = getAgentDir()):
   if (!existsSync(path)) return false;
   rmSync(path, { force: true });
   return true;
-}
-
-/** 供 runner 使用：任务是否正在被本进程驱动。 */
-export function isActiveTask(task: AutofixTask): boolean {
-  return isActiveAutofixStatus(task.status);
 }

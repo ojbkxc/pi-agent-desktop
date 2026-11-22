@@ -133,12 +133,6 @@ export type CompactionFailureCode =
   | "invalid-result"
   | "request-failed";
 
-export interface CompactionDiagnostic {
-  code: CompactionFailureCode;
-  /** `provider/modelId` of the candidate that failed. Never a credential. */
-  ref: string;
-}
-
 /** The extra metadata attached next to the SDK's file lists. */
 export interface CompactionModelSelectionDetails {
   compactionModel: { provider: string; modelId: string };

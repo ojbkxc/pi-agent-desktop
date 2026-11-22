@@ -232,16 +232,6 @@ export function cancelOutageRecord(sessionId: string, agentDir: string = getAgen
   }
 }
 
-/** 取消所有等待中的记录（设置页「全部取消」/ 关闭开关时用）。返回取消条数。 */
-export function cancelAllOutageRecords(agentDir: string = getAgentDir()): number {
-  const waiting = listOutageRecords({ agentDir, waitingOnly: true });
-  let cancelled = 0;
-  for (const record of waiting) {
-    if (cancelOutageRecord(record.sessionId, agentDir)) cancelled += 1;
-  }
-  return cancelled;
-}
-
 /**
  * 防抢跑守卫：会话最后的 user 消息仍是挂起时那条才算「还是原来的任务」。
  *

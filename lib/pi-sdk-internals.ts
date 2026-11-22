@@ -106,13 +106,6 @@ export interface McpTool {
   _meta?: Record<string, unknown>;
 }
 
-/** pi-mcp's `ContentAnnotations`. */
-export interface McpContentAnnotations {
-  audience?: ("user" | "assistant")[];
-  priority?: number;
-  lastModified?: string;
-}
-
 /** pi-mcp's `OAuthChallenge`, parsed from a server's `WWW-Authenticate` header. */
 export interface McpOAuthChallenge {
   resourceMetadataUrl?: URL;

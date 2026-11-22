@@ -24,8 +24,6 @@ import { requiresApproval, isShellTool, type ApprovalDecision, type ApprovalMode
 import { readApprovalMode } from "./settings";
 import { recordGate } from "../gate-attribution";
 
-export const TOOL_APPROVAL_EXTENSION_NAME = "pi-web-tool-approval";
-
 /** 确认框标题（服务端文案，语言中立口径见 docs/i18n.md；标题在扩展 UI 卡片上原样展示）。 */
 export const APPROVAL_CONFIRM_TITLE = "需要确认的命令";
 

@@ -15,6 +15,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { readdirSync, readFileSync } from "node:fs";
 import type { PurgeRewriteRule, PurgeSettings } from "./types";
+import { escapeRegExp } from "../text-utils.ts";
 
 export interface GovernedText {
   text: string;
@@ -48,10 +49,6 @@ interface SkillEntry {
 
 /** `dir` → the last scan. A settings change to a different dir gets its own entry. */
 const skillCache = new Map<string, { scannedAt: number; entries: readonly SkillEntry[] }>();
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 /**
  * `from` → its compiled case-insensitive pattern.

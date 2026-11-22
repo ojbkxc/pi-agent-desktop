@@ -41,16 +41,3 @@ export async function notifyDesktop(options: {
     console.error("Desktop notification failed:", error);
   }
 }
-
-export async function focusDesktopWindow(): Promise<void> {
-  if (!isTauriDesktop()) return;
-  try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    const window = getCurrentWindow();
-    await window.show();
-    await window.unminimize();
-    await window.setFocus();
-  } catch {
-    // ignore
-  }
-}

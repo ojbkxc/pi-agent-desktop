@@ -1,3 +1,5 @@
+import { cleanString } from "./text-utils.ts";
+
 const EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 type EffortLevel = typeof EFFORT_LEVELS[number];
 
@@ -30,10 +32,6 @@ const INPUT_MODALITIES = new Set(["text", "image"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function cleanString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function firstPositiveInteger(value: Record<string, unknown>, fields: readonly string[]): number | undefined {

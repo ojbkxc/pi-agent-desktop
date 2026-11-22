@@ -1,3 +1,5 @@
+import { cleanString } from "./text-utils.ts";
+
 export interface ModelCatalogCost {
   input?: number;
   output?: number;
@@ -70,10 +72,6 @@ const SUPPORTED_INPUT_MODALITIES = new Set(["text", "image"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function cleanString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function optionalNonNegativeNumber(value: unknown): number | undefined {

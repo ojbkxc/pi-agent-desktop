@@ -13,6 +13,8 @@
 // `argSecretParts()`), for code that must find those values again in other
 // text, such as a connection test's error message.
 
+import { safeDecode } from "./text-utils.ts";
+
 export const SECRET_MASK = "•••";
 
 /** Words that name a credential wherever they appear in a name: `OPENAI_API_KEY`, `x-api-key`, `accessToken`. */
@@ -288,14 +290,6 @@ export function urlSecretParts(url: string): string[] {
   const hidden: string[] = [];
   maskUrlWith(url, isPlaceholderOnly, hidden);
   return [...new Set(hidden)];
-}
-
-function safeDecode(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
 }
 
 function isUrl(value: string): boolean {

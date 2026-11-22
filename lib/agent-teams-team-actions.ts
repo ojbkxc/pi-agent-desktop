@@ -17,7 +17,7 @@
  * 本模块不 import pi-team：依赖全部由调用方注入（route 负责接真实的 registry / 磁盘），
  * 因此可以纯单测。仅 import 类型与路径助手。
  */
-import { readFile, readdir, rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { mergeRosterMembers, type PlanRosterMember } from "./agent-teams-roster";
 
@@ -423,17 +423,4 @@ export async function removeTeamDirectory(
   dirFor: (name: string) => string,
 ): Promise<void> {
   await rm(dirFor(teamDirName), { recursive: true, force: true });
-}
-
-/** 团队目录是否存在（用于 route 的 404 判定之外的诊断）。 */
-export async function teamDirExists(
-  teamDirName: string,
-  dirFor: (name: string) => string,
-): Promise<boolean> {
-  try {
-    await readdir(dirFor(teamDirName));
-    return true;
-  } catch {
-    return false;
-  }
 }

@@ -27,9 +27,6 @@ export const LOW_PRICE_OUTPUT_PER_MTOK = 1.5;
 /** Output room reserved when checking a candidate's window (mirrors the SDK's summary cap). */
 export const DEFAULT_OUTPUT_RESERVE_TOKENS = 16_384;
 
-/** System prompt + instructions room in a summarization request. */
-export const DEFAULT_SUMMARIZATION_OVERHEAD_TOKENS = 1_024;
-
 /** `pi-virtual` entries are routers; requests for them must go through ModelRuntime. */
 const VIRTUAL_MODEL_API = "pi-virtual";
 

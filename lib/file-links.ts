@@ -1,3 +1,6 @@
+import { safeDecode } from "./text-utils.ts";
+import { normalizeFilePathSlashes } from "./file-paths.ts";
+
 interface LocalFileClickEvent {
   defaultPrevented: boolean;
   button: number;
@@ -14,21 +17,6 @@ export function shouldOpenLocalFileInApp(event: LocalFileClickEvent): boolean {
     && event.button === 0
     && !event.shiftKey
     && !event.altKey;
-}
-
-function safeDecode(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-function normalizeFilePathSlashes(filePath: string): string {
-  if (/^[a-zA-Z]:[\\/]/.test(filePath) || filePath.startsWith("\\\\")) {
-    return filePath.replace(/\\/g, "/");
-  }
-  return filePath;
 }
 
 function stripLineSuffix(filePath: string): string {

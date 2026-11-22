@@ -1,5 +1,6 @@
 import type { SUBAGENT_CONTROL_TOOL_NAMES } from "./subagents";
 import type { SessionEntry, ToolResultMessage } from "./types";
+import { safeDecode } from "./text-utils.ts";
 
 // Spelled out rather than imported: subagents.ts loads the SDK, and this module stays
 // importable on its own. The type rejects a name subagents.ts no longer registers.
@@ -25,14 +26,6 @@ const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 
 export function isValidSessionId(sessionId: string | null): sessionId is string {
   return !!sessionId && SESSION_ID_RE.test(sessionId);
-}
-
-function safeDecode(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
 }
 
 function normalizeSlashes(value: string): string {

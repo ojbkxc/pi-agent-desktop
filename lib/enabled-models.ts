@@ -260,7 +260,8 @@ function serialize(entries: readonly Entry[], input: EnabledModelsInput): string
   return entries.map((entry) => entry.pattern);
 }
 
-function samePatterns(a: string[] | undefined, b: string[] | undefined): boolean {
+/** Order-sensitive equality of two pattern lists (undefined == undefined). */
+export function samePatterns(a: string[] | undefined, b: string[] | undefined): boolean {
   if (a === undefined || b === undefined) return a === b;
   return a.length === b.length && a.every((pattern, index) => pattern === b[index]);
 }

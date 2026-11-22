@@ -46,8 +46,3 @@ export function shouldShowAgentTeamCostNotice(): boolean {
 export function dismissAgentTeamCostNotice(): void {
   writeFlag(COST_NOTICE_DISMISSED_KEY, true);
 }
-
-/** 清掉「不再提醒」，让弹窗重新出现（调试 / 将来「重新引导」用）。 */
-export function resetAgentTeamCostNotice(): void {
-  writeFlag(COST_NOTICE_DISMISSED_KEY, false);
-}

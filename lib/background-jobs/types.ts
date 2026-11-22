@@ -26,7 +26,6 @@
 // ───────────────────────────── 常量 ─────────────────────────────
 
 export const BACKGROUND_JOB_VERSION = 1;
-export const BACKGROUND_JOB_CUSTOM_TYPE = "pi-web:background-job";
 /** 注入消息的前缀：与 subagent 通知同因——`convertToLlm` 会把 custom 消息映射成 user 角色，
  *  压缩时没有这句就会被当成用户目标写进摘要（#875）。 */
 export const BACKGROUND_JOB_NOTIFICATION_PREFIX =

@@ -356,20 +356,10 @@ export class KeepaliveKeeper {
 const KEEPER_KEY = Symbol.for("pi-web:keepalive-keeper");
 type Holder = { [KEEPER_KEY]?: KeepaliveKeeper };
 
-export function getKeepaliveKeeper(): KeepaliveKeeper | null {
-  return (globalThis as unknown as Holder)[KEEPER_KEY] ?? null;
-}
-
 export function startKeepalive(options: KeepaliveKeeperOptions = {}): KeepaliveKeeper {
   const holder = globalThis as unknown as Holder;
   const keeper = holder[KEEPER_KEY] ?? new KeepaliveKeeper(options);
   holder[KEEPER_KEY] = keeper;
   keeper.start();
   return keeper;
-}
-
-export function stopKeepalive(): void {
-  const holder = globalThis as unknown as Holder;
-  holder[KEEPER_KEY]?.stop();
-  delete holder[KEEPER_KEY];
 }

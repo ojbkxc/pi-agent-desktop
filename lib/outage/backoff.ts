@@ -43,15 +43,6 @@ export function backoffDelayMs(
   return Math.round(base * factor);
 }
 
-/** 抖动边界（供测试断言用）：某档位的最小/最大延迟。 */
-export function backoffDelayBounds(attempt: number, kind: OutageSuspendKind): { min: number; max: number } {
-  const base = backoffDelayMs(attempt, kind, { random: () => 0.5 });
-  return {
-    min: Math.round(base * (1 - OUTAGE_JITTER_RATIO)),
-    max: Math.round(base * (1 + OUTAGE_JITTER_RATIO)),
-  };
-}
-
 /** 下一次尝试的时间戳（纯函数）。 */
 export function nextAttemptAt(
   attempt: number,

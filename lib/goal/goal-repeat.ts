@@ -17,7 +17,7 @@
  * 复活会话（被驱逐 / 进程重启）由 `deliver` 的实现负责。
  */
 import { readdirSync, readFileSync } from "node:fs";
-import { isGoalState, safeGoalFileStem, writeGoalState } from "./goal-store";
+import { isGoalState, writeGoalState } from "./goal-store";
 import { computeNextRunAt, goalRepeatDue, goalRepeatExhausted } from "./goal-interval";
 import type { GoalState } from "./goal-types";
 
@@ -218,8 +218,3 @@ export const GOAL_CONTINUE_PROMPT_FOR_REPEAT =
   "Continue working toward the active objective. Time has passed since your last turn — "
   + "check the current state before assuming your earlier work is still valid, then keep going "
   + "until the objective is fully achieved.";
-
-/** 供测试：文件名字符串化（避免测试重复实现路径规则）。 */
-export function goalFileStemForTest(sessionId: string): string {
-  return safeGoalFileStem(sessionId);
-}

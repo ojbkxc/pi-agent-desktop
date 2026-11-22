@@ -28,7 +28,6 @@ import {
   CAMPAIGN_STATUSES,
   CampaignValidationError,
   campaignInputShapeErrors,
-  isActiveCampaignStatus,
   type Campaign,
   type CampaignCreateInput,
   type CampaignItem,
@@ -287,9 +286,4 @@ export function deleteCampaign(id: string, agentDir: string = getAgentDir()): bo
   if (!existsSync(path)) return false;
   rmSync(path, { force: true });
   return true;
-}
-
-/** 供 runner / 列表使用：战役是否正在（或应当）被驱动。 */
-export function isActiveCampaign(campaign: Campaign): boolean {
-  return isActiveCampaignStatus(campaign.status);
 }

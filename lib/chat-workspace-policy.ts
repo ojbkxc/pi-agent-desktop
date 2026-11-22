@@ -134,8 +134,6 @@ export function chatWorkspacePrompt(filesEnabled: boolean, scope: ChatPromptScop
   return `${CHAT_PROMPT_INTRO}\n\n${filesEnabled ? CHAT_PROMPT_FILES : CHAT_PROMPT_NO_FILES}`;
 }
 
-export const CHAT_WORKSPACE_PROMPT = chatWorkspacePrompt(true);
-
 export function chatBlockedToolReason(toolName: string, hasFolder = false): string {
   if (hasFolder) {
     return `${CHAT_SHELL_BLOCK_MARKER} "${toolName}" is not available in a chat: a chat has no shell. The user can let this chat use their computer (a prompt is shown to them), or open a project to use it.`;
