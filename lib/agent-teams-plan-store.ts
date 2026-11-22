@@ -38,16 +38,25 @@ function parseRuntime(raw: unknown): PlanRuntimeView | null {
   return { providerId, modelId, ...(effortLevel ? { effortLevel } : {}) };
 }
 
+/**
+ * 成员投影。
+ *
+ * 两条**不静默丢弃**的口径（都修自真实反馈的「批准按钮永远是灰的」）：
+ * - `runtime` 缺失/残缺时填 `unknown/unknown` 这个显式占位，而不是把成员整条丢掉。
+ *   丢掉成员会让任务的 ownerId 指向一个「不存在的成员」，`derivePlanReview` 判定
+ *   `hasUnassignedTasks`，批准按钮永久禁用；而用户看不到这个成员，也就无法在卡里修它。
+ *   `isUsableRuntime` 认得这对占位值，所以界面上它是「未知」而不是一个能用的模型。
+ * - `name` 缺失时用 id 兜底：同理，宁可渲染一条可修的行，也不要让成员凭空消失。
+ */
 function parseMembers(raw: unknown): PlanMemberView[] {
   if (!Array.isArray(raw)) return [];
   const members: PlanMemberView[] = [];
   for (const item of raw) {
     if (!isRecord(item)) continue;
     const id = asString(item.id);
-    const name = asString(item.name);
-    if (!id || !name) continue;
-    const runtime = parseRuntime(item.runtime);
-    if (!runtime) continue;
+    if (!id) continue; // 没有 id 的行无法被编辑/指派，跳过是唯一选择
+    const name = asString(item.name) ?? id;
+    const runtime = parseRuntime(item.runtime) ?? { providerId: "unknown", modelId: "unknown" };
     const difficulty = item.difficulty;
     members.push({
       id,

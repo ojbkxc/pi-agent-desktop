@@ -145,7 +145,13 @@ export async function PATCH(
       ...(members ? { members } : {}),
       ...(tasks ? { tasks } : {}),
     });
-    return NextResponse.json({ plan });
+    // 写路径返回的是**磁盘原对象**（可能带界面用不到的字段，也可能缺 teamName / 成员
+    // runtime 的兜底）——直接回给客户端会让卡片的形状跟 GET 不一致（例如团队名渲染成
+    // undefined，直到下一次 2s 轮询才修回来）。这里统一投影成 GET 同形的视图。
+    // 投影读失败（写入刚 rename 完的极小窗口）就退回原对象：绝不能因为「读不回来」
+    // 把一次已经落盘的保存报成失败。
+    const view = await readTeamPlanView(team).catch(() => null);
+    return NextResponse.json({ plan: view ?? plan });
   } catch (error) {
     if (error instanceof TeamPlanWriteError) {
       return NextResponse.json({ error: error.message }, { status: error.status });
