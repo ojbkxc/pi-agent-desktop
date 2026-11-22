@@ -25,7 +25,12 @@ export async function POST(req: Request) {
   const rejected = rejectUnsafeWrite(req);
   if (rejected) return rejected;
   try {
-    const body: unknown = await req.json();
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
     const now = new Date();
     const task = mutateTasks((tasks) => {
       const created = buildTask(body, { now, otherNames: tasks.map((existing) => existing.name) });

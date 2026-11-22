@@ -25,7 +25,12 @@ export async function PATCH(req: Request, { params }: Params) {
   if (rejected) return rejected;
   const { id } = await params;
   try {
-    const body: unknown = await req.json();
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
     const now = new Date();
     const updated = mutateTasks((tasks) => {
       const index = tasks.findIndex((task) => task.id === id);

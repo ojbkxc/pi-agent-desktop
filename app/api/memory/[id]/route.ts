@@ -13,7 +13,12 @@ export async function PATCH(req: Request, { params }: Params) {
   if (rejected) return rejected;
   const { id } = await params;
   try {
-    const body = (await req.json()) as unknown;
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body", code: "validation" }, { status: 400 });
+    }
     if (typeof body !== "object" || body === null || Array.isArray(body)) {
       return NextResponse.json({ error: "Expected a JSON object", code: "validation" }, { status: 400 });
     }

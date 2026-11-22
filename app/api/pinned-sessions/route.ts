@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import { isSessionRole } from "@/lib/pinned-sessions/types";
 import {
   getPinnedRegistryHealth,
@@ -42,6 +43,12 @@ export async function GET() {
 }
 
 export async function PUT(request: Request) {
+  if (!isApiRequestAllowed(request)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(request)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   try {
     const body = await request.json() as { sessionId?: unknown; role?: unknown; note?: unknown };
     const sessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
@@ -66,6 +73,9 @@ export async function PUT(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  if (!isApiRequestAllowed(request)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
   const sessionId = new URL(request.url).searchParams.get("id")?.trim() ?? "";
   if (!sessionId) return NextResponse.json({ error: "id is required" }, { status: 400 });
   try {

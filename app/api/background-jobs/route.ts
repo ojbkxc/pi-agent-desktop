@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isApiRequestAllowed } from "@/lib/request-security";
 import { listBackgroundJobs, getBackgroundJob, stopJobFromTool } from "@/lib/background-jobs/service";
 import { jobOutputPath, readOutput } from "@/lib/background-jobs/store";
 
@@ -31,6 +32,9 @@ export async function GET(request: Request) {
 // POST /api/background-jobs?id=<id> — stop a running job and its process tree.
 // A job that already finished returns 409 rather than pretending it stopped.
 export async function POST(request: Request) {
+  if (!isApiRequestAllowed(request)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
   const id = new URL(request.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
   try {

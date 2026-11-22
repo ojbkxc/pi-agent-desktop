@@ -105,3 +105,43 @@ test("POST /api/skills/search：null 体 → 400（此前被 npx 兜底分支吞
   const response = await route.POST(nullBodyRequest("http://localhost/api/skills/search", "POST"));
   await assertBadBody(response, "skills/search");
 });
+
+// Malformed JSON (JSON.parse throws) used to fall through to the catch-all and
+// become a 500 with a non-JSON/raw-error body. These routes must answer 400.
+
+test("POST /api/scheduled-tasks：非法 JSON → 400 而不是 500", async () => {
+  const route = await jiti.import("./scheduled-tasks/route.ts");
+  const response = await route.POST(jsonRequest("http://localhost/api/scheduled-tasks", "POST", "{not json"));
+  await assertBadBody(response, "scheduled-tasks");
+});
+
+test("PATCH /api/scheduled-tasks/[id]：非法 JSON → 400 而不是 500", async () => {
+  const route = await jiti.import("./scheduled-tasks/[id]/route.ts");
+  const response = await route.PATCH(
+    jsonRequest("http://localhost/api/scheduled-tasks/x", "PATCH", "{not json"),
+    { params: Promise.resolve({ id: "x" }) },
+  );
+  await assertBadBody(response, "scheduled-tasks/[id]");
+});
+
+test("POST /api/memory：非法 JSON → 400 而不是 500", async () => {
+  const route = await jiti.import("./memory/route.ts");
+  const response = await route.POST(jsonRequest("http://localhost/api/memory", "POST", "{not json"));
+  await assertBadBody(response, "memory");
+});
+
+test("PATCH /api/memory/[id]：非法 JSON → 400 而不是 500", async () => {
+  const route = await jiti.import("./memory/[id]/route.ts");
+  const response = await route.PATCH(
+    jsonRequest("http://localhost/api/memory/m1", "PATCH", "{not json"),
+    { params: Promise.resolve({ id: "m1" }) },
+  );
+  await assertBadBody(response, "memory/[id]");
+});
+
+test("POST /api/autofix：非法 JSON → 400 而不是 500", async (t) => {
+  const route = await loadRouteOrSkip(t, "./autofix/route.ts");
+  if (!route) return;
+  const response = await route.POST(jsonRequest("http://localhost/api/autofix", "POST", "{not json"));
+  await assertBadBody(response, "autofix");
+});
