@@ -8366,6 +8366,63 @@ span.linenumber {
   white-space: nowrap;
 }
 
+/* Project campaigns page: the shell/cards reuse the scheduled-* chrome above; the new
+   bits are the backlog item editor (fieldset rows), the progress bar, and the facts line
+   (docs/agents/fork-long-run-campaign.md §8/§10). */
+.campaign-items-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.campaign-items-heading {
+  font-size: var(--fs-small);
+  font-weight: var(--fw-semibold);
+  color: var(--text-muted);
+}
+
+.campaign-item-draft {
+  margin: 0;
+  padding: 12px 14px;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.campaign-item-draft > legend {
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  color: var(--text-muted);
+}
+
+.campaign-progress {
+  position: relative;
+  align-self: stretch;
+  height: 6px;
+  margin-top: 10px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.campaign-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 200ms ease;
+}
+
+.campaign-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
 /* Detail */
 .scheduled-facts {
   display: grid;

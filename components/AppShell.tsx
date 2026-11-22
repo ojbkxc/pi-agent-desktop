@@ -31,6 +31,7 @@ const TasksView = dynamic(() => import("./tasks/TasksView").then((m) => m.TasksV
 const AgentTeamsView = dynamic(() => import("./AgentTeams/AgentTeamsView").then((m) => m.AgentTeamsView), { ssr: false });
 const ScheduledView = dynamic(() => import("./scheduled/ScheduledView").then((m) => m.ScheduledView), { ssr: false });
 const AutofixView = dynamic(() => import("./AutofixView").then((m) => m.AutofixView), { ssr: false });
+const CampaignView = dynamic(() => import("./CampaignView").then((m) => m.CampaignView), { ssr: false });
 // 技能市场整页：卡片网格 + 详情 + 安装确认，数据来自 /api/market/**（双源合并）。
 const SkillMarketView = dynamic(() => import("./skill-market/SkillMarketView").then((m) => m.SkillMarketView), { ssr: false });
 import { openFileTab, saveFileViewerState } from "./file-tab-state";
@@ -121,10 +122,10 @@ import { getProjectDisplayName } from "@/lib/project-display";
 
 type SessionCopyField = "file" | "id" | "projectDir" | "gitBranch" | "gitWorktree";
 /** A page covering the chat area, named by `?view=`. */
-type WorkspaceView = "tasks" | "scheduled" | "autofix" | "artifacts" | "teams" | "market" | null;
+type WorkspaceView = "tasks" | "scheduled" | "autofix" | "campaigns" | "artifacts" | "teams" | "market" | null;
 
 function parseWorkspaceView(value: string | null | undefined): WorkspaceView {
-  return value === "tasks" || value === "scheduled" || value === "autofix" || value === "artifacts" || value === "teams" || value === "market"
+  return value === "tasks" || value === "scheduled" || value === "autofix" || value === "campaigns" || value === "artifacts" || value === "teams" || value === "market"
     ? value
     : null;
 }
@@ -229,6 +230,7 @@ export function AppShell() {
   const tasksOpen = workspaceView === "tasks";
   const scheduledOpen = workspaceView === "scheduled";
   const autofixOpen = workspaceView === "autofix";
+  const campaignsOpen = workspaceView === "campaigns";
   const artifactsOpen = workspaceView === "artifacts";
   const teamsOpen = workspaceView === "teams";
   const marketOpen = workspaceView === "market";
@@ -1434,6 +1436,7 @@ export function AppShell() {
   const handleOpenTasks = useCallback(() => openWorkspaceView("tasks"), [openWorkspaceView]);
   const handleOpenScheduled = useCallback(() => openWorkspaceView("scheduled"), [openWorkspaceView]);
   const handleOpenAutofix = useCallback(() => openWorkspaceView("autofix"), [openWorkspaceView]);
+  const handleOpenCampaigns = useCallback(() => openWorkspaceView("campaigns"), [openWorkspaceView]);
   const handleOpenArtifacts = useCallback(() => openWorkspaceView("artifacts"), [openWorkspaceView]);
   const handleOpenMarket = useCallback(() => openWorkspaceView("market"), [openWorkspaceView]);
   // 会话团队条「打开」：带着该会话所属团队（目录名）打开，工作台初始即选中它。
@@ -2016,6 +2019,8 @@ export function AppShell() {
     ? translate("scheduled.title")
     : autofixOpen
     ? translate("autofix.title")
+    : campaignsOpen
+    ? translate("campaign.title")
     : artifactsOpen
       ? translate("artifacts.page.title")
     : teamsOpen
@@ -2100,6 +2105,8 @@ export function AppShell() {
         scheduledOpen={scheduledOpen}
         onOpenAutofix={handleOpenAutofix}
         autofixOpen={autofixOpen}
+        onOpenCampaigns={handleOpenCampaigns}
+        campaignsOpen={campaignsOpen}
         onOpenArtifacts={handleOpenArtifacts}
         artifactsOpen={artifactsOpen}
         onChatWorkspaceCwdChange={setChatWorkspaceCwd}
@@ -3152,6 +3159,21 @@ export function AppShell() {
         )}
         {autofixOpen && (
           <AutofixView
+            defaultCwd={isChatWorkspaceActive ? null : selectedSession?.cwd ?? newSessionCwd ?? activeCwd}
+            onOpenSession={async (sessionId) => {
+              // handleOpenSession only logs a failure; this page has to tell the user.
+              const known = sessionCatalog.some((s) => s.id === sessionId && !s.transient);
+              if (!known) {
+                const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { cache: "no-store" }).catch(() => null);
+                if (!response?.ok) return false;
+              }
+              await handleOpenSession(sessionId);
+              return true;
+            }}
+          />
+        )}
+        {campaignsOpen && (
+          <CampaignView
             defaultCwd={isChatWorkspaceActive ? null : selectedSession?.cwd ?? newSessionCwd ?? activeCwd}
             onOpenSession={async (sessionId) => {
               // handleOpenSession only logs a failure; this page has to tell the user.

@@ -51,6 +51,7 @@ import { ScheduledSidebarRow } from "./scheduled/ScheduledSidebarRow";
 import { ArtifactsSidebarRow } from "./artifacts/ArtifactsSidebarRow";
 import { TasksSidebarRow } from "./tasks/TasksSidebarRow";
 import { AutofixSidebarRow } from "./AutofixSidebarRow";
+import { CampaignSidebarRow } from "./CampaignSidebarRow";
 import { MarketSidebarRow } from "./skill-market/MarketSidebarRow";
 import { AgentTeamsSidebarRow } from "./AgentTeams/AgentTeamsSidebarRow";
 import { isScheduledRunSession } from "@/hooks/useScheduledTasks";
@@ -109,6 +110,9 @@ interface Props {
   /** Opens the Auto-fix bugs page; the row under Scheduled is absent without it. */
   onOpenAutofix?: () => void;
   autofixOpen?: boolean;
+  /** Opens the Project campaigns page; the row under Auto-fix is absent without it. */
+  onOpenCampaigns?: () => void;
+  campaignsOpen?: boolean;
   /** Opens the Artifacts page; the row under Scheduled is absent without it. */
   onOpenArtifacts?: () => void;
   artifactsOpen?: boolean;
@@ -360,7 +364,7 @@ function readIdSetPref(key: Parameters<typeof getPrefJson>[0]): Set<string> {
     : new Set();
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onChatWorkspaceCwdChange, onProjectsChange, onBackgroundTaskDone, hiddenFinishedSessionIds, onRunningSessionIdsChange, onSessionsChange, headerControls, onOpenTerminal, onOpenScheduled, scheduledOpen = false, onOpenAutofix, autofixOpen = false, onOpenArtifacts, artifactsOpen = false, onOpenTasks, tasksOpen = false, onOpenMarket, marketOpen = false, onOpenTeams, teamsOpen = false }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onChatWorkspaceCwdChange, onProjectsChange, onBackgroundTaskDone, hiddenFinishedSessionIds, onRunningSessionIdsChange, onSessionsChange, headerControls, onOpenTerminal, onOpenScheduled, scheduledOpen = false, onOpenAutofix, autofixOpen = false, onOpenCampaigns, campaignsOpen = false, onOpenArtifacts, artifactsOpen = false, onOpenTasks, tasksOpen = false, onOpenMarket, marketOpen = false, onOpenTeams, teamsOpen = false }: Props) {
   const { t } = useI18n();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [chatWorkspaceCwd, setChatWorkspaceCwd] = useState<string | null>(null);
@@ -2143,6 +2147,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         {onOpenTeams && <AgentTeamsSidebarRow active={teamsOpen} onOpen={onOpenTeams} />}
         {onOpenScheduled && <ScheduledSidebarRow active={scheduledOpen} onOpen={onOpenScheduled} />}
         {onOpenAutofix && <AutofixSidebarRow active={autofixOpen} onOpen={onOpenAutofix} />}
+        {onOpenCampaigns && <CampaignSidebarRow active={campaignsOpen} onOpen={onOpenCampaigns} />}
         {onOpenArtifacts && <ArtifactsSidebarRow active={artifactsOpen} onOpen={onOpenArtifacts} />}
       </div>
 {/* Session search — keeps the original sidebar search styling and
