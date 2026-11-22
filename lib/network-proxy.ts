@@ -371,10 +371,20 @@ export async function networkProxyStatus(
     settings.mode === "system"
       ? await detectSystemProxy({ platform: options.platform, run: options.run })
       : null;
+  const activeProxy = resolveProxyEnv(settings, systemProxy, env).activeProxy;
+  const local = options.local ?? true;
+  if (local) {
+    // A local reader owns the settings file; keep the stored URL verbatim.
+    return { ...settings, activeProxy, systemProxy, local };
+  }
+  // A remote (relay / Tailscale) reader must never receive a proxy's user:pass,
+  // neither from the saved URL nor from a detected system proxy. `activeProxy`
+  // is already stripped by `resolveProxyEnv`; re-applying is harmless.
   return {
     ...settings,
-    activeProxy: resolveProxyEnv(settings, systemProxy, env).activeProxy,
-    systemProxy,
-    local: options.local ?? true,
+    url: stripProxyCredentials(settings.url),
+    activeProxy: activeProxy ? stripProxyCredentials(activeProxy) : activeProxy,
+    systemProxy: systemProxy ? stripProxyCredentials(systemProxy) : systemProxy,
+    local,
   };
 }
