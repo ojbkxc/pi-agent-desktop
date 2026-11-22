@@ -88,6 +88,13 @@ try {
     await editor.fill('已经在写的新草稿');
     await page.getByRole('button', { name: '编辑待发送消息', exact: true }).click();
     await rows.waitFor({ state: 'hidden' });
+    // The outbox row disappears as soon as the server snapshot refreshes, while the
+    // merge into the composer lands one update later; wait for the merged value so a
+    // slow CI runner cannot read the draft before the restore is applied.
+    await page.waitForFunction(() => {
+      const value = document.querySelector('textarea')?.value ?? '';
+      return value.includes('做完之后再检查一下测试') && value.includes('已经在写的新草稿');
+    });
     assert.match(await editor.inputValue(), /做完之后再检查一下测试/); assert.match(await editor.inputValue(), /已经在写的新草稿/);
     await main.click(); await rows.waitFor();
     await editor.fill('这是第二条补充消息'); await main.click();

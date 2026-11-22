@@ -14,8 +14,9 @@ const { clampChatContentWidth, clampChatContentFontSize } = await jiti.import(".
 const widthVariable = /var\(--chat-content-max-width, 820px\)/g;
 
 test("chat content keeps the existing 820px default behind one shared variable", () => {
-  // 3 处：目标条列容器、消息列表列、空态列；三处共用同一变量，宽度随设置一起变。
-  assert.equal((chatWindow.match(widthVariable) ?? []).length, 3);
+  // 4 处：目标条列容器、消息列表列、空态列、composer 上方的计划卡 dock；
+  // 四处共用同一变量，宽度随设置一起变（计划卡必须与输入框同宽）。
+  assert.equal((chatWindow.match(widthVariable) ?? []).length, 4);
   assert.equal((chatInput.match(widthVariable) ?? []).length, 1);
   assert.match(globals, /--chat-content-max-width: 820px;/);
   assert.doesNotMatch(chatWindow, /max-w-\[820px\]|maxWidth: 820/);

@@ -94,9 +94,10 @@ test("#58：DispatchPanel 已挂载并传快照票标题映射（建议只展示
   assert.match(source, /ticketSubjects=\{ticketSubjects\}/);
   assert.match(source, /for \(const ticket of snapshot\?\.tickets \?\? \[\]\) map\[ticket\.id\] = ticket\.subject;/);
   const panel = await read("./DispatchPanel.tsx");
-  // 执行端点与请求体走 v5 契约字段。
+  // 执行端点与请求体走 v5 契约字段；add 成员已改为按 chunk 批量提交。
   assert.match(panel, /\/assignments`, \{/);
-  assert.match(panel, /action: "add", members: \[member\]/);
+  assert.match(panel, /const members = chunk\.map\(\(name\) => \(\{/);
+  assert.match(panel, /body: JSON\.stringify\(\{ action: "add", members \}\)/);
 });
 
 // 覆盖层/布局修复：右列固定 380 在窄视口把左栏压到 ~200px；用 min(380px, 40vw)
