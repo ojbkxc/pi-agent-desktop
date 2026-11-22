@@ -1,10 +1,11 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { dirname } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { findInstallMismatches } from "./check-installed-deps.mjs";
+import { readFileSync } from "node:fs";
+import { findInstallMismatches, summarizeMismatches } from "./check-installed-deps.mjs";
 
 const lock = {
   packages: {
@@ -42,4 +43,22 @@ test("a missing optional dependency is not a mismatch, a wrong version still is"
 test("this checkout's node_modules matches its lockfile", () => {
   const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
   execFileSync(process.execPath, ["scripts/check-installed-deps.mjs"], { cwd: rootDir, stdio: "pipe" });
+});
+
+test("mismatches are split into missing and drifted, because they need different actions", () => {
+  assert.deepEqual(
+    summarizeMismatches([
+      { name: "a", expected: "1.0.0", installed: null },
+      { name: "b", expected: "2.0.0", installed: "2.1.0" },
+      { name: "c", expected: "3.0.0", installed: null },
+    ]),
+    { missing: 2, drift: 1, total: 3 },
+  );
+  assert.deepEqual(summarizeMismatches([]), { missing: 0, drift: 0, total: 0 });
+});
+
+test("the failure names the escape hatch without weakening the exit code", () => {
+  const source = readFileSync(new URL("./check-installed-deps.mjs", import.meta.url), "utf8");
+  assert.match(source, /npm test --ignore-scripts/, "a partial install says how to run the suite now");
+  assert.match(source, /process\.exitCode = 1/, "the check still fails");
 });

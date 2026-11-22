@@ -35,6 +35,17 @@ export function findInstallMismatches({ pkg, lock, readInstalledVersion }) {
   return mismatches;
 }
 
+/**
+ * Split the mismatches into the two cases that need different actions: a package
+ * that is not installed at all, and one installed at another version. The first
+ * is what a partial install looks like (`npm ci --omit=dev`, an interrupted
+ * install); the second is a real drift that can change behaviour.
+ */
+export function summarizeMismatches(mismatches) {
+  const missing = mismatches.filter((entry) => entry.installed === null).length;
+  return { missing, drift: mismatches.length - missing, total: mismatches.length };
+}
+
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
@@ -53,11 +64,21 @@ function main() {
     },
   });
   if (mismatches.length === 0) return;
+  const { missing, drift } = summarizeMismatches(mismatches);
   console.error("node_modules does not match package-lock.json:");
   for (const { name, expected, installed } of mismatches) {
     console.error(`  ${name}: lock ${expected}, installed ${installed ?? "(missing)"}`);
   }
+  // The two cases are not the same problem; saying so here is what turns a wall
+  // into a next step, without weakening the exit code.
+  console.error(`\n${missing} not installed, ${drift} at another version.`);
   console.error("Run `npm ci` to reinstall from the lockfile.");
+  if (missing > 0) {
+    console.error(
+      "To run the suite before reinstalling: `npm test --ignore-scripts` (skips this check only; "
+        + "tests that import a missing package will still fail).",
+    );
+  }
   process.exitCode = 1;
 }
 
