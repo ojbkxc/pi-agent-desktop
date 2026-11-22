@@ -34,8 +34,12 @@ import { PlanEditor, type PlanMemberEditDraft, type PlanTaskEditDraft } from "./
  *
  * 停止按钮（对齐 cc-haha AgentTeamsPlanCard.tsx:170-174）：`canStop = Boolean(plan.parentPlanId)`
  * 时显示——只有「加入运行中团队的新增计划」才需要停 lead 会话生成；点击调 `onStop`
- * （ChatWindow 接 `handleAbort` 停本会话生成）。点击后按钮禁用并显示「正在停止…」，
- * 不主动复位（停止生效后计划流转自然退场）。
+ * （ChatWindow 接 `handleAbort` 停本会话生成）。点击后按钮禁用并显示「正在停止…」。
+ *
+ * **停止态必须能复位**：abort 不保证带来计划状态变化（计划可能停在 interrupted 之外的
+ * 状态、或 aborts 后被新回合接着跑），旧实现「不主动清」会让按钮永远停在「正在停止…」，
+ * 再也没法点第二次。现在三条复位路径：计划 id / state 变化（真的走过去了）、弹框关闭
+ * （重新打开就是一次新操作）、以及 15s 兜底（请求没有落地时按钮必须自己活过来）。
  *
  * 纯展示 + 回调：数据由调用方用 `useTeamPlan(teamName)` 提供；approve 只是回调（由 hook
  * 投递给 lead，桌面不写盘），save 走 PATCH。本组件自判断可见性，不满足时返回 null。
@@ -82,23 +86,40 @@ export function planStateToneColor(state: PlanState): string {
 }
 
 const S: Record<string, CSSProperties> = {
+  // 收缩态卡片：**宽度由外层容器决定**（ChatWindow 的聊天列 wrapper 管 max-width / 内边距，
+  // 见 lead 在 ChatWindow.tsx 的改动）。这里只保证「容器多窄都不溢出」，绝不写死宽度：
+  // - width/maxWidth 100% + boxSizing border-box：padding 与 border 不再额外吃宽
+  //   （content-box 下 100% 宽 + 24px padding 会横向溢出 24px）；
+  // - minWidth 0：作为 flex/grid 子项时允许收缩到内容 min-content 以下，
+  //   否则长团队名/长错误文本会把卡片顶出聊天列；
+  // - overflow 不裁切：弹框走 createPortal 到 body，不受这里影响。
   bar: {
     display: "flex",
     alignItems: "center",
     gap: 10,
     padding: "8px 12px",
+    width: "100%",
+    maxWidth: "100%",
+    minWidth: 0,
+    boxSizing: "border-box",
     background: "var(--bg-panel)",
     border: "1px solid var(--border)",
     borderRadius: 10,
   },
+  /** 收缩态第一行（图标 + 文案 + 查看配置）：minWidth 0 让中间文案列可收缩。 */
+  barRow: { display: "flex", alignItems: "center", gap: 10, minWidth: 0 },
   icon: { flex: "0 0 auto", color: "var(--text-muted)" },
-  text: { display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 },
+  text: { display: "flex", flexDirection: "column", gap: 2, flex: "1 1 auto", minWidth: 0 },
   label: { fontSize: "var(--fs-micro)", color: "var(--text-dim)" },
-  name: { fontSize: "var(--fs-body)", fontWeight: "var(--fw-semibold)", color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", overflowWrap: "anywhere" },
-  meta: { display: "flex", alignItems: "center", gap: 6, fontSize: "var(--fs-caption)", color: "var(--text-muted)" },
-  badge: { padding: "1px 7px", borderRadius: 999, border: "1px solid var(--border)", fontSize: "var(--fs-micro)" },
+  name: { fontSize: "var(--fs-body)", fontWeight: "var(--fw-semibold)", color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", overflowWrap: "anywhere", maxWidth: "100%" },
+  // 徽标 + 成员数：窄容器里换行而不是把「查看配置」挤出去。
+  meta: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", minWidth: 0, fontSize: "var(--fs-caption)", color: "var(--text-muted)" },
+  badge: { flex: "0 0 auto", whiteSpace: "nowrap", padding: "1px 7px", borderRadius: 999, border: "1px solid var(--border)", fontSize: "var(--fs-micro)" },
+  // flexShrink 0：按钮文案不换行、不被长团队名挤掉（用户反馈里它必须始终可点）。
   review: {
     flex: "0 0 auto",
+    flexShrink: 0,
+    whiteSpace: "nowrap",
     border: "none",
     borderRadius: 7,
     padding: "5px 11px",
@@ -126,24 +147,36 @@ const S: Record<string, CSSProperties> = {
   dialog: {
     // 与输入框等宽：跟随聊天内容列的实际宽度（--chat-content-region-width 由 ChatWindow
     // 的 ResizeObserver 写入 = 聊天列容器宽 - 左右内边距），聊天列变窄时弹框同步收窄；
-    // 聊天列宽于上限时取 --chat-content-max-width。100% 仍保留，让窄窗口不溢出（取三者最小值）。
-    // "team-plan-dialog" 供功能域样式/静态断言定位；编辑器容器查询与长文本换行规则在
-    // app/native-theme.css 的 .team-plan-editor / @container 上。
+    // 聊天列宽于上限时取 --chat-content-max-width。
+    //
+    // 兜底必须是**真实像素**，不能是 100%：region 变量只在 ChatWindow 挂载时写入，
+    // 计划卡在别的页面/未挂载时拿到的就是 fallback。旧写法 `var(..., 100%)` 让弹框
+    // 铺满整屏（用户截图里的「横跨整个聊天列甚至更宽」）。现在 fallback = 820px，
+    // 三种情况都对：变量缺失 → 820 上限；变量存在 → 跟随聊天列；100% 仍保留，
+    // 小窗口（<480px 视口、遮罩左右各 16px 内边距）不溢出。
+    //
     // `boxSizing: border-box` 必须保留：content-box 下 width 不含 padding/border，
     // 100% 宽时每侧会多出 16px，弹框在窄窗口里左右各溢出一截。
-    width: "min(var(--chat-content-max-width, 820px), var(--chat-content-region-width, 100%), 100%)",
+    width: "min(var(--chat-content-max-width, 820px), var(--chat-content-region-width, 820px), 100%)",
     maxWidth: "100%",
+    minWidth: 0,
     boxSizing: "border-box",
     overflowWrap: "anywhere",
+    // 高度自适应、内容超出时**面板内滚动**（12 行成员 + 20 个任务也不会把关闭/批准按钮
+    // 推到视口外）。overscroll-behavior 防滚到底后带动背后的聊天列滚动。
     maxHeight: "min(78vh, 640px)",
     overflow: "auto",
+    overscrollBehavior: "contain",
     background: "var(--bg-panel)",
     border: "1px solid var(--border)",
     borderRadius: 12,
-    padding: 16,
+    // 小窗口（<480px 视口）里 16px 固定内边距会把内容压到 300px 以下，用 clamp 收一档。
+    padding: "clamp(10px, 2.5vw, 16px)",
   },
-  dialogHead: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 },
-  h2: { fontSize: "var(--fs-title)", fontWeight: "var(--fw-semibold)", color: "var(--text)", margin: 0 },
+  dialogHead: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 12 },
+  // 标题里带团队名（模型生成，可能很长）：minWidth 0 + anywhere 让标题换行/收缩，
+  // 而不是把状态徽标挤出面板。
+  h2: { minWidth: 0, overflowWrap: "anywhere", fontSize: "var(--fs-title)", fontWeight: "var(--fw-semibold)", color: "var(--text)", margin: 0 },
   section: { marginTop: 14 },
   h4: { fontSize: "var(--fs-caption)", fontWeight: "var(--fw-semibold)", color: "var(--text-muted)", margin: "0 0 6px" },
   member: { padding: "6px 0", borderTop: "1px solid var(--border)" },
@@ -152,9 +185,12 @@ const S: Record<string, CSSProperties> = {
   muted: { fontSize: "var(--fs-caption)", color: "var(--text-muted)", overflowWrap: "anywhere" },
   prompt: { fontFamily: "var(--font-mono)", fontSize: "var(--fs-micro)", color: "var(--text-dim)", whiteSpace: "pre-wrap", margin: "4px 0 0", overflowWrap: "anywhere" },
   task: { padding: "6px 0", borderTop: "1px solid var(--border)", fontSize: "var(--fs-caption)", color: "var(--text)", overflowWrap: "anywhere" },
-  alert: { color: "var(--danger)", fontSize: "var(--fs-caption)", margin: "6px 0" },
+  // 告警行：服务端 / 模型写的错误文本可能很长（路径、URL、模型名），必须能断行，
+  // 否则一条 alert 就能把弹框撑出横向滚动。
+  alert: { color: "var(--danger)", fontSize: "var(--fs-caption)", margin: "6px 0", overflowWrap: "anywhere" },
   confirmRow: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "6px 0", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--danger)", background: "var(--bg-panel)" },
-  footer: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 },
+  // 窄窗口里三个按钮换行，不挤出面板。
+  footer: { display: "flex", justifyContent: "flex-end", flexWrap: "wrap", gap: 8, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 },
   ghost: { border: "1px solid var(--border)", background: "transparent", color: "var(--text)", borderRadius: 7, padding: "5px 11px", fontSize: "var(--fs-caption)", cursor: "pointer" },
   stop: { border: "1px solid var(--danger)", background: "transparent", color: "var(--danger)", borderRadius: 7, padding: "5px 12px", fontSize: "var(--fs-caption)", fontWeight: "var(--fw-semibold)", cursor: "pointer" },
   stopOff: { border: "1px solid var(--danger)", background: "transparent", color: "var(--text-dim)", borderRadius: 7, padding: "5px 12px", fontSize: "var(--fs-caption)", fontWeight: "var(--fw-semibold)", cursor: "not-allowed" },
@@ -205,7 +241,7 @@ export function planModalView(
     onCancelDiscard?: () => void;
     /** dirty 时点关闭/遮罩/Esc/Close 走这里（必须走 requestClose，不能直接 onClose）。 */
     onRequestClose?: () => void;
-    /** 关闭按钮是否禁用（busy 时禁用，dirty 时仍可点以进入二次确认）。 */
+    /** 关闭按钮是否禁用（缺省不禁用：busy 时也允许关，理由见 requestClose）。 */
     closeDisabled?: boolean;
     /** 模态面板 ref（useModalDismiss 返回；纯视图不传时降级为无焦点管理）。 */
     panelRef?: Ref<HTMLDivElement>;
@@ -226,9 +262,9 @@ export function planModalView(
   // 不再静默卸载 PlanEditor 丢掉模型/负责人草稿（interaction.md P1）。没有可编辑
   // 区时 requestClose 就是 onClose 的同义词。
   const requestClose = options.onRequestClose ?? options.onClose;
-  const ownerName = (ownerId: string | undefined) =>
-    plan.members.find((member) => member.id === ownerId)?.name ?? t("teams.plan.unassigned");
   const editable = options.editor === true && (plan.state === "draft" || plan.state === "review_pending");
+  // 启动失败的错误信息：空串/纯空白不渲染（plan.json 里可能留着 " "）。
+  const launchError = plan.launch?.error?.trim() ? plan.launch.error : null;
   return (
     <div style={S.overlay} data-testid="team-plan-overlay" onClick={requestClose}>
       <div
@@ -247,14 +283,28 @@ export function planModalView(
           <span style={{ ...S.badge, color: planStateToneColor(plan.state) }}>{t(planStateLabelKey(plan.state))}</span>
         </div>
         <p style={S.muted}>{t("teams.plan.reviewHint")}</p>
-        {plan.launch?.error ? (
+        {/* 告警区：把「为什么不能批准 / 上次为什么失败」集中到弹框顶部，按
+            启动失败 → 非法成员名 → 未分配任务 → 批准失败 的顺序自上而下排（严重度递减），
+            不再一半在顶部、一半在编辑器下面（用户反馈层级混乱、容易漏看）。每条都带
+            role="alert" + anywhere 断行，长错误文本不会把弹框撑出横向滚动。 */}
+        {launchError ? (
           <p style={S.alert} role="alert" data-testid="team-plan-launch-error">
-            {plan.launch.error}
+            {launchError}
           </p>
         ) : null}
         {review.invalidNames.length > 0 ? (
           <p style={S.alert} role="alert" data-testid="team-plan-invalid-names">
             {t("teams.plan.invalidNames", { names: review.invalidNames.join(", ") })}
+          </p>
+        ) : null}
+        {review.hasUnassignedTasks ? (
+          <p style={S.alert} role="alert" data-testid="team-plan-unassigned-summary">
+            {t("teams.plan.assignRequired")}
+          </p>
+        ) : null}
+        {options.approveError ? (
+          <p style={S.alert} role="alert" data-testid="team-plan-approve-error">
+            {options.approveError}
           </p>
         ) : null}
 
@@ -273,9 +323,9 @@ export function planModalView(
         ) : (
           <>
             <section style={S.section} aria-label={t("teams.plan.roster")}>
-              <h4 style={S.h4}>
-                {t("teams.plan.roster")} ({plan.members.length})
-              </h4>
+              {/* 成员数文案与可编辑分支**同一个 key**（teams.plan.memberCount），
+                  两个分支长得一样，用户来回切换不会看到两套计数写法。 */}
+              <h4 style={S.h4}>{t("teams.plan.memberCount", { count: plan.members.length })}</h4>
               {plan.members.map((member) => (
                 <div key={member.id} style={S.member} data-member-id={member.id}>
                   <div style={S.memberName}>{member.name}</div>
@@ -296,22 +346,27 @@ export function planModalView(
               {plan.tasks.length === 0 ? (
                 <p style={S.muted}>{t("teams.plan.noTasks")}</p>
               ) : (
-                plan.tasks.map((task) => (
-                  <div key={task.id} style={S.task} data-task-id={task.id}>
-                    <div style={{ overflowWrap: "anywhere" }}>{task.subject}</div>
-                    <div style={S.mono}>
-                      {t("teams.plan.owner")}: {ownerName(task.ownerId)}
-                      {task.dependencies.length > 0
-                        ? ` · ${t("teams.plan.dependencies")}: ${task.dependencies.join(", ")}`
-                        : ""}
-                    </div>
-                    {!task.ownerId || !plan.members.some((member) => member.id === task.ownerId) ? (
-                      <div style={S.alert} role="alert" data-testid="team-plan-unassigned">
-                        {t("teams.plan.assignRequired")}
+                plan.tasks.map((task) => {
+                  // owner 指到一个已不存在的成员也算「未分配」：只发 assignRequired 一条，
+                  // 而不是「负责人：未分配」再叠一条同样的告警（旧实现同义行重复两遍）。
+                  const owner = plan.members.find((member) => member.id === task.ownerId);
+                  return (
+                    <div key={task.id} style={S.task} data-task-id={task.id}>
+                      <div style={{ overflowWrap: "anywhere" }}>{task.subject}</div>
+                      <div style={S.mono}>
+                        {t("teams.plan.owner")}: {owner ? owner.name : t("teams.plan.unassigned")}
+                        {task.dependencies.length > 0
+                          ? ` · ${t("teams.plan.dependencies")}: ${task.dependencies.join(", ")}`
+                          : ""}
                       </div>
-                    ) : null}
-                  </div>
-                ))
+                      {!owner ? (
+                        <div style={S.alert} role="alert" data-testid="team-plan-unassigned">
+                          {t("teams.plan.assignRequired")}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })
               )}
             </section>
           </>
@@ -321,7 +376,7 @@ export function planModalView(
             Esc / 遮罩 / Close 三条路径都由 requestClose 走进这里，不再直接卸载。 */}
         {options.discardPrompt ? (
           <div style={S.confirmRow} data-testid="team-plan-discard-prompt">
-            <p style={{ ...S.alert, margin: 0, flex: 1 }} role="alert">
+            <p style={{ ...S.alert, margin: 0, flex: 1, minWidth: 0 }} role="alert">
               {t("teams.plan.discardUnsaved")}
             </p>
             <button type="button" data-testid="team-plan-discard-cancel" style={S.ghost} onClick={options.onCancelDiscard}>
@@ -332,14 +387,12 @@ export function planModalView(
             </button>
           </div>
         ) : null}
-        {options.approveError ? (
-          <p style={S.alert} role="alert" data-testid="team-plan-approve-error">
-            {options.approveError}
-          </p>
-        ) : null}
 
         <div style={S.footer}>
-          <button type="button" data-testid="team-plan-close" style={S.ghost} onClick={requestClose} disabled={options.closeDisabled ?? options.busy}>
+          {/* busy 不再禁用关闭：批准已投递出去，弹框只是展示层；把 Close 变灰、
+              Esc/遮罩又「点了没反应」是用户报的那个死路。禁用只留给调用方显式传
+              closeDisabled 的场景。 */}
+          <button type="button" data-testid="team-plan-close" style={S.ghost} onClick={requestClose} disabled={options.closeDisabled ?? false}>
             {t("teams.plan.close")}
           </button>
           <button
@@ -390,8 +443,11 @@ export function AgentTeamPlanCard({
   // dirty 时点关闭 → 停在卡片里问「放弃未保存的修改？」（interaction.md P1）。
   // 三条关闭路径（Esc / 遮罩 / Close）都先到这里，确认后才真关。
   const [discardPrompt, setDiscardPrompt] = useState(false);
-  // 正在执行停止的 planId（按钮禁用 + 「正在停止…」）；对齐 cc-haha：不主动清，
-  // 停止生效后计划流转（取消/中断/批准）自然让卡片退场。
+  // 正在执行停止的 planId（按钮禁用 + 「正在停止…」）。
+  //
+  // 旧实现「不主动复位」是死路：abort 并不保证带来计划状态变化（用户可能压根不在
+  // 生成中 / abort 后又被新一轮消息接着跑），按钮就永远卡在「正在停止…」，再也点不动。
+  // 现在三条复位路径（见下面两个 effect）：planId 或 state 变化、弹框关闭、15s 兜底。
   const [stoppingPlanId, setStoppingPlanId] = useState<string | null>(null);
 
   // 审批通过（state 变 launching）后卡片本就隐藏；这里顺手把 Modal 关掉，避免退场残留。
@@ -399,26 +455,48 @@ export function AgentTeamPlanCard({
     if (!isPlanCardVisible(plan)) { setOpen(false); setDiscardPrompt(false); }
   }, [plan]);
 
-  // 关掉弹框后「有未保存改动」不再成立（草稿随 PlanEditor 卸载而消失）。计划本身变化时
-  // **不**在这里清 —— 有未保存改动时 PlanEditor 会保留草稿，由它自己上报真实的 dirty。
+  // 计划换了一条、或状态真的流转了 → 上次那次「停止」已经落地，复位进行态。
+  // 依赖 planId/state 而不是 plan 对象：轮询每 2s 重新解析一份 JSON，对象身份不稳定。
+  const stoppingResetKey = `${plan?.planId ?? ""}:${plan?.state ?? ""}`;
+  useEffect(() => {
+    setStoppingPlanId(null);
+  }, [stoppingResetKey]);
+
+  // 兜底：请求没落地（abort 无响应 / 计划状态不变）时也不能一直禁用，15s 后自己活过来。
+  useEffect(() => {
+    if (!stoppingPlanId) return;
+    const timer = setTimeout(() => setStoppingPlanId(null), 15_000);
+    return () => clearTimeout(timer);
+  }, [stoppingPlanId]);
+
+  // 关掉弹框后「有未保存改动」不再成立（草稿随 PlanEditor 卸载而消失），停止态也一并复位
+  // （重新打开弹框就是一次新操作，按钮必须可点）。计划本身变化时**不**在这里清 —— 有未保存
+  // 改动时 PlanEditor 会保留草稿，由它自己上报真实的 dirty。
   useEffect(() => {
     if (!open) {
       setDirty(false);
       setDiscardPrompt(false);
+      setStoppingPlanId(null);
       editsRef.current = null;
     }
   }, [open]);
 
-  // 关闭的唯一入口：busy 时按住不放（批准/停止在途）；二次确认已展开时先撤掉它
-  // （Esc / 再点遮罩 = 取消这次关闭，不是放弃草稿）；dirty 时先进二次确认。
+  // 关闭的唯一入口：三条路径（遮罩 / Close / Esc）都到这里。
+  // - 二次确认已展开时先撤掉它（Esc / 再点遮罩 = 取消这次关闭，不是放弃草稿）；
+  // - dirty 时进二次确认（草稿不能被静默丢弃）；
+  // - **busy（批准在途）也照样关**：批准请求已经带着 diff 投递出去了，弹框只是展示层，
+  //   旧写法 `if (busy) return` 会让 Esc/遮罩变成「点了没反应」的死路（用户反馈）。
+  //   计划流转到 launching 时卡片自己也会退场，不会残留半开的面板。
   const requestClose = (): void => {
-    if (busy) return;
     if (discardPrompt) {
       setDiscardPrompt(false);
       return;
     }
-    if (dirty) setDiscardPrompt(true);
-    else setOpen(false);
+    if (busy || !dirty) {
+      setOpen(false);
+      return;
+    }
+    setDiscardPrompt(true);
   };
   const discardAndClose = (): void => {
     setDiscardPrompt(false);
@@ -460,7 +538,7 @@ export function AgentTeamPlanCard({
       data-testid="team-plan-card"
       style={{ ...S.bar, flexDirection: "column", alignItems: "stretch" }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div style={S.barRow}>
         <span style={S.icon}>
           <UsersIcon />
         </span>
@@ -481,7 +559,9 @@ export function AgentTeamPlanCard({
         </button>
       </div>
       {error ? (
-        <p style={S.alert} role="alert">
+        // 轮询/接口错误文本可能很长（URL、堆栈式描述）：换行而不是把卡片撑出聊天列；
+        // title 保留完整文本，方便鼠标悬停看全。
+        <p style={{ ...S.alert, margin: "6px 0 0", minWidth: 0 }} role="alert" title={error}>
           {error}
         </p>
       ) : null}

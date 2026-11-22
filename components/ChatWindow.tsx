@@ -1971,25 +1971,49 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
             isChat={chatOnly}
           />
         )}
-        {/* B3: plan card dock above the composer. The outer wrapper is gated on the same
-            predicate the card uses, so an invisible card never leaves an empty 8px gap in
-            the composer column. `error` is not part of the gate: the card only renders it
-            alongside a plan (`AgentTeamPlanCard` returns null when `plan` is null). */}
-        {isPlanCardVisible(teamPlan.plan) && (
-          <div style={{ maxHeight: "min(45dvh, 440px)", overflowY: "auto", marginBottom: 8, flexShrink: 0 }}>
-            <AgentTeamPlanCard
-              plan={teamPlan.plan}
-              cwd={session?.cwd ?? null}
-              busy={teamPlan.busy}
-              saving={teamPlan.saving}
-              saveError={teamPlan.saveError}
-              conflict={teamPlan.conflict}
-              error={teamPlan.error}
-              approveError={teamPlan.approveError}
-              onApprove={(edits) => void teamPlan.saveAndApprove(edits)}
-              onReload={teamPlan.refresh}
-              onStop={() => void handleAbort()}
-            />
+        {/* B3: plan card dock above the composer.
+            宽度口径必须与输入框**完全一致**，否则卡片会横着铺满整个聊天列、比输入框宽一截
+            （用户 2026-11 截图反馈的「太宽」就是这个）：
+            - ChatInput 根节点是 `padding: 0 16px 8px`，内层才是
+              「max-width = 聊天外观宽度（820px）+ margin auto」居中；
+            - 所以这里也套同样的两层：外层吃 16px 内边距，内层取同一个 max-width 居中。
+            只给外层上 max-width 是不够的——那会让卡片比输入框宽 2 倍内边距。
+            继续用 flexShrink: 0 + 限高滚动（计划卡自己也有 maxHeight，这里是双保险）。
+            可见性判据同时接受「没有 plan 但读取出错」：卡片会渲染一条 loadFailed 提示，
+            轮询失败时不再静默消失（之前 `isPlanCardVisible(null)` 恒 false，那条分支是死代码）。 */}
+        {(isPlanCardVisible(teamPlan.plan) || (!teamPlan.plan && Boolean(teamPlan.error))) && (
+          <div
+            style={{
+              width: "100%",
+              padding: `0 ${CHAT_COLUMN_PADDING}px`,
+              marginBottom: 8,
+              flexShrink: 0,
+              minWidth: 0,
+            }}
+          >
+            <div
+              style={{
+                maxWidth: "var(--chat-content-max-width, 820px)",
+                margin: "0 auto",
+                maxHeight: "min(45dvh, 440px)",
+                overflowY: "auto",
+                minWidth: 0,
+              }}
+            >
+              <AgentTeamPlanCard
+                plan={teamPlan.plan}
+                cwd={session?.cwd ?? null}
+                busy={teamPlan.busy}
+                saving={teamPlan.saving}
+                saveError={teamPlan.saveError}
+                conflict={teamPlan.conflict}
+                error={teamPlan.error}
+                approveError={teamPlan.approveError}
+                onApprove={(edits) => void teamPlan.saveAndApprove(edits)}
+                onReload={teamPlan.refresh}
+                onStop={() => void handleAbort()}
+              />
+            </div>
           </div>
         )}
         {chatInputElement}

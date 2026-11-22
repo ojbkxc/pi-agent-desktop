@@ -5,7 +5,7 @@ import { useI18n } from "@/hooks/useI18n";
 import { useModelCatalog } from "@/hooks/useModelCatalog";
 import { AppSelect } from "@/components/AppSelect";
 import { ConfigButton } from "@/components/SettingsUi";
-import { isUsableRuntime, type TeamPlanView } from "@/lib/agent-teams-plan";
+import { isUsableRuntime, type PlanRuntimeView, type TeamPlanView } from "@/lib/agent-teams-plan";
 
 /**
  * B3 计划卡的**可编辑**内容（对齐 cc-haha AgentTeamsPlanCard 的弹框）。
@@ -60,6 +60,35 @@ export function joinModelRef(providerId: string, modelId: string): string {
   return providerId && modelId ? `${providerId}/${modelId}` : "";
 }
 
+/** 成员在计划里的模型 ref。运行时是 `unknown/unknown` 占位（`isUsableRuntime` = false）时
+ * 返回**空串**，不是 `"unknown/unknown"`。
+ *
+ * 这是旧实现最脏的一处：pi-team 从不设置 PI_PROVIDER_ID/PI_MODEL_ID，真实机器上成员/队长
+ * 运行时经常是 `unknown/unknown`。把它原样拼成 ref 会有三重坏处——下拉里出现一个假选项、
+ * 「跟随队长」写进一个必然 spawn 失败的模型、以及 diff 把占位值当「用户改过」发回服务端。
+ * 空串在下拉里显示「未设置」，也只有空串能让 `diffPlanEdits` 正确判定「这一项没动」。 */
+export function planMemberModelRef(runtime: PlanRuntimeView | null | undefined): string {
+  if (!runtime || !isUsableRuntime(runtime)) return "";
+  return joinModelRef(runtime.providerId, runtime.modelId);
+}
+
+/** `provider/model` 形式的 ref 是否是一个能真正跑起来的模型（非空、非 unknown 占位）。 */
+export function isUsableModelRef(ref: string | null | undefined): boolean {
+  const runtime = splitModelRef(ref ?? "");
+  return Boolean(runtime) && isUsableRuntime(runtime);
+}
+
+/** 从计划里取单个成员的草稿基线（批量操作落到「草稿里还没有的成员」时用它兜底）。 */
+export function baselineMemberDraft(plan: TeamPlanView, id: string): PlanMemberDraft | null {
+  const member = plan.members.find((item) => item.id === id);
+  if (!member) return null;
+  return {
+    agentType: member.agentType,
+    modelRef: planMemberModelRef(member.runtime),
+    effortLevel: member.runtime.effortLevel ?? "",
+  };
+}
+
 /** 只把**真正改过**的字段放进 PATCH 体（与 cc-haha teamPlansApi.save 同口径）。
  *
  * 思考级别随模型一起打包：`runtime` 是个整体，只改模型时也要**带上草稿里现有的级别**，
@@ -81,7 +110,9 @@ export function diffPlanEdits(plan: TeamPlanView, draft: PlanDraft): {
       changed = true;
     }
     const runtime = splitModelRef(edited.modelRef);
-    if (runtime) {
+    // 空 ref 与 unknown 占位都不进 PATCH：runtime 是个整体，把 `unknown/unknown` 写回去
+    // 等于给成员装一个必然 spawn 失败的模型（旧实现照抄占位值）。
+    if (runtime && isUsableRuntime(runtime)) {
       const effort = edited.effortLevel ?? "";
       const modelChanged =
         runtime.providerId !== member.runtime.providerId || runtime.modelId !== member.runtime.modelId;
@@ -108,7 +139,8 @@ export function draftFromPlan(plan: TeamPlanView): PlanDraft {
   for (const member of plan.members) {
     members[member.id] = {
       agentType: member.agentType,
-      modelRef: joinModelRef(member.runtime.providerId, member.runtime.modelId),
+      // unknown 占位 → 空串：下拉显示「未设置」，diff 也据此判定「没动过」。
+      modelRef: planMemberModelRef(member.runtime),
       effortLevel: member.runtime.effortLevel ?? "",
     };
   }
@@ -234,6 +266,18 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
   const dirtyRef = useRef(false);
   dirtyRef.current = dirty;
 
+  // 勾选状态跟着成员表走：计划里删掉的成员 id 必须从 selected 里剔掉，否则
+  // 「全选」勾选框会永远算不满、批量设模型也会对着幽灵 id 写草稿（写了个不存在的成员，
+  // diff 时被忽略 → 用户点完没反应）。数组内容不变时返回原引用，避免每 2s 轮询重渲染。
+  const memberIdsKey = plan.members.map((member) => member.id).join("\u0000");
+  useEffect(() => {
+    const ids = new Set(memberIdsKey ? memberIdsKey.split("\u0000") : []);
+    setSelected((current) => {
+      const next = current.filter((id) => ids.has(id));
+      return next.length === current.length ? current : next;
+    });
+  }, [memberIdsKey]);
+
   // 把 dirty 报给卡片：未保存的改动要拦住「批准」（否则按旧模型启动）。
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -249,7 +293,9 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
       ...current,
       members: {
         ...current.members,
-        [id]: { ...current.members[id], ...patch },
+        // 草稿里还没有这个成员（计划刚被别处重排/重命名）时，用计划基线兜底，
+        // 否则 spread undefined 会写出一个只有被改字段的半截草稿，其它字段全丢。
+        [id]: { ...(current.members[id] ?? { agentType: "", modelRef: "", effortLevel: "" }), ...patch },
       },
     }));
   }, []);
@@ -259,22 +305,25 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
   }, []);
 
   // 批量模型下拉：选中即应用到已勾选成员，不再需要单独的「应用到选择」按钮。
+  // 只接受可用的 `provider/model`：空值、`unknown/unknown` 一律忽略（筛选掉假模型）。
   const applyModelRef = (ref: string) => {
-    const runtime = splitModelRef(ref);
-    if (!runtime || selected.length === 0) return;
+    if (!isUsableModelRef(ref) || selected.length === 0) return;
     setDraft((current) => {
       const members = { ...current.members };
-      for (const id of selected) members[id] = { ...members[id], modelRef: ref };
+      for (const id of selected) {
+        const base = members[id] ?? baselineMemberDraft(plan, id);
+        if (!base) continue;
+        members[id] = { ...base, modelRef: ref };
+      }
       return { ...current, members };
     });
   };
 
   const followLead = () => {
-    const lead = plan.leaderRuntime;
     // 队长运行时可能是 pi-team 写的占位 unknown/unknown（本服务进程不设 PROVIDER/MODEL 环境
     // 变量）；那样的值不能写进成员模型，按钮也据此禁用。
-    if (!isUsableRuntime(lead) || selected.length === 0) return;
-    applyModelRef(joinModelRef(lead!.providerId, lead!.modelId));
+    if (!isUsableRuntime(plan.leaderRuntime) || selected.length === 0) return;
+    applyModelRef(planMemberModelRef(plan.leaderRuntime));
   };
 
   // 恢复建议模型：模型与 agent 预设回到计划里的值，思考级别保持用户当前的选择。
@@ -283,9 +332,10 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
       const members = { ...current.members };
       for (const member of plan.members) {
         members[member.id] = {
-          ...members[member.id],
+          ...(members[member.id] ?? baselineMemberDraft(plan, member.id) ?? { agentType: "", modelRef: "", effortLevel: "" }),
           agentType: member.agentType,
-          modelRef: joinModelRef(member.runtime.providerId, member.runtime.modelId),
+          // 与 draftFromPlan 同口径：unknown 占位恢复成空串，而不是写回一个假模型。
+          modelRef: planMemberModelRef(member.runtime),
         };
       }
       return { ...current, members };
@@ -302,6 +352,25 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
     label: `${entry.name} · ${entry.provider}`,
     disabled: !entry.enabled,
   }));
+
+  // 选中成员的当前草稿快照。约定：
+  // - agentType 用 `||`（空串 = 还没选，退回计划里的值）；
+  // - modelRef 空串 = 「未设置」（unknown 占位在 draftFromPlan 里已经换成空串）。
+  const activeDraft = activeMember ? draft.members[activeMember.id] : undefined;
+  const activeAgentType = activeDraft?.agentType || activeMember?.agentType || "";
+  const activeModelRef = activeDraft?.modelRef ?? "";
+  const activeEffort = activeDraft?.effortLevel ?? "";
+  // 没有可用模型时思考级别**不能编辑**：runtime 是个整体，光有 effort 发不出去，
+  // 旧实现允许改、diff 却因为 splitModelRef("") = null 直接跳过 → 用户改了、
+  // dirty 不动、批准后也没生效（看起来就是「草稿被吞了」）。现在先选模型再选级别。
+  const activeModelUsable = isUsableModelRef(activeModelRef);
+  const effortOptions = [
+    ...(activeEffort && !(PLAN_EFFORT_LEVELS as readonly string[]).includes(activeEffort)
+      // 服务端给了不在枚举里的级别：照原样列出来，别让下拉显示空白。
+      ? [{ value: activeEffort, label: activeEffort }]
+      : []),
+    ...PLAN_EFFORT_LEVELS.map((value) => ({ value, label: value || t("teams.plan.effortDefault") })),
+  ];
 
   return (
     <div data-testid="team-plan-editor" className="team-plan-editor" style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -321,7 +390,9 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
         {/* 左：成员名册（勾选 + 当前模型） */}
         <section aria-label={t("teams.plan.roster")} style={S.roster}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-            <h4 style={S.h4}>{t("teams.plan.roster")} ({plan.members.length})</h4>
+            {/* 计数文案走 teams.plan.memberCount（与只读名册分支同一个 key）：
+                两个分支文案一致，也不再把数字硬拼进标题造成两种写法。 */}
+            <h4 style={S.h4}>{t("teams.plan.memberCount", { count: plan.members.length })}</h4>
             {editable && plan.members.length > 0 && (
               <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: "var(--fs-micro)", color: "var(--text-muted)" }}>
                 <input
@@ -365,7 +436,7 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
             );
           })}
           {isUsableRuntime(plan.leaderRuntime) && (
-            <p style={S.hint}>{t("teams.plan.leader")}: {joinModelRef(plan.leaderRuntime!.providerId, plan.leaderRuntime!.modelId)}</p>
+            <p style={S.hint}>{t("teams.plan.leader")}: {planMemberModelRef(plan.leaderRuntime)}</p>
           )}
 
           {editable && (
@@ -380,7 +451,13 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
                 <AppSelect
                   aria-label={t("teams.plan.batch")}
                   value={batchRef}
-                  onValueChange={(value) => { setBatchRef(value); applyModelRef(value); }}
+                  onValueChange={(value) => {
+                    // 这是一次性「动作」，不是持久选择：应用后立刻回到占位项。
+                    // 旧实现把选中值留在 batchRef 里，Radix 对同值不再触发 onValueChange
+                    // → 换个成员勾选后再选**同一个**模型完全没反应（用户报的「选完不生效」）。
+                    setBatchRef("");
+                    applyModelRef(value);
+                  }}
                   options={[{ value: "", label: t("teams.plan.batchPick") }, ...modelOptions]}
                   disabled={selected.length === 0 || catalog.loading}
                 />
@@ -408,19 +485,21 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
                   {agents.length > 0 ? (
                     <AppSelect
                       aria-label={`${activeMember.name} · ${t("teams.plan.agent")}`}
-                      value={draft.members[activeMember.id]?.agentType ?? activeMember.agentType}
+                      value={activeAgentType}
                       onValueChange={(value) => setMember(activeMember.id, { agentType: value })}
                       options={[
-                        ...(agents.includes(draft.members[activeMember.id]?.agentType ?? activeMember.agentType)
+                        // 当前值不在预设列表里（自定义 / 预设被删）时补一个选项，
+                        // 否则下拉会显示空白、看起来像「没有 agent」。
+                        ...(agents.includes(activeAgentType) || !activeAgentType
                           ? []
-                          : [{ value: draft.members[activeMember.id]?.agentType ?? activeMember.agentType, label: draft.members[activeMember.id]?.agentType ?? activeMember.agentType }]),
+                          : [{ value: activeAgentType, label: activeAgentType }]),
                         ...agents.map((name) => ({ value: name, label: name })),
                       ]}
                       disabled={!editable}
                     />
                   ) : (
                     <span style={S.mono}>
-                      {draft.members[activeMember.id]?.agentType ?? activeMember.agentType}
+                      {activeAgentType || t("teams.plan.unspecified")}
                       {agentsError ? ` (${t("teams.plan.agentsUnavailable")})` : ""}
                     </span>
                   )}
@@ -429,12 +508,15 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
                   <span style={S.label}>{t("teams.plan.model")}</span>
                   <AppSelect
                     aria-label={`${activeMember.name} · ${t("teams.plan.model")}`}
-                    value={draft.members[activeMember.id]?.modelRef ?? ""}
+                    value={activeModelRef}
                     onValueChange={(value) => setMember(activeMember.id, { modelRef: value })}
                     options={[
-                      ...(modelOptions.some((option) => option.value === draft.members[activeMember.id]?.modelRef)
+                      // 当前值不在目录里（unknown 占位 / 已下架的模型）：补一个**有文案**的
+                      // 选项。旧实现用 `?? t(unspecified)` 兜底，空串时标签就是空串，
+                      // 下拉里出现一条看不见的空行。
+                      ...(modelOptions.some((option) => option.value === activeModelRef)
                         ? []
-                        : [{ value: draft.members[activeMember.id]?.modelRef ?? "", label: draft.members[activeMember.id]?.modelRef ?? t("teams.plan.unspecified") }]),
+                        : [{ value: activeModelRef, label: activeModelRef || t("teams.plan.unspecified") }]),
                       ...modelOptions,
                     ]}
                     disabled={!editable || catalog.loading}
@@ -444,13 +526,10 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
                   <span style={S.label}>{t("teams.plan.effort")}</span>
                   <AppSelect
                     aria-label={`${activeMember.name} · ${t("teams.plan.effort")}`}
-                    value={draft.members[activeMember.id]?.effortLevel ?? ""}
+                    value={activeEffort}
                     onValueChange={(value) => setMember(activeMember.id, { effortLevel: value })}
-                    options={PLAN_EFFORT_LEVELS.map((value) => ({
-                      value,
-                      label: value || t("teams.plan.effortDefault"),
-                    }))}
-                    disabled={!editable}
+                    options={effortOptions}
+                    disabled={!editable || !activeModelUsable}
                   />
                 </div>
               </div>
@@ -479,7 +558,9 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
                   </div>
                   <AppSelect
                     aria-label={`${task.subject} · ${t("teams.plan.owner")}`}
-                    value={draft.tasks[task.id] ?? ""}
+                    // 草稿里还没有这个任务（计划刚被别处加了任务、或用户有未保存改动时基线没重置）
+                    // → 显示计划里的真实负责人，而不是一律显示「未分配」（旧实现会误报未分配）。
+                    value={draft.tasks[task.id] ?? task.ownerId ?? ""}
                     onValueChange={(value) => setTaskOwner(task.id, value)}
                     options={[
                       { value: "", label: t("teams.plan.unassigned") },
