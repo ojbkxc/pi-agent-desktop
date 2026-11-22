@@ -6,6 +6,7 @@ import { formatRelativeTime } from "@/lib/i18n/format";
 import type { OutageSnapshot } from "@/lib/outage/types";
 import type { AgentTaskSnapshot, SessionInfo } from "@/lib/types";
 import { createTasksPoller, describeActivity, groupTasks, projectLabel, sessionTitle, type TaskRow } from "./tasks-helpers";
+import { BackgroundJobsSection } from "./BackgroundJobsSection";
 
 interface Props {
   sessions: SessionInfo[];
@@ -220,6 +221,9 @@ export function TasksView({ sessions, runningSessionIds, onOpenSession }: Props)
         {section("outage", groups.outage)}
         {section("running", groups.running)}
         {section("recent", groups.recent)}
+        {/* Background commands the assistant started (bash_background): the UI's
+            list + stop path. Self-hides until at least one job exists. */}
+        <BackgroundJobsSection />
       </div>
     </main>
   );

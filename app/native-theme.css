@@ -10611,6 +10611,27 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   cursor: not-allowed;
 }
 
+/* Background commands on the Tasks page (components/tasks/BackgroundJobsSection.tsx):
+   a non-clickable card with a monospace command line, status and a Stop button
+   (reuses .scheduled-card + .tasks-action). */
+.tasks-background-card {
+  cursor: default;
+}
+
+.tasks-background-card:hover {
+  background: var(--surface);
+}
+
+.tasks-background-command {
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  font-weight: var(--fw-regular);
+}
+
+.tasks-background-stop {
+  flex-shrink: 0;
+}
+
 /* Session-header banner while the run is suspended on a provider outage
    (components/OutageBanner.tsx): amber edge like the Tasks "waiting" group,
    never the red failure treatment. */
