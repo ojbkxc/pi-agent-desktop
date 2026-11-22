@@ -10857,11 +10857,11 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   flex-shrink: 0;
 }
 
-.approval-mode-indicator-button {
+.approval-mode-indicator .approval-mode-indicator-button {
   min-height: var(--control-h-sm);
   max-width: 160px;
   padding: 0 8px;
-  border-radius: var(--radius-sm) !important;
+  border-radius: var(--radius-sm);
   font-size: var(--fs-micro);
   line-height: 1;
   white-space: nowrap;
