@@ -201,3 +201,49 @@ test("换代拒收：incarnationId 不符的响应不入桶并留 error", async 
     stub.restore();
   }
 });
+
+test("pause：POST action=pause（带 leadSessionId/incarnationId），成功后入桶并复位请求态", async () => {
+  const previous = globalThis.fetch;
+  let posted = null;
+  globalThis.fetch = async (input, init) => {
+    const method = init?.method ?? "GET";
+    if (method === "GET") return new Response(JSON.stringify(VIEW()), { status: 200 });
+    posted = JSON.parse(init.body);
+    return new Response(JSON.stringify(VIEW({ status: "paused", revision: 2, epoch: 1 })), { status: 200 });
+  };
+  try {
+    await teamRuntimeControl.refresh(SCOPE);
+    teamRuntimeControl.markPauseRequested(SCOPE);
+    assert.equal(entry().pauseRequested, true);
+
+    const view = await teamRuntimeControl.pause(SCOPE);
+    assert.equal(posted.action, "pause", "必须真正 POST 服务端 pause");
+    assert.equal(posted.leadSessionId, "sess-lead");
+    assert.equal(posted.incarnationId, "inc-1");
+    assert.equal(view.status, "paused");
+    assert.equal(entry().view.status, "paused");
+    assert.equal(entry().pauseRequested, false, "确认后复位请求态");
+    assert.equal(entry().busy, false);
+  } finally {
+    globalThis.fetch = previous;
+  }
+});
+
+test("pause：服务端失败留 error 并复位请求态（不卡在 pausing）", async () => {
+  const previous = globalThis.fetch;
+  globalThis.fetch = async (_input, init) => {
+    const method = init?.method ?? "GET";
+    if (method === "GET") return new Response(JSON.stringify(VIEW()), { status: 200 });
+    return new Response(JSON.stringify({ error: "host.stop 爆了" }), { status: 500 });
+  };
+  try {
+    await teamRuntimeControl.refresh(SCOPE);
+    teamRuntimeControl.markPauseRequested(SCOPE);
+    await assert.rejects(() => teamRuntimeControl.pause(SCOPE), /host\.stop 爆了/);
+    assert.match(entry().error, /host\.stop 爆了/);
+    assert.equal(entry().pauseRequested, false, "失败后不留在请求态");
+    assert.equal(entry().busy, false);
+  } finally {
+    globalThis.fetch = previous;
+  }
+});

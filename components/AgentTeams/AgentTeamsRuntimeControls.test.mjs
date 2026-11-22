@@ -8,7 +8,7 @@ import { createJiti } from "jiti";
  * partial 的 Retry 与错误列表。fetch 换桩预填 store 后 renderToStaticMarkup。
  */
 const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, interopDefault: true, jsx: { runtime: "automatic" }, tsconfigPaths: true });
-const { AgentTeamsRuntimeControls, memberStatusKey, statePresentation, teamRuntimeControl, resetTeamRuntimeControlForTest } =
+const { AgentTeamsRuntimeControls, memberStatusKey, statePresentation, runTeamPause, teamRuntimeControl, resetTeamRuntimeControlForTest } =
   await jiti.import("./AgentTeamsRuntimeControls.tsx");
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
@@ -169,4 +169,23 @@ test("编辑成员入口：缺省 onEditMembers 时不渲染按钮（保持既�
   const html = render(React.createElement(AgentTeamsRuntimeControls, { team: TEAM, onAbort: () => {} }));
   assert.doesNotMatch(html, /data-testid="runtime-edit-members"/);
   assert.doesNotMatch(html, /agent-teams-runtime-edit-members/);
+});
+
+// 组件点击无法在无 DOM 环境断言，故组件与测试共用 runTeamPause 编排：
+// 只要它 mark + abort + 真正 pause，组件就必然发出服务端 pause。
+test("runTeamPause：进入请求态 → 停 lead → 真正 POST pause 三步都执行", async () => {
+  const calls = [];
+  const control = {
+    markPauseRequested: (scope) => calls.push(`mark:${scope.teamName}`),
+    pause: async (scope) => { calls.push(`pause:${scope.teamName}`); return VIEW({ status: "paused", revision: 2 }); },
+  };
+  await runTeamPause(SCOPE, control, () => calls.push("abort"));
+  assert.deepEqual(calls, ["mark:demo", "abort", "pause:demo"]);
+
+  // 服务端 pause 失败时编排要把错误抛回，供组件复位 busy。
+  const failing = {
+    markPauseRequested: () => {},
+    pause: async () => { throw new Error("pause failed"); },
+  };
+  await assert.rejects(() => runTeamPause(SCOPE, failing), /pause failed/);
 });

@@ -200,6 +200,14 @@ export function ReclaimConfirm({
   );
 }
 
+/**
+ * Stop / reclaim are destructive and a half-open connection would leave the
+ * request pending forever — and `busy`/`busyRef` only reset once the fetch lands,
+ * so Stop and Reclaim would stay disabled with no way out. Bound it; a timeout
+ * rejects, the catch turns it into a failure, and `finally` resets busy.
+ */
+export const LIFECYCLE_REQUEST_TIMEOUT_MS = 15_000;
+
 export interface TeamLifecycleActionsProps {
   /** 目录名（URL 用），不是 displayName。 */
   team: string;
@@ -243,6 +251,7 @@ export function TeamLifecycleActions({ team, displayName, memberCount, onDone }:
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action }),
+        signal: AbortSignal.timeout(LIFECYCLE_REQUEST_TIMEOUT_MS),
       });
       const payload = await response.json().catch(() => null) as (LifecycleResponse & { error?: string }) | null;
       if (!aliveRef.current) return;

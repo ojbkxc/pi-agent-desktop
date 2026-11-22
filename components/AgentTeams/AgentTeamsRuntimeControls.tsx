@@ -112,6 +112,24 @@ const S: Record<string, React.CSSProperties> = {
   error: { color: "var(--danger)", fontSize: "var(--fs-caption)" },
 };
 
+/**
+ * 暂停一次的完整编排：进入客户端请求态 → 停 lead 生成 → 真正 POST 服务端 pause。
+ * 拆成可测的小函数是因为仓库没有 DOM 测试环境，「点击按钮」无法直接断言发请求；
+ * 组件与测试共用同一编排，避免组件只置位不发 POST 的回归再次发生。
+ */
+export async function runTeamPause(
+  scope: TeamRuntimeScope,
+  control: {
+    markPauseRequested: (scope: TeamRuntimeScope) => void;
+    pause: (scope: TeamRuntimeScope) => Promise<RuntimeControlView | null>;
+  },
+  onAbort?: () => void,
+): Promise<void> {
+  control.markPauseRequested(scope);
+  onAbort?.();
+  await control.pause(scope);
+}
+
 export function AgentTeamsRuntimeControls({ team, onAbort, readOnly = false, onEditMembers }: Props) {
   const { t } = useI18n();
   const scope: TeamRuntimeScope | null = useMemo(
@@ -136,13 +154,11 @@ export function AgentTeamsRuntimeControls({ team, onAbort, readOnly = false, onE
   const [aborting, setAborting] = useState(false);
   const handlePause = () => {
     if (!scope || aborting) return;
-    teamRuntimeControl.markPauseRequested(scope);
     setAborting(true);
-    try {
-      onAbort?.();
-    } finally {
-      setAborting(false);
-    }
+    // markPauseRequested + onAbort + 服务端 pause 由 runTeamPause 一次完成。
+    void runTeamPause(scope, teamRuntimeControl, onAbort)
+      .catch(() => {})
+      .finally(() => setAborting(false));
   };
 
   if (readOnly || !scope) return null;

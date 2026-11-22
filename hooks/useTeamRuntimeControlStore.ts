@@ -66,6 +66,7 @@ export const PAUSE_UNCONFIRMED = "暂停请求未在预期时间内确认（团�
 interface TeamRuntimeControlState {
   refresh: (scope: TeamRuntimeScope) => Promise<RuntimeControlView | null>;
   markPauseRequested: (scope: TeamRuntimeScope) => void;
+  pause: (scope: TeamRuntimeScope) => Promise<RuntimeControlView | null>;
   resume: (scope: TeamRuntimeScope) => Promise<RuntimeControlView | null>;
 }
 
@@ -85,6 +86,7 @@ interface RuntimeControlStoreState {
   /** 动作代际：markPauseRequested / resume 顶它，串行化并发动作（cc-haha actionGenerations 同款）。 */
   actionGenerations: Map<string, number>;
   reads: Map<string, Promise<RuntimeControlView | null>>;
+  pauses: Map<string, Promise<RuntimeControlView | null>>;
   resumes: Map<string, Promise<RuntimeControlView | null>>;
   pauseTimers: Map<string, ReturnType<typeof setTimeout>>;
   pauseRevisions: Map<string, number>;
@@ -101,6 +103,7 @@ function storeState(): RuntimeControlStoreState {
     generations: new Map(),
     actionGenerations: new Map(),
     reads: new Map(),
+    pauses: new Map(),
     resumes: new Map(),
     pauseTimers: new Map(),
     pauseRevisions: new Map(),
@@ -114,6 +117,7 @@ const bumpStoreGeneration = () => { storeState().storeGeneration += 1; };
 const generations = () => storeState().generations;
 const actionGenerations = () => storeState().actionGenerations;
 const reads = () => storeState().reads;
+const pauses = () => storeState().pauses;
 const resumes = () => storeState().resumes;
 const pauseTimers = () => storeState().pauseTimers;
 const pauseRevisions = () => storeState().pauseRevisions;
@@ -251,6 +255,54 @@ export const teamRuntimeControl: TeamRuntimeControlState = {
         : entry));
     }, PAUSE_CONFIRM_TIMEOUT_MS));
   },
+  pause(scope) {
+    const key = teamRuntimeControlKey(scope);
+    const existing = pauses().get(key);
+    if (existing) return existing;
+    const storeEpoch = storeGeneration();
+    const actionGeneration = (actionGenerations().get(key) ?? 0) + 1;
+    actionGenerations().set(key, actionGeneration);
+    update(key, (entry) => ({ ...entry, busy: true, error: null }));
+    const operation = Promise.resolve().then(async () => {
+      try {
+        const response = await fetch(
+          `/api/teams/${encodeURIComponent(scope.teamName)}/runtime-control`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              action: "pause",
+              leadSessionId: scope.leadSessionId,
+              incarnationId: scope.incarnationId,
+            }),
+          },
+        );
+        if (storeEpoch !== storeGeneration() || actionGeneration !== (actionGenerations().get(key) ?? 0)) {
+          return getEntry(key).view;
+        }
+        const data = (await response.json().catch(() => ({}))) as { error?: string } & Partial<RuntimeControlView>;
+        if (!response.ok) throw new Error(data.error ?? `暂停失败（HTTP ${response.status}）`);
+        invalidate(key);
+        return accept(scope, data as RuntimeControlView);
+      } catch (error) {
+        if (storeEpoch === storeGeneration() && actionGeneration === (actionGenerations().get(key) ?? 0)) {
+          // A failed pause must not stay "pausing" until the 15s timeout.
+          clearPause(key);
+          invalidate(key);
+          update(key, (entry) => ({ ...entry, loading: false, pauseRequested: false }));
+          fail(key, error);
+        }
+        throw error;
+      } finally {
+        if (pauses().get(key) === operation) pauses().delete(key);
+        if (storeEpoch === storeGeneration() && actionGeneration === (actionGenerations().get(key) ?? 0)) {
+          update(key, (entry) => ({ ...entry, busy: false }));
+        }
+      }
+    });
+    pauses().set(key, operation);
+    return operation;
+  },
   resume(scope) {
     const key = teamRuntimeControlKey(scope);
     const existing = resumes().get(key);
@@ -328,6 +380,7 @@ export function resetTeamRuntimeControlForTest(): void {
   state.generations.clear();
   state.actionGenerations.clear();
   state.reads.clear();
+  state.pauses.clear();
   state.resumes.clear();
   state.byTeam.clear();
   emit();

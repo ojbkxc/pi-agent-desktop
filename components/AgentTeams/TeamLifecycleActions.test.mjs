@@ -13,6 +13,7 @@ const {
   interpretLifecycleOutcome,
   isLifecycleSettled,
   parseLifecycleResults,
+  LIFECYCLE_REQUEST_TIMEOUT_MS,
 } = await jiti.import("./TeamLifecycleActions.tsx");
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
@@ -178,6 +179,13 @@ test("源码钉法：onDone 只在真的生效时触发，且在途闸用 ref（
     "回收未删掉时保留确认区，便于就地重试");
   assert.match(source, /if \(!keepConfirm\) setConfirming\(false\);/);
   assert.match(source, /if \(!aliveRef\.current\) return;/, "卸载后不再 setState");
+});
+
+test("lifecycle 请求带超时：fetch 用 AbortSignal.timeout，超时落失败并复位 busy", async () => {
+  assert.equal(typeof LIFECYCLE_REQUEST_TIMEOUT_MS, "number");
+  assert.ok(LIFECYCLE_REQUEST_TIMEOUT_MS > 0 && LIFECYCLE_REQUEST_TIMEOUT_MS <= 60_000, "合理的超时窗口");
+  const source = await (await import("node:fs/promises")).readFile(new URL("./TeamLifecycleActions.tsx", import.meta.url), "utf8");
+  assert.match(source, /signal: AbortSignal\.timeout\(LIFECYCLE_REQUEST_TIMEOUT_MS\)/, "请求必须带超时，挂起不会永久禁用按钮");
 });
 
 test("LifecycleOutcomeMessage：三档语气分别接到 status / alert，并带 aria-live", () => {
