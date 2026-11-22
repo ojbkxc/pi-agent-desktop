@@ -13,11 +13,13 @@
  * 客户端组件不要 import 本文件（含 node:fs）；只 import lib/agent-teams-swimlane.ts。
  */
 import { readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { rename as renamePromise, unlink as unlinkPromise } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import * as lockfile from "proper-lockfile";
+import { getPiWebSettingsPath, readStored, updatePiWebSettings } from "./artifact-settings";
 import { userHome } from "./user-home";
 import { readSessionParentSessionId } from "./session-reader";
 import {
@@ -464,7 +466,9 @@ export interface ApplyTeamMemberModelsOptions {
  *    （writeTeamFileAsync 仅建团时用）与独立 pi CLI 的窗口靠锁内重读缓解，pi-team
  *    未来统一走锁即全自动互斥——不宣称对无锁写者完全防护。
  * 3. `withQuotaLock(task)`：teamsRoot 下 `.quota.lock` 文件锁，串行「读全部团队名册
- *    判 12/32」的桌面写者；pi-team 自己的 checkSpawnLimits 读盘但非原子，残余如实。
+ *    判配额」的桌面写者；pi-team 自己的 checkSpawnLimits 读盘但非原子，残余如实。
+ *    注意：锁只包「读盘计数 + 在途预留」这一小步（见 tryReserveTeamWorkerSlot），
+ *    **不包起进程**——把 spawn 关在锁里会让全进程一次只能派一个成员（旧实现即如此）。
  */
 const TEAM_MUTATION_QUEUES: symbol = Symbol.for("pi-web:teams-mutation-queues");
 
@@ -556,6 +560,9 @@ export async function mutateTeamConfigFile<T>(teamDir: string, mutation: TeamCon
 export async function withQuotaLock<T>(task: () => Promise<T>): Promise<T> {
   const root = teamsRootDir();
   const lockPath = join(root, ".quota.lock");
+  // teamsRoot 还不存在（全新机器/刚清空）时，proper-lockfile 的 mkdir 会 ENOENT：
+  // 先把根目录建出来，锁才落得下去（空目录对上层语义无影响，读不到团队同样是空名册）。
+  await mkdir(root, { recursive: true }).catch(() => undefined);
   // proper-lockfile 要求目标存在：先 wx 落空占位（照 pi-team teamTickets.js:121-123）。
   await writeFile(lockPath, "{}", { encoding: "utf8", flag: "wx" }).catch(() => undefined);
   const release = await lockfile.lock(lockPath, {
@@ -570,14 +577,242 @@ export async function withQuotaLock<T>(task: () => Promise<T>): Promise<T> {
   }
 }
 
-/** 团队并发上限（口径对齐 pi-team constants.js：env 覆盖，非正回落默认）。 */
-export function readTeamQuotaLimits(env: NodeJS.ProcessEnv = process.env): { perTeamLimit: number; globalLimit: number } {
-  const perTeam = Number(env.PI_TEAM_MAX_MEMBERS);
-  const global = Number(env.PI_TEAM_MAX_GLOBAL_WORKERS);
+/**
+ * ── 团队并发上限（配额）──────────────────────────────────────────────────────
+ *
+ * env 名（与 pi-team constants.js 同口径，代码只认这三个）：
+ * - `PI_TEAM_MAX_MEMBERS`：每团队 worker 上限（lead 不算，走 resolveLeadNames 排除）；
+ * - `PI_TEAM_MAX_GLOBAL_WORKERS`：全进程 worker 上限；`PI_TEAM_MAX_WORKERS` 作为
+ *   历史/文档里出现过的同义别名继续认（两个名字曾经并存，读的人不该踩空）；
+ * - `PI_TEAM_MAX_SPAWN_CONCURRENCY`：一次批量派成员时同时在起的宿主进程数
+ *   （默认 4，见 readTeamSpawnConcurrency）。
+ *
+ * 取值优先级（高 → 低）：**env → 设置项 `teamQuota`（pi-web/settings.json）→ 默认值**。
+ * env 优先是有意的：环境变量是部署侧的硬闸，设置项是界面偏好；反过来一旦界面写过一次
+ * 值，部署方就再也收不紧（docs/agent-teams-design.md §8 把 env 当「调紧」手段）。
+ * `readTeamQuotaResolution()` 会如实回报每个数字来自哪一层，设置页据此提示，
+ * 不会出现「改了设置却不生效」的黑箱。
+ */
+export const TEAM_QUOTA_DEFAULTS = {
+  /**
+   * 每团队 16。旧值 12 是「lead 也计数」年代的保守档；现在 lead 已排除，但 12 名
+   * worker 仍不够铺开 3–4 条并行泳道（一条泳道常态 lead + 3–4 名 worker），稍微多开
+   * 两条就撞墙、整批派发被拒——这正是「多派成员派不进去」的直接原因。16 是
+   * 「4 条泳道各 4 人」的实用档，又只有全局 64 的 1/4：单团队失控吃不掉全局。
+   */
+  perTeamLimit: 16,
+  /**
+   * 全局 64。=「4 个满编团队同时跑」。单桌面进程跑到 64 个会话是实测能撑住的档位
+   * （每会话一个 pi 进程 + RPC 双向管道），再往上先撞的是句柄/内存而不是 CPU，
+   * 所以 48–64 之间取值，取 64 让「多团队并行」不被无谓卡住。
+   */
+  globalLimit: 64,
+} as const;
+
+/** 上限的合法区间（设置面校验用；超区间一律拒，不静默夹取）。 */
+export const TEAM_QUOTA_RANGES = {
+  perTeamLimit: { min: 1, max: 128 },
+  globalLimit: { min: 1, max: 512 },
+} as const;
+
+export interface TeamQuotaLimits {
+  perTeamLimit: number;
+  globalLimit: number;
+}
+
+/** 每个数字的来源（设置页展示「这项被 env 顶掉了」用）。 */
+export type TeamQuotaLimitSource = "env" | "settings" | "default";
+
+export interface TeamQuotaResolution extends TeamQuotaLimits {
+  sources: { perTeamLimit: TeamQuotaLimitSource; globalLimit: TeamQuotaLimitSource };
+  /** 生效的 env 名（未生效的层不出现）——错误文案据此给出可执行出路。 */
+  envNames: { perTeamLimit: string; globalLimit: string };
+}
+
+/** 设置项 `teamQuota` 段（pi-web/settings.json，与 autopilot 段同文件同风格）。 */
+export interface TeamQuotaSettings {
+  perTeamLimit?: number;
+  globalLimit?: number;
+}
+
+/** 校验单个上限：必须是区间内的整数，否则 undefined（调用方回落下一层）。 */
+export function parseTeamQuotaLimit(value: unknown, key: keyof TeamQuotaLimits): number | undefined {
+  if (typeof value !== "number" || !Number.isInteger(value)) return undefined;
+  const range = TEAM_QUOTA_RANGES[key];
+  if (value < range.min || value > range.max) return undefined;
+  return value;
+}
+
+/** env 值 → 上限（非数字/非正/非整数一律 undefined，回落下一层而不是硬套默认）。 */
+function envQuotaLimit(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+  return Math.floor(value);
+}
+
+/**
+ * 读设置项 `teamQuota`。文件缺失/损坏/字段非法 ⇒ 空对象（回落 env/默认，不抛错——
+ * 配额读取在派成员的热路径上，读不了设置不该让整个请求 500）。
+ */
+export function readTeamQuotaSettings(settingsPath: string = getPiWebSettingsPath()): TeamQuotaSettings {
+  let stored: Record<string, unknown>;
+  try {
+    stored = readStored(settingsPath);
+  } catch {
+    return {};
+  }
+  const raw = stored.teamQuota;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const value = raw as Record<string, unknown>;
+  const settings: TeamQuotaSettings = {};
+  const perTeamLimit = parseTeamQuotaLimit(value.perTeamLimit, "perTeamLimit");
+  if (perTeamLimit !== undefined) settings.perTeamLimit = perTeamLimit;
+  const globalLimit = parseTeamQuotaLimit(value.globalLimit, "globalLimit");
+  if (globalLimit !== undefined) settings.globalLimit = globalLimit;
+  return settings;
+}
+
+/** 写设置项 `teamQuota`（只合并这两个字段，别的段原样保留）；越界抛 RangeError。 */
+export function writeTeamQuotaSettings(
+  patch: TeamQuotaSettings,
+  settingsPath: string = getPiWebSettingsPath(),
+): TeamQuotaSettings {
+  const current = readTeamQuotaSettings(settingsPath);
+  const next: TeamQuotaSettings = { ...current };
+  for (const key of ["perTeamLimit", "globalLimit"] as const) {
+    const value = patch[key];
+    if (value === undefined) continue;
+    const range = TEAM_QUOTA_RANGES[key];
+    if (typeof value !== "number" || !Number.isInteger(value) || value < range.min || value > range.max) {
+      throw new RangeError(`${key} 必须是 ${range.min}..${range.max} 的整数（收到 ${JSON.stringify(value)}）`);
+    }
+    next[key] = value;
+  }
+  updatePiWebSettings({ teamQuota: next }, settingsPath);
+  return next;
+}
+
+/** 解析生效上限 + 每个数字的来源（env 覆盖设置项，设置项覆盖默认值）。 */
+export function readTeamQuotaResolution(
+  env: NodeJS.ProcessEnv = process.env,
+  settingsPath: string = getPiWebSettingsPath(),
+): TeamQuotaResolution {
+  const envPerTeam = envQuotaLimit(env.PI_TEAM_MAX_MEMBERS);
+  const envGlobal = envQuotaLimit(env.PI_TEAM_MAX_GLOBAL_WORKERS)
+    ?? envQuotaLimit(env.PI_TEAM_MAX_WORKERS);
+  // 只有 env 没给足时才读盘：env 全覆盖的热路径不碰文件。
+  const settings = envPerTeam !== undefined && envGlobal !== undefined
+    ? {}
+    : readTeamQuotaSettings(settingsPath);
+
+  const perTeamLimit = envPerTeam ?? settings.perTeamLimit ?? TEAM_QUOTA_DEFAULTS.perTeamLimit;
+  const globalLimit = envGlobal ?? settings.globalLimit ?? TEAM_QUOTA_DEFAULTS.globalLimit;
   return {
-    perTeamLimit: Number.isFinite(perTeam) && perTeam > 0 ? Math.floor(perTeam) : 12,
-    globalLimit: Number.isFinite(global) && global > 0 ? Math.floor(global) : 32,
+    perTeamLimit,
+    globalLimit,
+    sources: {
+      perTeamLimit: envPerTeam !== undefined ? "env" : settings.perTeamLimit !== undefined ? "settings" : "default",
+      globalLimit: envGlobal !== undefined ? "env" : settings.globalLimit !== undefined ? "settings" : "default",
+    },
+    envNames: {
+      perTeamLimit: "PI_TEAM_MAX_MEMBERS",
+      // 生效中的全局 env 名如实回报（两个同义名只报真正被读到的那个）。
+      globalLimit: envQuotaLimit(env.PI_TEAM_MAX_GLOBAL_WORKERS) !== undefined
+        ? "PI_TEAM_MAX_GLOBAL_WORKERS"
+        : "PI_TEAM_MAX_WORKERS|PI_TEAM_MAX_GLOBAL_WORKERS",
+    },
   };
+}
+
+/** 生效上限（口径对齐 pi-team constants.js：env > 设置项 > 默认，非正回落下一层）。 */
+export function readTeamQuotaLimits(
+  env: NodeJS.ProcessEnv = process.env,
+  settingsPath: string = getPiWebSettingsPath(),
+): TeamQuotaLimits {
+  const resolution = readTeamQuotaResolution(env, settingsPath);
+  return { perTeamLimit: resolution.perTeamLimit, globalLimit: resolution.globalLimit };
+}
+
+/** 批量派成员时同时在起的宿主进程数（默认 4；clamp 到 1..globalLimit 之外不管，只防 0）。 */
+export function readTeamSpawnConcurrency(env: NodeJS.ProcessEnv = process.env): number {
+  const value = envQuotaLimit(env.PI_TEAM_MAX_SPAWN_CONCURRENCY);
+  if (value === undefined) return 4;
+  return Math.min(Math.max(value, 1), 16);
+}
+
+/**
+ * ── 配额预留（在途账本）─────────────────────────────────────────────────────
+ *
+ * 「起一个成员」= 宿主 spawn + adopt + 投递，几秒级。旧实现把整批派发塞进
+ * `.quota.lock` 里跑，于是**全进程任何时刻只能起一个成员**——这就是「派成员串行」
+ * 的真正瓶颈。现在锁内只做「读盘计数 + 在途预留」这一小步，出锁再起进程：
+ *
+ * - 原子性：读盘计数与在途预留都在 `.quota.lock` 内完成 ⇒ 并发请求看到的
+ *   `已用 = 盘上名册 + 在途预留`，不会出现「各自预检都通过 ⇒ 双双 spawn 超卖」；
+ * - 预留必须释放：`addOne` 一结束（无论 spawned/failed/respawned）就 release——
+ *   spawned 由盘上名册接手计数，failed 已回滚名册，respawned 本来就不占；
+ * - 在途账本挂 globalThis（Symbol）：Next 热重载/多 route 模块共用一份，不丢账。
+ *
+ * 跨进程口径如实：同进程（唯一的桌面服务进程）内由账本保证不超卖；另一个桌面进程
+ * 或 pi-team 扩展侧仍可能看到「盘上还没写」的窗口，最终由 pi-team 自己的
+ * checkSpawnLimits 迟到真闸兜底，不宣称跨进程完全防护。
+ */
+const QUOTA_INFLIGHT: symbol = Symbol.for("pi-web:team-quota-inflight");
+
+function quotaInflight(): Set<string> {
+  const holder = globalThis as Record<symbol, Set<string> | undefined>;
+  let inflight = holder[QUOTA_INFLIGHT];
+  if (!inflight) {
+    inflight = new Set<string>();
+    holder[QUOTA_INFLIGHT] = inflight;
+  }
+  return inflight;
+}
+
+/** 当前进程已判过配额、尚未落成名册的在途成员数（诊断/测试用）。 */
+export function quotaInflightCount(): number {
+  return quotaInflight().size;
+}
+
+/** 放掉一个预留（幂等：重复/未知 id 静默忽略）。 */
+export function releaseQuotaSlot(reservationId: string): void {
+  quotaInflight().delete(reservationId);
+}
+
+export interface QuotaSlotDecision {
+  /** false = 全局无余量，调用方应停派并回报 conflict。 */
+  granted: boolean;
+  /** 判配额那一刻盘上名册的 worker 数（不含在途）。 */
+  used: number;
+  /** 判配额那一刻的在途数（granted 时**含**本次预留）。 */
+  inflight: number;
+  limit: number;
+  /** granted=true 时持有；addOne 结束后必须 releaseQuotaSlot。 */
+  reservationId?: string;
+}
+
+/**
+ * 原子占一个全局 worker 名额：`.quota.lock` 内读盘计数 + 看在途，够就记一笔预留。
+ * 锁只覆盖这一小步（毫秒级），起进程在锁外——并发能力靠这里放开。
+ */
+export async function tryReserveTeamWorkerSlot(options: {
+  globalLimit: number;
+  readTotal: () => Promise<number>;
+  /** 注入用（测试/自定义锁）；默认 withQuotaLock。 */
+  withLock?: <T>(task: () => Promise<T>) => Promise<T>;
+}): Promise<QuotaSlotDecision> {
+  const withLock = options.withLock ?? withQuotaLock;
+  return withLock(async () => {
+    const used = await options.readTotal();
+    const inflight = quotaInflightCount();
+    if (used + inflight >= options.globalLimit) {
+      return { granted: false, used, inflight, limit: options.globalLimit };
+    }
+    const reservationId = randomUUID();
+    quotaInflight().add(reservationId);
+    return { granted: true, used, inflight: inflight + 1, limit: options.globalLimit, reservationId };
+  });
 }
 
 /**
@@ -596,17 +831,26 @@ export async function readGlobalRosterWorkers(excludeTeamDirName?: string): Prom
   } catch {
     return { total: 0 };
   }
-  let total = 0;
-  for (const dirName of names) {
-    if (excludeTeamDirName && dirName === excludeTeamDirName) continue;
-    const snapshot = await readTeamConfigSnapshot(dirName);
-    if (!snapshot) continue;
-    const leads = resolveLeadNames(snapshot);
-    const planMembers = await readPlanRosterMembers(join(teamsRootDir(), dirName));
-    total += mergeRosterMembers(snapshot.members, planMembers)
-      .filter((member) => !leads.has(member.name)).length;
-  }
-  return { total };
+  const dirNames = excludeTeamDirName ? names.filter((name) => name !== excludeTeamDirName) : names;
+  // 每团队要读 2 个文件（config.json + plan.json）。串行时 20 个团队 = 40 次 IO 全压在
+  // `.quota.lock` 临界区里，锁尾延迟直接拖慢别人的派发；小并发（≤8）读盘把临界区压短，
+  // 团队多/成员多时收益线性放大。顺序无关（只求和），并发不改语义。
+  const counts = new Array<number>(dirNames.length).fill(0);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(8, dirNames.length) }, async () => {
+    for (;;) {
+      const index = cursor++;
+      if (index >= dirNames.length) return;
+      const snapshot = await readTeamConfigSnapshot(dirNames[index]!);
+      if (!snapshot) continue;
+      const leads = resolveLeadNames(snapshot);
+      const planMembers = await readPlanRosterMembers(join(teamsRootDir(), dirNames[index]!));
+      counts[index] = mergeRosterMembers(snapshot.members, planMembers)
+        .filter((member) => !leads.has(member.name)).length;
+    }
+  });
+  await Promise.all(workers);
+  return { total: counts.reduce((sum, count) => sum + count, 0) };
 }
 
 /** config.json 原子写回：随机临时文件（防并发同写一个 temp）+ rename（Windows 瞬时错误有界 **async** 重试，不冻结事件循环）；失败清掉临时。 */

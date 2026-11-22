@@ -6,21 +6,20 @@ import {
   mutateTeamConfigFile,
   readGlobalRosterWorkers,
   readTeamConfigSnapshot,
-  readTeamQuotaLimits,
+  readTeamQuotaResolution,
+  readTeamSpawnConcurrency,
   resolveLeadNames,
-  withQuotaLock,
   type MemberModelDelivery,
   type TeamMemberModelUpdate,
 } from "@/lib/agent-teams-swimlane-store";
 import {
   addTeamMember,
-  removeTeamMember,
+  parseAddMembersBatch,
+  parseRemoveMemberNames,
+  removeTeamMembersBatch,
   runGlobalQuotaGate,
-  type AddMemberInput,
   type MembersDeps,
-  type RemoveMemberResult,
 } from "@/lib/agent-teams-members";
-import { MemberConflictError } from "@/lib/agent-teams-members";
 import { dispatchViaBus } from "@/lib/agent-teams-assignments";
 
 import { teamDirFor } from "@/lib/agent-teams-swimlane-store";
@@ -124,15 +123,19 @@ export async function PATCH(
 //
 // body: { action: "add", members: [{ name, agentType?, prompt?, model? }] }
 //     | { action: "remove", names: string[] }
-// 返回 { team, action, ok, results: [{ name, agentId?, status, sessionId?, warning?, reason? }], error? }。
+// 返回 { team, action, ok, results: [{ name, agentId?, status, sessionId?, warning?, reason? }],
+//        quota: { perTeamLimit, globalLimit }, error? }。
 // ok = 无 failed；逐条如实（spawned/respawned/failed | removed/failed），不吞错。
 // 不用 DELETE：外网 DELETE+body 会被代理拦截（部署实锤），统一 POST+action。
 //
-// 全局配额预检在 .quota.lock 内重读全团队名册（跨桌面写者串行）；per-team 判定在
-// config 文件锁临界区内复核；pi-team 侧 checkSpawnLimits 仍是跨进程迟到真闸。
+// 并发口径（本轮重做）：
+// - 名额判定原子（.quota.lock 内「读盘名册 + 在途预留」），但**锁不包 spawn**：起进程
+//   在锁外按 PI_TEAM_MAX_SPAWN_CONCURRENCY（默认 4）并行，批内一个成员失败不拖垮其余；
+// - per-team 判定仍在 config 文件锁临界区内复核；pi-team 侧 checkSpawnLimits 是跨进程
+//   迟到的真闸（如实口径，不宣称跨进程完全防护）；
+// - 批上限见 members.ts 的 MAX_BATCH_ADD_MEMBERS（64）：配额才是真闸，HTTP 层不再用
+//   8 这种与配额脱节的数字把「多派成员」拦在门外。
 // ─────────────────────────────────────────────────────────────────────────────
-
-const MEMBER_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 interface PostMembersBody {
   action?: unknown;
@@ -221,98 +224,70 @@ export async function POST(
     return NextResponse.json({ error: "团队不存在" }, { status: 404 });
   }
   const teamDir = teamDirFor(teamDirName);
-  const limits = readTeamQuotaLimits();
+  const limits = readTeamQuotaResolution();
 
   if (action === "add") {
-    const rawMembers = body.members;
-    if (!Array.isArray(rawMembers) || rawMembers.length === 0 || rawMembers.length > 8) {
-      return NextResponse.json({ error: "members 必须是 1..8 个对象的数组" }, { status: 400 });
+    const parsed = parseAddMembersBatch(body.members);
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 });
     }
-    const seen = new Set<string>();
-    const inputs: AddMemberInput[] = [];
-    for (const item of rawMembers) {
-      const record = item as Record<string, unknown> | null;
-      const name = typeof record?.name === "string" ? record.name : "";
-      if (!MEMBER_NAME_PATTERN.test(name)) {
-        return NextResponse.json(
-          { error: `成员名不合法（限字母数字与 ._-，1..64 字符）：${JSON.stringify(name)}` },
-          { status: 400 },
-        );
-      }
-      const key = name.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      inputs.push({
-        name,
-        ...(typeof record?.agentType === "string" && record.agentType ? { agentType: record.agentType } : {}),
-        ...(typeof record?.prompt === "string" && record.prompt ? { prompt: record.prompt.slice(0, 2000) } : {}),
-        ...(typeof record?.model === "string" && record.model ? { model: record.model } : {}),
-      });
-    }
+    const inputs = parsed.value;
 
-    // 全局配额 + 真实 spawn 原子化（lead 复审）：.quota.lock 覆盖「重读全团队名册
-    // 判 32 → 通过后的全部 addTeamMember」——锁内预检+锁内执行，两个并发团队的
-    // add 不会同时通过预检后双双 spawn。锁跨进程互斥（proper-lockfile），pi-team
-    // 侧 checkSpawnLimits 仍是迟到真闸（如实注释，不宣称完全防护）。
+    // 全局配额闸 = lib runGlobalQuotaGate（route 与测试共用同一函数）。名额判定在
+    // `.quota.lock` 内原子完成（读盘名册 + 在途预留，不会超卖），**spawn 在锁外**按
+    // PI_TEAM_MAX_SPAWN_CONCURRENCY 并行；批内单个成员失败只记 failed，不中止其余。
     const deps = buildMembersDeps(teamDirName, teamDir, config.rawName, limits.perTeamLimit, config.leadSessionId);
-    // 全局配额闸 = lib runGlobalQuotaGate（route 与测试共用同一函数）：withQuotaLock
-    // 锁内逐成员重读记账；spawned 占位/respawn 不占/failed 不占；MemberConflictError
-    // ⇒ 整批 409。pi-team 侧 checkSpawnLimits 仍是跨进程迟到真闸。
-    const { results, conflict } = await withQuotaLock(() =>
-      runGlobalQuotaGate(
-        {
-          globalLimit: limits.globalLimit,
-          readTotal: async () => (await readGlobalRosterWorkers()).total,
-          addOne: (input) => addTeamMember(deps, input),
-        },
-        inputs,
-      ),
+    const { results, conflict } = await runGlobalQuotaGate(
+      {
+        globalLimit: limits.globalLimit,
+        readTotal: async () => (await readGlobalRosterWorkers()).total,
+        addOne: (input) => addTeamMember(deps, input),
+        concurrency: readTeamSpawnConcurrency(),
+        limitHint: limits.sources.globalLimit === "env"
+          ? `环境变量 ${limits.envNames.globalLimit}`
+          : limits.sources.globalLimit === "settings"
+            ? "设置项 teamQuota.globalLimit"
+            : "默认值 TEAM_QUOTA_DEFAULTS.globalLimit",
+      },
+      inputs,
     );
+    const quota = { perTeamLimit: limits.perTeamLimit, globalLimit: limits.globalLimit };
     if (conflict) {
+      // 409 只用于「全局名额耗尽」：整批里已成功的照实带出（results 非空 = 部分成功），
+      // 用户据 status 只重派剩余成员即可，不必整批重发。
       return NextResponse.json(
-        { team: teamDirName, action, ok: false, results, error: conflict },
+        { team: teamDirName, action, ok: false, results, quota, error: conflict },
         { status: 409, headers: { "Cache-Control": "no-store" } },
       );
     }
     const ok = results.every((result) => result.status !== "failed");
-    return NextResponse.json({ team: teamDirName, action, ok, results }, { headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json(
+      { team: teamDirName, action, ok, results, quota },
+      { headers: { "Cache-Control": "no-store" } },
+    );
   }
 
   // action === "remove"
-  const rawNames = body.names;
-  if (!Array.isArray(rawNames) || rawNames.length === 0 || rawNames.length > 12) {
-    return NextResponse.json({ error: "names 必须是 1..12 个成员名的数组" }, { status: 400 });
+  const parsedNames = parseRemoveMemberNames(body.names);
+  if (!parsedNames.ok) {
+    return NextResponse.json({ error: parsedNames.error }, { status: 400 });
   }
-  const names: string[] = [];
-  for (const item of rawNames) {
-    if (typeof item !== "string" || !MEMBER_NAME_PATTERN.test(item)) {
-      return NextResponse.json({ error: `成员名不合法：${JSON.stringify(item)}` }, { status: 400 });
-    }
-    if (!names.includes(item)) names.push(item);
-  }
+  const names = parsedNames.value;
 
   const deps = buildMembersDeps(teamDirName, teamDir, config.rawName, limits.perTeamLimit, config.leadSessionId);
-  const results: RemoveMemberResult[] = [];
-  let conflictStatus = 0;
-  for (const name of names) {
-    try {
-      results.push(await removeTeamMember(deps, name));
-    } catch (error) {
-      results.push({
-        name,
-        status: "failed",
-        reason: error instanceof Error ? error.message : String(error),
-      });
-      if (error instanceof MemberConflictError) {
-        conflictStatus = 409;
-        break;
-      }
-      // MemberNotFoundError：计入 results 继续（partial success）。
-    }
-  }
+  // 逐成员失败隔离 + 小并发（旧实现遇第一个冲突就 break，后面的成员根本没被尝试）。
+  const { results, conflict: removeConflict } = await removeTeamMembersBatch(deps, names, {
+    concurrency: readTeamSpawnConcurrency(),
+  });
   const ok = results.every((result) => result.status !== "failed");
   return NextResponse.json(
-    { team: teamDirName, action, ok, results, ...(conflictStatus ? { error: results.find((result) => result.reason)?.reason } : {}) },
-    { status: conflictStatus || 200, headers: { "Cache-Control": "no-store" } },
+    {
+      team: teamDirName,
+      action,
+      ok,
+      results,
+      ...(removeConflict ? { error: removeConflict } : {}),
+    },
+    { status: removeConflict ? 409 : 200, headers: { "Cache-Control": "no-store" } },
   );
 }
