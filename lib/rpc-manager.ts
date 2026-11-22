@@ -115,7 +115,7 @@ import {
 } from "./chat-workspace-policy";
 import { ComposerQueue } from "./composer-queue";
 import { isBlockingExtensionUiRequest } from "./browser-notifications";
-import { isAutopilotOriginatedSession, readAutopilotSettings, resolveAutopilotDialogTimeout } from "./autopilot";
+import { isAutopilotDialogSession, readAutopilotSettings, resolveAutopilotDialogTimeout } from "./autopilot";
 import type { PendingComposerMessage } from "./composer-queue-types";
 
 // ============================================================================
@@ -867,7 +867,9 @@ export class AgentSessionWrapper {
 
   /** Autopilot: was this session started by unattended work? */
   private isAutopilotSession(): boolean {
-    return isAutopilotOriginatedSession(this.customEntryTypes());
+    // Dialog-timeout scope only: campaign sessions take the safe default too,
+    // but they stay out of the marker list (which also gates plan auto-approval).
+    return isAutopilotDialogSession(this.customEntryTypes());
   }
 
   getTaskSnapshot(): AgentTaskSnapshot {

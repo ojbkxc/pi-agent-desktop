@@ -105,6 +105,20 @@ export function isAutopilotOriginatedSession(customTypes: readonly string[]): bo
 }
 
 /**
+ * Campaign sessions (the long-run "battle" runner) are unattended too, so their
+ * blocking dialogs must take the safe default instead of parking forever — but
+ * they are deliberately **not** added to {@link AUTOPILOT_SESSION_MARKERS}: that
+ * list also gates team-plan auto-approval, and a campaign must keep the manual
+ * review. This predicate is only for the dialog timeout. Must match
+ * `CAMPAIGN_ENTRY_TYPE` in `lib/campaign/runner.ts`.
+ */
+const CAMPAIGN_ENTRY_TYPE = "pi-web:campaign";
+
+export function isAutopilotDialogSession(customTypes: readonly string[]): boolean {
+  return isAutopilotOriginatedSession(customTypes) || customTypes.includes(CAMPAIGN_ENTRY_TYPE);
+}
+
+/**
  * How long a blocking dialog in an unattended session waits for a person before
  * it takes the safe default (cancel / "no"). Two minutes: long enough for the
  * phone notification to reach someone, short enough that a forgotten run does
