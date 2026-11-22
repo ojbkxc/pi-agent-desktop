@@ -116,113 +116,113 @@ jobs:
           releaseBody: |
             ## Pi Agent Desktop 0.8.7 (fork)
 
-            **2026-11-22 覆盖式重发（第七次）/ re-release.** Same version number; this build replaces the previous v0.8.7 artifacts.
+            **2026-11-22 · 覆盖式重发（第七次）**
 
-            ### 本次构建 / this build
+            > 版本号保持 0.8.7 不变，本次构建替换上一版的全部安装包。升级方式与普通更新相同，直接覆盖安装即可；配置、会话与任务记录都在 `~/.pi/agent/`，不受影响。
 
-            - **本次新增（第七次重发）/ new in this build:**
-              - **长时自主「项目战役」P1 / autonomous project campaigns (P1).** 新增 Campaign 页面：给一个 git 仓库和一组待办项，agent 逐项执行，每项跑你配置的验证命令，exit 0 才算完成；失败就把输出回喂继续改，轮数或总成本触顶即停。创建时强制要求 git 工作目录、正的总成本上限、非 `off` 的命令审批档；进程重启后从第 K 项续跑，Provider 中断不计入轮次。提供 stop / pause / resume / delete，逐项日志与开销。
-              - **与自动修 Bug 共用中断账本 / shared outage ledger.** 新增 `campaign` 作用域：Provider 中断记录由战役自己的 sweep 驱动续跑，通用中断调度器只读不抢，避免双驱动。
-              - **已知边界 / known limits.** P1 为 MVP：跨天间隔（`intervalMs` 已在数据模型中预留，UI 暂不暴露）、git checkpoint、运行中成本闸、多 worker 尚未实现。
-            - **上一次重发的新增（第六次及更早）/ added in previous re-releases:**
-              - **破甲控制台性能 / purge performance.** 设置读取改为 mtime+size 缓存（工具循环每轮不再全量读盘+解析），治理改写改为单次扫描并按规则缓存正则；输出逐字节等价。
-              - **后台命令可见可停 / background commands.** Tasks 页新增后台命令列表（运行中/近期）与停止按钮，补上此前 `GET /api/background-jobs` 没有前端消费的缺口。
-              - **闸门归属只读视图 / gate attribution.** 破甲控制台新增「闸门归属」只读面板（各闸门 allowed/denied 计数与最近事件），补上 `/api/purge/gate-log` 的前端消费；移除冗余的 `/api/purge/active-model` 路由。
-              - **文档 / docs.** 更正 provider 中断文档（自愈已实现）；新增长时自主「项目战役」P1 设计（标注未实现）。
-            - **本次新增：聊天输入底栏的命令审批档位切换 / new in this build: command-approval switch in the composer footer.** 模型选择器右侧新增紧凑指示器，点击按 `全权限 → 仅危险命令 → 全部命令 → 全权限` 循环；读取与保存只走既有 `GET/PUT /api/tool-approval`，判定仍在服务端。
-              - **全权限（off，默认）/ full access.** 不拦截任何 shell 命令、零提示；切换到这一档静默生效（等价 cc-haha 的 bypassPermissions）。
-              - **仅危险命令 / dangerous only.** 只对命中危险规则（`rm -rf`、强制推送、`DROP TABLE` 等）的命令要求确认。
-              - **全部命令 / all commands.** 每条 shell 命令都先确认；进入这一档前弹一次确认，取消不改动。
-              - **失败与非本机 / failure and remote.** 保存失败保持原档位并提示「命令审批模式更新失败」；非本机（隧道/远端）置灰只读，不发写请求。
-              - **无障碍与文案 / a11y & copy.** 按钮带 `aria-label`，档位变化用 `aria-live` 播报；三语文案（off 档统一为「全权限 / Full access」）。
-            - **破甲控制台默认开启 / purge console on by default.** 总闸 `enabled` 与「按模型自动套用」都默认打开：新装即按当前会话模型套用对应预设；把总闸关掉仍是纯转发（不判定、不重写、不改一个字）。
-            - **按模型自动套用 / auto-apply the preset written for the model.** 请求发出前按会话模型在 53 条内置预设里查一次，命中就把正文原样拼在系统提示词之前（或之后，可选）。`exact` 只认同名模型，`vendor` 才退到同厂商；也可以固定某条预设 id。预设正文不会被词表改写，拿不到模型或未命中就什么都不套。
-            - **面板 / panel.** 设置 › 破甲控制台新增「按模型自动套用」一节：开关、前后位置、匹配强度、固定 id，以及「默认模型 X → 将套用 Y」的实时预览；命中次数进入只读统计。
-            - **性能与边界 / performance and boundaries.** 匹配时模型只归一化一次、每条预设的归一化结果按行缓存（53 条 × 2 次正则 → 每个进程一次）；默认模型只读一次请求（页面同时拿到「当前模型」与「将套用哪条」）；`GET /api/purge` 补上与其余读接口一致的 Host/Origin 门。
+            本 fork 基于上游 pi-agent-desktop 0.8.2 / pi-web 0.10 构建，已并入上游 pi-web **v0.10 → v0.17** 的全部安全、稳定性与性能修复，并在此之上维护本 fork 的桌面功能线。
 
-            ### 上一版 0.8.7 的说明（同样包含在本次构建里）/ carried over from the previous v0.8.7 build
+            本次构建的主线是**长时自主「项目战役」（P1）**；同时收口了命令审批档位、破甲控制台性能与后台命令的可见性。
 
-            - **计划弹框宽度 / plan dialog width.** 「查看配置」弹框现与聊天输入框等宽（`min(820px, 聊天列−滚动条−32, 100%)`），窄窗口/窄聊天列下不再横跨屏幕；布局改用容器查询断点（弹框收窄时正确切单列），模型生成长文本加 `overflow-wrap:anywhere` 防撑宽。
-            - **细节 / polish.** 会话列表「…」按钮点击区固定 28px。
+            ### 一、本次新增 / What's new
 
-            本版更早的说明（同样包含在本次构建里）。
+            #### 1. 长时自主「项目战役」P1 / Project campaigns (P1)
 
-            - **本次重发新增 / what this re-release adds.** cc-haha 风格的工具调用聚合行（默认收起、回合尾动词摘要 `读取 2 个文件、运行 1 条命令`）、团队状态条从顶栏移到消息列上方整宽横幅、上下文环方形用量面板（含本会话真实压缩触发点与立即压缩）、压缩阈值回归档位占比（均衡 50% / 长上下文 80%，压缩后不再贴线重触发）、团队会话标题剥离 `<agent-team-request>` 指令块、团队模型下拉修复（cwd 未传导致目录为空）、配置横条改单行短版、泳道连线终点锚定收件方 + 箭头与流动虚线、破甲控制台（请求治理网关：提示词归一化 / 措辞改写 / 技能注入 / 思考预算封顶，设置 › 破甲控制台）。
+            告诉它一个 git 仓库和一组待办项，它自己排队做完；每一项都必须通过你配置的验证命令。
 
-            - **Keyboard & focus.** 项目选择器与所有模态接入共享焦点陷阱 + Esc 栈（Tab 循环、关闭后焦点归还、Radix 下拉放行）；顶栏下拉、Teams / Tasks 整页按 Esc 不再误停运行中的 agent。
-            - **Theme & contrast.** 深色主按钮 hover 白字白底 1.00:1 → 18.1:1；`--text-dim` 对 elevated 卡面 4.40 → 5.56:1；literal z-index 归一；补全 reduced-motion 漏项；清理死 CSS。
-            - **Data boundaries.** 登录与改密路由请求体有界读取；团队工作台响应投影截断（`?limit=`）；错误响应不再回传绝对路径原文。
-            - **Timers & races.** 团队轮询判死定时器、通知 store 单句柄覆盖、9 处复制提示计时器互踩；`/goal` 与团队条不再每条消息闪空；文件查看器增量失败保留已加载内容。
-            - **Tests.** 恒真断言（`indexOf` 恒小于正数）改为跨行 `assert.match`，并做真·反向复现（删源码行才红）。
+            - **逐项推进，判据在引擎侧。** 每个待办项包含指令与验收条件；agent 在独立会话中执行，每轮结束后由引擎运行 `verifyCommand`，**退出码 0 才算完成**，否则把失败输出回喂到下一轮继续修。
+            - **有界执行。** 单项轮数、战役总轮数、总成本都有上限，触顶即停，不会无限烧钱。
+            - **创建即硬闸。** 必须提供 git 工作目录、正数的 `maxTotalCostUsd`、以及非 `off` 的命令审批档；不满足直接返回 400，不落盘。
+            - **可恢复。** 进度原子写入 `<agent dir>/campaigns/<uuid>.json`；进程重启后从第 K 项续跑，而不是从头再来。
+            - **Provider 中断不计轮次。** 与自动修 Bug 共用中断账本，新增 `campaign` 作用域，由战役自己的 sweep 续跑；通用中断调度器只读不抢，避免双驱动。
+            - **可控。** 页面提供 stop / pause / resume / delete，逐项状态、日志与成本可见。
 
-            The **ojbkxc fork** of pi-agent-desktop, built on upstream 0.8.2. This release carries the security, stability and performance work from upstream pi-web v0.10 through v0.17, a pi SDK 1.5.2 / Next.js 16.4.4 / undici 8.12.3 upgrade, and the fork's own additions.
+            > **P1 边界（重要）**：这是 MVP。跨天间隔（`intervalMs` 已进数据模型与校验，UI 暂不暴露）、git checkpoint、运行中成本闸、多 worker 均尚未实现；P1 默认背靠背连续执行。
 
-            ### Security (upstream v0.10 → v0.17, ported)
+            #### 2. 命令审批档位切换 / Command-approval switch
 
-            - **The preview-mode bypass is closed.** Every build shipped the same `previewModeId`, and a request carrying the matching `x-prerender-revalidate` header made Next skip `proxy.ts` — the web-password gate and the Host/Origin checks (reported by Tencent Xuanwu Lab). The npm CLI now rotates the three preview secrets at startup; the desktop launcher strips both revalidate headers from every request before Next sees it and rewrites the secrets to fresh random values on each start, so the shipped ones are worthless even if the strip is ever bypassed.
-            - **PowerShell is sanitized like bash.** The PowerShell stand-in strips `PORT`, `NODE_ENV`, `NEXT_*`, `PI_WEB_PASSWORD` and `PI_DESKTOP_API_TOKEN` from the environment, activates only when named, and no longer hides user extensions. The bash stand-in is opt-in for the same reason.
-            - **npx no longer inherits the host's secrets.** Skill install, search and update strip host environment variables before third-party npm code runs.
-            - **The trust chain follows the right session.** Subagent sessions decide project trust from the parent session (read once, never written); restored sessions decide from their own directory; subagent profiles in an untrusted folder stay hidden; an untrusted repository's `enabledModels` can no longer shadow the global list.
-            - **File boundaries are tighter.** git/diff endpoints `lstat` every path level (no junction escape); uploads stage on the same disk, reject symlinks twice and replace atomically; an unbounded suffix range answers 416; MIME lookup only matches own properties. Desktop popups clean up by nonce, proxy credentials are stripped from inherited environment variables, and skill-market links render only `http(s)` URLs.
+            聊天输入框底栏、模型选择器右侧新增紧凑指示器，点击循环切换：
 
-            ### Stability
+            `全权限（off，默认）→ 仅危险命令 → 全部命令 → 全权限`
 
-            - **A session whose `session_start` asks a dialog now starts** instead of deadlocking before its first turn.
-            - **Login survives a disconnect.** The device-code SSE stream guards its closed controller, the pi SDK is preloaded at startup, and the ChatGPT OAuth device id is set correctly.
-            - **Code mode stays on.** A startup stall no longer switches Code mode off for the whole process.
-            - **The last in-flight-turn invalidation paths are guarded**, so a fast switch cannot apply a stale reply to a new transcript.
-            - **The tunnel probe goes direct**, bypassing the session proxy exactly like `cloudflared` itself — a bad manual proxy no longer reads as "tunnel broken" and tears down a working tunnel.
+            - **全权限**：不拦截任何 shell 命令、零提示；切到这一档静默直接保存（等价 cc-haha 的 bypassPermissions）。
+            - **仅危险命令**：只对命中危险规则（`rm -rf`、强制推送、`DROP TABLE` 等）的命令要求确认。
+            - **全部命令**：每条 shell 命令都先确认；进入这一档前弹一次确认，取消不改档位。
+            - 读取与保存只走既有 `GET/PUT /api/tool-approval`，判定始终在服务端；保存失败保持原档位并提示；非本机（隧道/远端）置灰只读，不发写请求。
+            - 按钮带 `aria-label`，档位变化用 `aria-live` 播报；三语文案统一。
 
-            ### Performance
+            #### 3. 破甲控制台 / Purge console
 
-            - **Streaming re-renders only the reply.** Streaming state moved out of React: a chunk re-renders `StreamingReply` alone instead of the whole window, and a stream that is one code fence skips the markdown parser entirely.
-            - **Session lists rescan only the tail** of a growing session file instead of reading it from the top.
-            - **Provider signatures never reach the browser**, shrinking the payload of long sessions.
-            - **One shared model runtime.** Provider and extension catalogs load once (with a TTL) instead of being rebuilt for every provider or skills request.
+            - **默认开启。** 总闸 `enabled` 与「按模型自动套用」都默认打开，新装即按当前会话模型套用对应预设；关掉总闸仍是逐字节纯转发（不判定、不重写、不改一个字）。
+            - **按模型自动套用。** 请求发出前按会话模型在 53 条内置预设里查一次，命中就把预设正文原样拼在系统提示词之前或之后。`exact` 只认同名模型，`vendor` 才退到同厂商；也可以固定某条预设 id。拿不到模型或未命中就什么都不套。
+            - **设置面板。** 新增「按模型自动套用」一节：开关、前后位置、匹配强度、固定 id，以及「默认模型 X → 将套用 Y」的实时预览；命中次数进入只读统计。
+            - **性能。** 设置读取改为 mtime+size 缓存（工具循环每轮不再全量读盘+解析）；治理改写单次扫描并按规则缓存正则，输出逐字节等价；模型只归一化一次，53 条预设的归一化结果按行缓存；`GET /api/purge` 补上与其余读接口一致的 Host/Origin 门。
+            - **闸门归属。** 新增只读面板，展示各闸门 allowed/denied 计数与最近事件，补齐 `/api/purge/gate-log` 的前端消费；移除冗余的 `/api/purge/active-model` 路由。
 
-            ### Dependencies
+            #### 4. 后台命令可见可停 / Background commands
 
-            - pi SDK **1.5.2** (eight `@earendil-works/*` packages pinned), Next.js **16.4.4**, undici **8.12.3** (nine security advisories). `npm audit --omit=dev` reports zero vulnerabilities.
+            - Tasks 页新增后台命令列表（运行中 / 近期）与停止按钮，补上 `GET /api/background-jobs` 此前没有前端消费的缺口。
+            - 底层能力回顾：`bash_background` 立即返回 job id，长构建、测试套件、dev server 不再阻塞对话；输出落盘 8 MB 封顶，完成时只把尾部 4 KB 作为新消息注入；重启后按记录结算，不会停留在「仍在运行」；停止会杀整个进程树；与 `bash` 受同一套命令审批约束。
 
-            ### New
+            ### 二、本版同时包含的能力 / Also in this build
 
-            - **Autofix.** Give it one sentence; a dedicated session edits the code, and after every round the engine itself runs the project's verify command (test → typecheck → check → lint, with tasks that have no criterion refused). Exit 0 is the only success. Failure output feeds the next round, the round cap defaults to 20, and progress is written atomically so a restart resumes the task.
-            - **Keep-alive.** A 15-second heartbeat, recovery of interrupted sessions driven by pid liveness (a live pid is never treated as an orphan), and a cross-platform supervisor (`scripts/pi-supervisor.mjs`: Windows scheduled task, launchd, systemd user timer) with a 5-per-hour restart budget and a network probe that waits instead of restarting. Settings › General › Keep-alive.
-            - **Cloudflare named tunnels bind a fixed domain.** After registration the app polls the ingress rules cloudflared publishes; when your custom hostname points at the local gateway it binds itself, with no restart, and the fixed public URL is shown with copy/open. Public verification retries on a 0/2/4/8/15-second schedule within a 45-second budget.
-            - **A web password can live in settings.** Besides `PI_WEB_PASSWORD` (which still wins), the password can be stored as a scrypt hash in a 0600 file — never plaintext. Changing it rotates the session token, so old sessions stop working. Settings › General › Server.
-            - **cc-haha plan controls.** A plan card with a parent plan gets a Stop button, and RuntimeControls adds pause / resume plus per-member model and reasoning-level edits (a running member refuses edits with 409).
-            - **Background commands.** `bash_background` returns immediately with a job id, so a long build, test suite or dev server no longer blocks the conversation. Output streams to `~/.pi/agent/pi-web/jobs/<id>.log` (capped at 8 MB) and only a 4 KB tail comes back when it finishes, as a new message. Jobs survive a restart as records (an interrupted one is settled, never silently "still running"), stop kills the whole process tree, and `bash_background` is subject to the same command approval as `bash`.
-            - **Always-on sessions (pin) and a router role.** A pinned session is exempt from the ten-minute idle unload, so it is always ready. A session pinned as `router` also gets instructions to delegate work to background workers and summarize their reports instead of doing the work itself. Sidebar section + Settings › General › Always on.
-            - **Provider outage recovery.** When the model API is unreachable for minutes or hours, the session parks and resumes by itself once the provider answers — backoff 30s → 1m → 2m → 5m → 10m → 20m → 30m with jitter, double gate at 40 attempts / 6 hours (24 for quota errors), quota errors retried from 5 minutes. Settings › General › Provider outage recovery.
-            - **Long-term memory.** Preferences and facts survive across sessions in `~/.pi/agent/pi-web/memory.json` (200 entries, 4 KB each), injected into the prompt as the 30 most recent. A `memory` tool lets the model write them; the settings page lets you edit them.
-            - **Command approval.** Before a shell command runs, it is matched against a dangerous-command rule set and can require your confirmation (`off` by default, fail-open when no one can answer). Settings › General › Command approval.
-            - **"Needs you" inbox.** Sessions parked on a question or approval are pinned at the top of the sidebar, and the phone home screen shows who is waiting on you and who finished. Completing runs can also push a notification, with a stop-push option.
-            - **Web login is password-only.** The username field is gone (including the browser's Basic-auth prompt), and `/login` doubles as the first-time password setup page when no password is configured yet.
-            - **Team members switch models when theirs dies.** If a member's provider starts failing (upstream 5xx, dropped connections, exhausted quota) while the team has other usable models, the member is moved to another model and told to continue where it stopped. A different provider is preferred, since one provider's failure usually takes its sibling models with it; models already tried in that failure are not retried; a model must both exist and have credentials; and after two switches the team lead is notified instead. Code errors, auth failures and missing models never trigger a switch.
-            - **A `/goal` button next to the team toggle.** One click inserts `/goal ` at the cursor; type the objective and the agent keeps working toward it across turns.
-            - **Goal mode became a full Alma-style panel.** The target button opens a dialog with a verifiable completion condition and a repeat plan (`5m` / `2h` / `1d` lead the line; stops after 7 days). Every turn ends with a **separate model** checking the condition against the conversation, so the working model can no longer declare itself done. An interval starts the next turn on a timer; a busy session rolls that slot back instead of swallowing it; 7 days is the hard limit.
-            - **Cloudflare tunnels work behind a proxy.** cloudflared dials the edge directly and ignores `HTTPS_PROXY`, so the connector now speaks the user's HTTP proxy through a loopback bridge for both the edge connection and Quick Tunnel provisioning; the proof-of-arrival probe takes the same path, so a working tunnel is no longer torn down as a "network failure".
-            - **Phone pairing for public access.** A QR code on the computer hands the phone a one-time secret (5 minutes); approving issues a per-device token stored only as a SHA-256 hash, carried in a `__Host-` cookie, revocable at any time and expiring in 30 days. The web password still works — the device path is for a phone that should not keep typing it.
-            - **Connection diagnostics.** Every start attempt records stage / outcome / duration events (tunnel token and proxy credentials redacted) in a collapsible panel, and a "Check configuration" button runs binary / proxy / token / DNS / public round-trip checks from this computer.
+            #### 安全（上游 v0.10 → v0.17 移植）
 
-            ### UI
+            - **preview 模式绕过已封堵。** 每个发行版都带同一个 `previewModeId`，请求头 `x-prerender-revalidate` 与之相等时 Next 会跳过 `proxy.ts`，即绕过 Web 密码门与 Host/Origin 校验（腾讯玄武实验室报告）。npm CLI 启动时轮换三个 preview 密钥；桌面启动器在 Next 之前剥掉两个 revalidate 请求头，并在每次启动时把密钥重写为新的随机值。
+            - **PowerShell 与 bash 同口径消毒。** PowerShell stand-in 剥离 `PORT`、`NODE_ENV`、`NEXT_*`、`PI_WEB_PASSWORD`、`PI_DESKTOP_API_TOKEN`，只在被点名时激活；bash stand-in 同样改为显式激活。
+            - **npx 不再继承主机密钥。** 技能安装、搜索、更新在运行第三方 npm 代码前剥离主机环境变量。
+            - **信任链归于正确的会话。** 子代理会话按父会话决定项目信任（只读一次，不写 `trust.json`）；恢复的会话按自身目录决定；未信任目录里的子代理 profile 不出现；未信任仓库的 `enabledModels` 不再遮蔽全局列表。
+            - **文件边界更紧。** git/diff 端点逐级 `lstat`（防 junction 逃逸）；上传走同盘暂存、两次拒符号链接、原子替换；无界后缀 Range 返回 416；MIME 查表只认自有属性；桌面 popup 按 nonce 清理；代理凭据不随环境变量泄漏；技能市场外链只渲染 `http(s)`。
 
-            - **Quote instead of "ask about this".** Selecting text now inserts a block quote at the cursor, with no scaffold text.
-            - **"New session from this message"** carries the message text and images into the new composer.
-            - **Favicon unread badge**: amber while a session waits for input, blue for unread completions, with a count collected while the window is hidden.
-            - **The team run report has a permanent entry.** The header strip still opens the team the current session belongs to; a new "Agent Teams" sidebar row opens the report ("智能体团队 · 共享任务列表") from any session.
-            - **Standalone renderers**: SVG fences preview like Mermaid (an `<img>` only — source never enters the DOM), inline audio/video playback, copy-LaTeX on display math, a diff preview of an edit before it is applied, structured tool-argument rows instead of raw JSON, per-turn durations, and a virtualized CSV/TSV table view.
+            #### 稳定性
 
-            ### Fixes
+            - `session_start` 弹对话框的会话现在能正常启动，不再在首轮之前死锁。
+            - 登录流断线不崩；设备码 SSE 流对已关闭的 controller 加了守卫；pi SDK 在启动时预导入；ChatGPT OAuth 的 device id 修正。
+            - Code mode 不因一次启动卡顿被整个进程关掉。
+            - 补齐剩余的在途回合失效路径守卫，快速切换会话不会把旧回复写进新对话。
+            - 隧道探针固定直连，与 `cloudflared` 自身的出网路径一致 —— 手动代理坏掉时不会再被误判成「隧道坏了」。
 
-            - **Skill market, six defects.** The installed tab no longer crashes on minimal metadata; infinite scroll no longer sticks after a filter change mid-page; 429 responses are no longer recorded as healthy; installs lock by owner and uninstall takes the same lock; file previews validate both the `path` shape and the skill's file list; compaction model choices filter to stored credentials.
-            - **Teams stop what they list.** Stop / reclaim / ended / quota now include plan-only members; a corrupt `plan.json` answers 400 with a reason instead of "no plan yet"; resend validates the assignment state instead of delivering a duplicate; a failed `team_create` is no longer recorded against the lead session.
-            - **MCP sign-in on pi 1.5.2.** The SDK store's refresh lock is forwarded, and project trust follows the pi 1.5 semantics.
-            - **The installer no longer carries this checkout's configuration or credentials.** The payload is cleared before tracing, the traced `.pi/` is pruned, and a fail-closed scan refuses the build on any `.pi/` path, `Bearer ak_` token, armoured private key or build-output leftover — there is no skip switch.
-            - **Composer double-submit.** A submit still resolving its `#` references can no longer fire twice, and a slow response no longer wipes text typed during the wait.
-            - **Closed panels leave the tab order** (`inert`); coarse pointers get 44 px targets; CJK session times no longer overlap the title; the Add Provider picker stays inside its dialog; the project menu scrolls instead of growing past the viewport; model discovery pages through catalogs (repeated cursors and post-page failures answer 502 instead of silently truncating).
+            #### 性能
 
-            Bundled components: pi 1.5.2, pi-web 0.10.0 (the fork's pinned base; this build carries the upstream v0.10 → v0.17 changes).
+            - **流式只重渲染回复本身。** 流式状态移出 React：每个 chunk 只重渲染 `StreamingReply`；整段流就是一个代码围栏时完全跳过 markdown 解析器。
+            - **会话列表只重扫文件尾部**，不再从文件头读起。
+            - **provider 签名不再下发浏览器**，长会话载荷更小。
+            - **共享 model runtime。** provider 与扩展目录只加载一次（带 TTL），不再按请求重建。
+
+            #### 桌面与团队
+
+            - **自动修 Bug。** 给一句话，专用会话改代码；每轮结束后由引擎跑项目验证命令（test → typecheck → check → lint，无可探测判据的任务直接拒绝）。退出码 0 是唯一成功；失败输出回喂下一轮；轮数上限默认 20；进度原子落盘，重启可续。
+            - **常驻会话与 router 角色。** 常驻（pin）会话豁免 10 分钟空闲卸载；标记为 `router` 的会话会收到「把工作派给后台 worker、汇总回执而不是自己动手」的分派提示。侧栏分区 + 设置 › 通用 › 常驻。
+            - **Provider 中断自愈。** 模型 API 数分钟到数小时不可达时，会话挂起等待，恢复后自动续跑；退避 30s → 1m → 2m → 5m → 10m → 20m → 30m（带抖动），双闸 40 次 / 6 小时（配额错误 24 小时），配额错误从 5 分钟起试。
+            - **长期记忆。** 偏好与事实存于 `~/.pi/agent/pi-web/memory.json`（200 条、每条 4 KB），注入最近 30 条；模型可经 `memory` 工具写入，设置页可编辑。
+            - **「Needs you」收件箱。** 停在提问或审批上的会话置顶显示，手机首页也能看到谁在等你、谁已完成；完成的运行可推送通知，并可关闭推送。
+            - **纯密码登录。** 去掉用户名（包括浏览器 Basic-auth 弹窗）；未设置密码时 `/login` 兼作首次设置页。
+            - **团队模型自动切换。** 成员所用 provider 开始失败（上游 5xx、连接中断、配额耗尽）且团队还有可用模型时，自动换到另一个模型继续；优先跨 provider，已试过的模型不重试；切换两次后通知 lead。代码错误、鉴权失败、模型不存在不触发切换。
+            - **`/goal` 与目标面板。** 团队按钮旁一键插入 `/goal `；目标按钮打开 Alma 式面板：可验证的完成条件、重复计划（5m / 2h / 1d，7 天封顶），每轮结束由一个**独立模型**核对条件，工作模型不能自判完成。
+            - **Cloudflare 隧道。** 命名隧道在登记后自动绑定固定域名，无需重启；cloudflared 忽略 `HTTPS_PROXY`，因此经回环代理桥接出网，验证探针走同一条路径；连接诊断记录每次启动的阶段/结果/耗时，并对隧道 token 与代理凭据脱敏。
+            - **手机配对。** 电脑上的二维码把一次性密钥（5 分钟）交给手机；批准后签发按设备区分的 token（仅存 SHA-256、`__Host-` cookie、30 天有效、可随时撤销）。Web 密码仍然可用。
+            - **计划弹框与计划控制。** 「查看配置」弹框与聊天输入框等宽（容器查询断点，窄窗不再横跨屏幕）；有父计划的计划卡新增 Stop，RuntimeControls 支持 pause / resume 与逐成员模型 / 思考档位编辑（运行中的成员拒绝编辑，返回 409）。
+            - **界面细节。** cc-haha 风格的工具调用聚合行（默认收起、回合尾动词摘要）、团队状态条移至消息列上方整宽横幅、上下文环方形用量面板（含真实压缩触发点与立即压缩）、压缩阈值回归档位占比（均衡 50% / 长上下文 80%）、团队会话标题剥离 `<agent-team-request>`、团队模型下拉修复、配置横条单行短版、泳道连线终点锚定收件方。
+            - **独立渲染器。** SVG 围栏像 Mermaid 一样预览（仅 `<img>`，源码不进 DOM）、内联音视频播放、显示公式复制 LaTeX、编辑前 diff 预览、结构化工具参数行、每轮耗时、CSV/TSV 虚拟化表格。
+
+            #### 修复与无障碍
+
+            - **技能市场六项。** 已安装页不再因最小元数据崩溃；筛选切换后无限滚动不再卡住；429 不再被记为健康；安装与卸载共用 owner 锁；文件预览同时校验 `path` 形状与技能文件清单；压缩模型选项只列已存凭据。
+            - **团队。** Stop / reclaim / ended / quota 覆盖仅存于计划的成员；坏 `plan.json` 返回 400 并说明原因，而不是「还没有计划」；重发会校验任务状态，不再重复投递；失败的 `team_create` 不再记到 lead 会话头上。
+            - **MCP 登录适配 pi 1.5.2**，项目信任跟随 pi 1.5 语义。
+            - **安装包不再携带本机配置或凭据。** 打包前清空载荷、裁剪 `.pi/`，并对任何 `.pi/` 路径、`Bearer ak_` token、PGP armored 私钥或构建残留做 fail-closed 扫描，没有跳过开关。
+            - **输入框双提交。** 仍在解析 `#` 引用的提交不会触发第二次；慢响应不会清掉等待期间输入的文本。
+            - **无障碍与布局。** 关闭的面板退出 Tab 序（`inert`）；粗指针设备 44 px 点击区；CJK 会话时间不再压住标题；添加提供商选择器留在对话框内；项目菜单改为滚动；模型发现按目录分页（重复游标与分页后失败返回 502）。
+            - **计时器与竞态。** 团队轮询判死定时器、通知 store 单句柄覆盖、9 处复制提示计时器互踩；`/goal` 与团队条不再每条消息闪空；文件查看器增量失败保留已加载内容。
+            - **测试。** 恒真断言改为跨行 `assert.match`，并做真·反向复现（删源码行才红）。
+
+            ### 三、组件与升级 / Components and upgrade
+
+            - **组件**：pi 1.5.2、pi-web 0.10.0（本 fork 固定底座，上游 v0.10 → v0.17 的改动已移植）、Next.js 16.4.4、undici 8.12.3。
+            - **依赖**：8 个 `@earendil-works/*` 包精确锁定；`npm audit --omit=dev` 零漏洞。
+            - **升级**：安装本次构建覆盖旧版即可；配置、会话、任务与记忆均保存在 `~/.pi/agent/`，升级不丢。
+
+            > 历史版本的发布说明见下方。
 
             ---
 
