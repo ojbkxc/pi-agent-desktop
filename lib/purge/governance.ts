@@ -54,11 +54,39 @@ function escapeRegExp(value: string): string {
 }
 
 /**
+ * `from` → its compiled case-insensitive pattern.
+ *
+ * The settings are re-normalized on every event (`lib/purge-settings.ts` builds a
+ * fresh object per read), so a cache keyed by the settings object would never hit
+ * twice. The pattern depends only on `from`, so this map is keyed by that string
+ * and survives every request. The cap only guards a pathological editor session
+ * that keeps inventing new rule text; clearing it is harmless because the next
+ * call simply compiles again.
+ *
+ * A global `RegExp` carries `lastIndex`, but `String.prototype.replace` resets it
+ * before and after each call, so one instance can be reused safely.
+ */
+const PATTERN_CACHE_MAX = 256;
+const patternCache = new Map<string, RegExp>();
+
+function literalPattern(from: string): RegExp {
+  let pattern = patternCache.get(from);
+  if (pattern) return pattern;
+  pattern = new RegExp(escapeRegExp(from), "gi");
+  if (patternCache.size >= PATTERN_CACHE_MAX) patternCache.clear();
+  patternCache.set(from, pattern);
+  return pattern;
+}
+
+/**
  * Literal, case-insensitive `from` → `to` substitution over the whole text.
  *
  * Counting matches (not rules) is what makes the console's "命中" column usable:
- * a rule that hits the same phrase three times is three hits. The replacement is
- * applied through a callback so a `to` containing `$&`/`$1` is taken literally.
+ * a rule that hits the same phrase three times is three hits. The count and the
+ * replacement are produced by one `replace` pass (the callback fires once per
+ * match), where the earlier version scanned the text twice with `match` +
+ * `replace`. The replacement goes through a callback so a `to` containing
+ * `$&`/`$1` is still inserted literally.
  */
 function applyRewriteRules(text: string, rules: readonly PurgeRewriteRule[]): RewriteOutcome {
   let out = text;
@@ -66,11 +94,10 @@ function applyRewriteRules(text: string, rules: readonly PurgeRewriteRule[]): Re
   for (const rule of rules) {
     if (!rule || typeof rule.from !== "string" || rule.from.length === 0) continue;
     const to = typeof rule.to === "string" ? rule.to : "";
-    const pattern = new RegExp(escapeRegExp(rule.from), "gi");
-    const matches = out.match(pattern);
-    if (!matches) continue;
-    hits += matches.length;
-    out = out.replace(pattern, () => to);
+    out = out.replace(literalPattern(rule.from), () => {
+      hits += 1;
+      return to;
+    });
   }
   return { text: out, hits };
 }

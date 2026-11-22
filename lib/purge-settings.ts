@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import { getPiWebSettingsPath, readStored, updatePiWebSettings } from "./artifact-settings";
 import {
   PURGE_AUTO_PRESET_MATCHES,
@@ -165,13 +166,55 @@ export function normalizePurgeSettings(input: unknown): PurgeSettings {
   };
 }
 
+/**
+ * The parsed settings file, read once per file version.
+ *
+ * `readPurgeSettings` runs inside `before_agent_start` and, more importantly,
+ * inside `context` — i.e. before every provider request of a tool loop. Reading
+ * and parsing the whole `pi-web/settings.json` there is work nobody needs when
+ * the file has not changed: a `stat` is enough to know. The cache is keyed by
+ * path + mtime + size, the same policy `lib/fast-mode/settings.ts` uses.
+ *
+ * What is cached is the *raw* `purge` block, not the normalized result. The
+ * preset-apply action mutates the settings object it is handed
+ * (`lib/purge/presets.ts`), so every caller must keep receiving a fresh object
+ * exactly as before; re-normalizing from the cached block costs a few
+ * allocations and no I/O. A damaged file is never cached, so repairing it takes
+ * effect on the next read.
+ */
+let cachedBlock: { path: string; mtimeMs: number; size: number; block: unknown } | undefined;
+
 /** The effective settings. An unreadable file (or a damaged `purge` block) reads as the defaults. */
 export function readPurgeSettings(settingsPath = getPiWebSettingsPath()): PurgeSettings {
+  let stat: ReturnType<typeof statSync> | undefined;
   try {
-    return normalizePurgeSettings(readStored(settingsPath)[SETTINGS_KEY]);
+    stat = statSync(settingsPath, { throwIfNoEntry: false });
   } catch {
+    stat = undefined;
+  }
+  if (!stat) {
+    cachedBlock = undefined;
     return defaultPurgeSettings();
   }
+  if (
+    cachedBlock
+    && cachedBlock.path === settingsPath
+    && cachedBlock.mtimeMs === stat.mtimeMs
+    && cachedBlock.size === stat.size
+  ) {
+    return normalizePurgeSettings(cachedBlock.block);
+  }
+  let block: unknown;
+  try {
+    block = readStored(settingsPath)[SETTINGS_KEY];
+  } catch {
+    // A broken file must not stay cached, or the next read would keep serving the
+    // defaults after the user repairs it.
+    cachedBlock = undefined;
+    return defaultPurgeSettings();
+  }
+  cachedBlock = { path: settingsPath, mtimeMs: stat.mtimeMs, size: stat.size, block };
+  return normalizePurgeSettings(block);
 }
 
 /**
@@ -184,5 +227,8 @@ export function writePurgeSettings(
 ): PurgeSettings {
   const settings = normalizePurgeSettings(input);
   updatePiWebSettings({ [SETTINGS_KEY]: settings }, settingsPath);
+  // Read-your-write: drop the cache before reading back, so a filesystem whose mtime
+  // granularity hides the write (same tick, same size) cannot serve the old value.
+  cachedBlock = undefined;
   return readPurgeSettings(settingsPath);
 }
