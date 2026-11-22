@@ -3,6 +3,7 @@ import { applyNetworkProxy } from "@/lib/network-proxy";
 import { closeAllAgentEventStreams } from "@/lib/agent-event-stream";
 import { startScheduler } from "@/lib/scheduled-tasks";
 import { startAutofixSweepLoop } from "@/lib/autofix/runner";
+import { startCampaignSweep } from "@/lib/campaign/runner";
 import { startKeepalive } from "@/lib/keepalive";
 import { startUnattendedSweepLoop } from "@/lib/agent-teams-unattended-runtime";
 import { restartRelayFromConfig } from "@/lib/relay/runtime";
@@ -28,6 +29,10 @@ export function registerNodeInstrumentation(): void {
 
   // 自动修 Bug 的任务接续：进程重启后把孤儿任务重新驱动（每 60s 扫一次，同一开关族）。
   if (process.env.PI_WEB_DISABLE_SCHEDULER !== "1") startAutofixSweepLoop();
+
+  // 长时自主项目战役（campaign）的接续：进程重启后把孤儿战役重新驱动，到点的
+  // Provider 中断也在这里续跑（每 60s 扫一次，同一开关族）。
+  if (process.env.PI_WEB_DISABLE_SCHEDULER !== "1") startCampaignSweep();
 
   // Provider 中断自愈：扫描 ~/.pi/agent/pi-web/outages/ 里的挂起记录，按退避探测并在
   // 上游恢复后自动续跑（每 30s 扫一次；同一开关族）。懒加载调度器与 rpc-manager。
