@@ -1430,7 +1430,7 @@ const FORK_MESSAGE_PATCHES: Record<Locale, {
       "teams.plan.approving": "Approving…",
       "teams.plan.stop": "Stop team and main task",
       "teams.plan.stopping": "Stopping team and main task…",
-      "teams.plan.memberCount": "{count} members",
+      "teams.plan.memberCount": "{count} {plural(count):member:members}",
       "teams.plan.invalidNames": "Invalid member names: {names}",
       "teams.plan.state.draft": "Draft",
       "teams.plan.state.review_pending": "Awaiting review",

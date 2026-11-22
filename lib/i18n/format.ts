@@ -3,13 +3,47 @@ import type { Locale, TranslationParams } from "./types";
 type MessagesByLocale = Record<string, Record<string, string>>;
 
 /**
+ * 复数选择块：`{plural(count):单数:复数}`。
+ *
+ * 为什么要一个语法层的开关：文案里的计数（`teams.plan.memberCount` 之类）在英文下
+ * 1 也得说 "1 member"，而消息本身只是纯字符串——**计数参数只有插值这一步才可见**，
+ * 消息字典拿不到 count。所以单复数必须在插值层解决，消息侧只声明两个形态。
+ *
+ * 语法设计取舍（有意不用 ICU `{count, plural, one {…} other {…}}`）：
+ * - ICU 形态的选项里有花括号，本仓库的占位符门禁（lib/i18n/usage.test.mjs 的
+ *   `{([\w.-]+)}` 扫描）会把 `one {member}` 里的 `{member}` 当成占位符，
+ *   要求调用点传 `member` —— 那是误报。这里用**无内层花括号**的形态，扫描器看不见。
+ * - 选项文本不允许 `{`/`}`/`:`，够用（只需要词形，不需要嵌套插值）。
+ * - 缺参数或参数不是数字 → 原样保留整个块（宁可露出原文，也不猜一个形态）。
+ */
+const PLURAL_BLOCK = /\{plural\(([\w.-]+)\):([^{}:]*):([^{}:]*)\}/g;
+
+/**
+ * 把复数块解析成单数/复数形态（不做 `{token}` 插值，交给 interpolateMessage 之后处理）。
+ * @param message 原始翻译消息
+ * @param params 插值参数（`plural(<name>)` 里的 name 从这里取）
+ * @returns 已选定词形的消息；没有复数块或参数不可判定时原样返回
+ */
+export function resolvePluralBlocks(message: string, params: TranslationParams = {}): string {
+  if (!message.includes("{plural(")) return message;
+  return message.replace(PLURAL_BLOCK, (token, name: string, one: string, other: string) => {
+    const raw = params[name];
+    if (raw === undefined) return token;
+    const count = Number(raw);
+    if (!Number.isFinite(count)) return token;
+    // 英文/中文的单数都取 "= 1"；0 与复数同形（"0 members"、"0 名成员"）。
+    return count === 1 ? one : other;
+  });
+}
+
+/**
  * 替换翻译消息中的简单插值占位符。
  * @param message 原始翻译消息
  * @param params 插值参数
  * @returns 完成参数替换后的消息
  */
 export function interpolateMessage(message: string, params: TranslationParams = {}): string {
-  return message.replace(/\{([\w.-]+)\}/g, (token, name: string) => {
+  return resolvePluralBlocks(message, params).replace(/\{([\w.-]+)\}/g, (token, name: string) => {
     const value = params[name];
     return value === undefined ? token : String(value);
   });

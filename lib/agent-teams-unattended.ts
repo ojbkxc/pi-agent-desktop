@@ -44,6 +44,12 @@ export interface AwaitingPlanMember {
   modelId: string;
 }
 
+/**
+ * plan.json 的时间戳字段可能出现的形态：epoch 毫秒（pi-team 现在写的）、epoch 秒
+ * （早期/第三方写者）、ISO 字符串（手改或导出后的 plan.json）。判定层统一归一化。
+ */
+export type PlanTimestamp = number | string | null | undefined;
+
 export interface AwaitingPlan {
   teamName: string;
   planId: string;
@@ -51,13 +57,31 @@ export interface AwaitingPlan {
   /** lead 会话 id（plan.json 的 sessionId，见 store 的说明——不读 config 的 leadSessionId）。 */
   sessionId: string;
   /**
-   * 计划最后一次写入的时间（epoch ms）。
+   * 计划最后一次写入的时间（TeamPlanRecord.updatedAt）。
    *
-   * ⚠️ 近似：`TeamPlanRecord` 只有 createdAt / updatedAt / approvedAt，**没有 submittedAt**。
-   * 在 `review_pending` 下，最后一次写盘就是「提交待批」，故用 updatedAt 近似提交时刻。
-   * 这是近似而非精确值——和 startedAt 是同一类语义陷阱，别再埋一个。
+   * 语义（**updatedAt 不等价于「提交时刻」**，别按 submittedAt 读）：`review_pending` 是
+   * 「提交待批」态，pi-team 在这之前之后的每次写盘（submit / 桌面 PATCH 保存）都会推进
+   * updatedAt，所以「等待时长 = now - updatedAt」是**下界**：用户中途改一次计划，等待
+   * 计时就重新开始——这正是我们想要的（有人在动就不要催）。
+   *
+   * 真正的坑是**认不出来**的时间：字段缺失/为 0/单位不是毫秒时，旧实现把它当 0 处理
+   * （`now - 0` ≈ 55 年）→ 刚提交的计划被立刻判成「久等」而催批。现在这种时间戳
+   * 一律由 waitingMsFor() 归一到 `null` = 无法判定，于是**不提醒**（宁可少催一次，
+   * 也不要在用户刚提交时催他）。
    */
-  updatedAt: number;
+  updatedAt: PlanTimestamp;
+  /**
+   * 计划创建时间（可选）：只在 updatedAt 完全缺失时作为**保守**兜底吗？不——见
+   * waitingMsFor() 的说明，created 早于 submit，用它算等待会高估，故不参与判定。
+   * 这里保留字段只为调用方不丢信息。
+   */
+  createdAt?: PlanTimestamp;
+  /**
+   * 审批时刻（可选）：有值说明这份计划已经走过批准（approve 写的 approvedAt）。
+   * review_pending 记录上出现它属于过期快照（或批准后又被改回评审态）——此时再催
+   * lead 批准会变成重复批准，waitingMsFor() 直接判为「不该提醒」。
+   */
+  approvedAt?: PlanTimestamp;
   members: readonly AwaitingPlanMember[];
 }
 
@@ -101,11 +125,6 @@ export interface UnattendedState {
    */
   manualNeeds?: Record<string, { at: number; reason: string }>;
 }
-
-export const EMPTY_UNATTENDED_STATE: UnattendedState = Object.freeze({
-  approvalNudges: {},
-  failureNudges: {},
-});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 输出：动作
@@ -245,6 +264,60 @@ export function buildFailurePrompt(
 
 const byId = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
+/**
+ * 秒级时间戳的判别阈值：≥ 该值的数字按毫秒算，小于它的正整数按秒算。
+ *
+ * 为什么需要：pi-team 写 `Date.now()`（毫秒），但 plan.json 也可能是手改、导出再导入、
+ * 或更早的写者落下的秒级值。把秒级值当毫秒用会把等待时长算成 1970 年至今 ≈ 55 年
+ * （「久等」误判）；把它当非法丢掉又会让计划永远不提醒。这里按量级判：
+ * 1e11 ms ≈ 1973-03，任何本世纪的真实毫秒时间戳都远大于它；秒级值（≈1.7e9）远小于它。
+ */
+const MILLISECOND_THRESHOLD = 100_000_000_000;
+
+/**
+ * 归一化 plan 时间戳 → epoch 毫秒；无法判定返回 null（**不要**用 0 兜底：
+ * 0 会被算成「等了 55 年」，正是「刚提交就催批」的根因）。
+ *
+ * 接受：毫秒数、秒数、ISO/日期字符串、数字字符串；拒绝：缺失、0/负数、NaN、空串。
+ */
+export function normalizePlanTimestamp(value: PlanTimestamp): number | null {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value <= 0) return null;
+    return value < MILLISECOND_THRESHOLD ? Math.round(value * 1000) : Math.round(value);
+  }
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return null;
+    // 纯数字字符串走同一套量级判别（"1700000000" 是秒）。
+    if (/^\d+(\.\d+)?$/.test(text)) return normalizePlanTimestamp(Number(text));
+    const parsed = Date.parse(text);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+  return null;
+}
+
+/**
+ * 该计划「已经等了多久」（毫秒）；返回 null = **无法判定或不该提醒**。
+ *
+ * 判定链（逐条都有理由，别改成一句 `now - updatedAt`）：
+ * 1. 有 `approvedAt` → 这份计划已经批过（review_pending 上的 approvedAt 是过期快照），
+ *    再催一次会让 lead 重复批准 → null；
+ * 2. `updatedAt` 归一化失败（缺失/0/乱码）→ null。**这是本轮修的误判**：旧实现把它
+ *    当 0，`now - 0` 让刚提交的计划立刻满足 10 分钟阈值；
+ * 3. 时间戳在未来（时钟回拨/跨机写盘）→ 夹到 0，即「刚刚写过」，不提醒；
+ * 4. `createdAt` 不参与：创建早于提交，拿它算等待只会高估（同样会造成误催）。
+ */
+export function waitingMsFor(
+  plan: Pick<AwaitingPlan, "updatedAt" | "approvedAt">,
+  now: number,
+): number | null {
+  if (normalizePlanTimestamp(plan.approvedAt) !== null) return null;
+  const updatedAt = normalizePlanTimestamp(plan.updatedAt);
+  if (updatedAt === null) return null;
+  if (!Number.isFinite(now)) return null;
+  return Math.max(0, now - updatedAt);
+}
+
 export interface PlanUnattendedInput {
   /** 当前时间（epoch ms）。 */
   now: number;
@@ -274,11 +347,14 @@ export function planUnattendedActions(input: PlanUnattendedInput): UnattendedDec
 
   // ── 超时降级审批 ──
   const plans = input.awaitingPlans
-    .filter((plan) => !!plan.sessionId && Number.isFinite(plan.updatedAt))
+    .filter((plan) => !!plan.sessionId)
     .slice()
     .sort((a, b) => byId(a.planId, b.planId));
   for (const plan of plans) {
-    const waitedMs = input.now - plan.updatedAt;
+    // 无法判定的时间戳（缺失/0/秒/ISO 之外的乱码）与已批过的快照一律不催：
+    // 「等多久」未知时宁可不提醒，也不要把刚提交的计划当久等。
+    const waitedMs = waitingMsFor(plan, input.now);
+    if (waitedMs === null) continue;
     if (waitedMs < input.config.approvalTimeoutMs) continue;
     if (approvalNudges[plan.planId] === plan.revision) continue;
     approvalNudges[plan.planId] = plan.revision;

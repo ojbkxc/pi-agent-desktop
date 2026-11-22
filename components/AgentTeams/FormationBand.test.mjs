@@ -245,9 +245,33 @@ test("formationRequiredWidth：成员排实际需要的画布宽度（单人/单
   assert.equal(formationRequiredWidth(2), 0, "1 个成员：居中即可");
   // 3 人 = lead + 2 个成员：两个成员中心相距一个 PITCH，再加一张卡宽与左右留白。
   assert.equal(formationRequiredWidth(3), 200 + 176 + 32);
-  // 60 人：59 个成员按 MEMBER_PITCH 排开，任务画布必须放宽到这个宽度，
-  // 否则成员卡会被画布右缘裁掉（「多派成员」在界面上看不到人）。
-  assert.equal(formationRequiredWidth(60), 58 * 200 + 176 + 32);
+  // 分行后宽度要求**饱和**：单行最多 MAX_MEMBERS_PER_ROW 张卡，多出来的人往下排，
+  // 画布不再按「59 个成员一整行」要 11.8k px（旧行为）。
+  assert.equal(formationRequiredWidth(9), 7 * 200 + 176 + 32, "8 个成员 = 单行上限");
+  assert.equal(formationRequiredWidth(60), formationRequiredWidth(9), "超过单行上限不再要更多宽度");
+  assert.ok(formationRequiredWidth(60) < 2000, "60 个成员不再要求 11.8k px 画布");
+});
+
+test("成员多时编队带分行：行数、行 y 与画布宽度都不再失控", async () => {
+  const { MAX_MEMBERS_PER_ROW, MEMBER_ROW_PITCH, MEMBER_TOP, formationBandBottom } =
+    await jiti.import("@/lib/agent-teams-formation-layout.ts");
+  const members = [LEAD, ...Array.from({ length: 19 }, (_, index) => member(`w${index}`))];
+  const html = render(snapshot(members), 1280);
+  // 20 人 = lead + 19 个成员；1280 宽一行 6 张 → 4 行。
+  assert.match(html, /data-rows="4"/);
+  // 每行一支 peer 总线；第 2 行起还有行间连线。
+  const peerRows = html.match(/data-channel="peer" data-row="\d+"/g) ?? [];
+  assert.equal(peerRows.length, 4, "每行一支 peer 总线");
+  const rowLinks = html.match(/data-channel="row-link" data-row="\d+"/g) ?? [];
+  assert.equal(rowLinks.length, 3, "4 行需要 3 条行间连线");
+  // 第 2 行卡片顶边下移一个 MEMBER_ROW_PITCH（不再全部压在 MEMBER_TOP）。
+  assert.ok(html.includes(`top:${MEMBER_TOP}px`), "首行仍在 MEMBER_TOP");
+  assert.ok(html.includes(`top:${MEMBER_TOP + MEMBER_ROW_PITCH}px`), "第二行下移一行距");
+  // 带高随行数增长：任务泳道要跟着下移（见 TaskBoardCanvas 的 formationOffset）。
+  const expectedBottom = formationBandBottom(4);
+  assert.ok(html.includes(`height:${expectedBottom}px`), "编队带容器高度按行数撑开");
+  assert.ok(expectedBottom > 410, "多行时带底边超过单行的 410");
+  assert.ok(MAX_MEMBERS_PER_ROW === 8);
 });
 
 test("runningTicketsByMember / runningAssignmentCount：成员同时跑多张票（并发不被折叠）", () => {
@@ -297,4 +321,26 @@ test("长成员名不撑破卡片：名字节点带 title 与折行护栏", () =
   assert.ok(nameIndex > 0, "全名仍在 DOM 里（title）");
   assert.match(html, /overflow-wrap:anywhere/, "flex 子项给折行护栏");
   assert.match(html, /min-width:0/, "flex 子项必须能收缩，ellipsis 才生效");
+});
+
+test("分行后飞线跟着成员所在行走（第 2 行不被画回首行总线）", async () => {
+  const { LEAD_BUS_Y, MEMBER_ROW_PITCH } = await jiti.import("@/lib/agent-teams-formation-layout.ts");
+  // 9 个成员：6 张首行 + 3 张第二行 → w6 落在第二行。
+  const members = [LEAD, ...Array.from({ length: 9 }, (_, index) => member(`w${index}`))];
+  const snap = snapshot(members);
+  snap.messages = [{
+    id: "m-row",
+    from: "team-lead",
+    to: "w6",
+    recipients: ["w6"],
+    kind: "direct",
+    text: "go",
+    timestamp: "2026-01-01T00:00:00.000Z",
+  }];
+  const html = render(snap, 1280, { activeMessageId: "m-row" });
+  const flights = html.match(/data-testid="agent-teams-formation-flight"[^>]*d="([^"]+)"/g) ?? [];
+  assert.equal(flights.length, 1, "一条消息一条飞线");
+  const rowBusY = LEAD_BUS_Y + MEMBER_ROW_PITCH;
+  assert.ok(flights[0].includes(`,${rowBusY}`), `飞线走第二行总线 y=${rowBusY}：${flights[0]}`);
+  assert.ok(!flights[0].includes(`,${LEAD_BUS_Y} `), "不再回落到首行总线");
 });

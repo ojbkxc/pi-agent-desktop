@@ -15,6 +15,11 @@ import {
 import { dependencyChain } from "@/lib/agent-teams-dependency-focus";
 import { ticketProgress, ticketStalled } from "@/lib/agent-teams-task-progress";
 import type { TeamWorkbenchSnapshot, WorkbenchTicket } from "@/lib/agent-teams-swimlane";
+import {
+  FORMATION_BOTTOM,
+  formationBandBottom,
+  formationRowCount,
+} from "@/lib/agent-teams-formation-layout";
 import { formationRequiredWidth } from "./FormationBand";
 
 /**
@@ -143,8 +148,12 @@ const LEGEND_ITEMS: ReadonlyArray<{ key: string; labelKey: string }> = [
  * 泳道底板与依赖连线画在同一个 SVG 里、且底板在连线之前，连线才不会被底板遮挡。
  *
  * 宽度口径：画布宽 = max(任务布局宽, 编队带需要的最小宽)。任务布局只看依赖列数，
- * 成员多（20~60）时编队带会横向超出画布被裁掉——同一屏里「人多」和「任务多」必须
- * 都能看全（见 FormationBand 的 formationRequiredWidth）。
+ * 成员多时编队带会超出画布被裁掉——同一屏里「人多」和「任务多」必须都能看全
+ * （见 FormationBand 的 formationRequiredWidth）。
+ *
+ * 高度口径：编队带按可用宽度**分行**（每行上限 MAX_MEMBERS_PER_ROW），行数增加会把
+ * 带底边往下推。任务泳道因此整体下移 formationBandOffset 像素（SVG 内容用 `<g>`
+ * 平移、卡片/泳道标题各自加偏移），否则成员第二行起会压在任务卡上。
  */
 export const TaskBoardCanvas = memo(function TaskBoardCanvas({
   snapshot,
@@ -172,6 +181,13 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
     () => Math.max(layout.width, formationRequiredWidth(snapshot.members.length)),
     [layout.width, snapshot.members.length],
   );
+  // 编队带按行排开后比单行更高：任务泳道整体下移这段高度（0 = 单行，行为不变）。
+  const formationOffset = useMemo(() => {
+    const rows = formationRowCount(Math.max(0, snapshot.members.length - 1), canvasWidth);
+    return Math.max(0, formationBandBottom(rows) - FORMATION_BOTTOM);
+  }, [snapshot.members.length, canvasWidth]);
+  // 画布总高 = 编队带多出来的高度 + 任务层高度。
+  const boardHeight = layout.height + formationOffset;
   const membersById = useMemo(
     () => new Map(snapshot.members.map((member) => [member.id, member.name])),
     [snapshot.members],
@@ -211,11 +227,11 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
     }
     return (
       <div className="agent-teams-board-scroll">
-        <div className="agent-teams-board" style={{ width: canvasWidth, minWidth: canvasWidth, height: layout.height }}>
+        <div className="agent-teams-board" style={{ width: canvasWidth, minWidth: canvasWidth, height: boardHeight }}>
           {formation(canvasWidth)}
           <p
             className="scheduled-hint agent-teams-board-empty"
-            style={{ position: "absolute", top: DEPTH_COLUMN_TOP + 8, left: HORIZONTAL_PADDING }}
+            style={{ position: "absolute", top: DEPTH_COLUMN_TOP + 8 + formationOffset, left: HORIZONTAL_PADDING }}
           >
             {emptyText}
           </p>
@@ -261,10 +277,13 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
         <p className="agent-teams-board-cycle-warning" role="status">{t("teams.cycleWarning")}</p>
       )}
       <div className="agent-teams-board-scroll">
-        <div className="agent-teams-board" style={{ width: canvasWidth, minWidth: canvasWidth, height: layout.height }}>
+        <div className="agent-teams-board" style={{ width: canvasWidth, minWidth: canvasWidth, height: boardHeight }}>
           {formation?.(canvasWidth)}
 
-          <svg className="agent-teams-board-edges" width={canvasWidth} height={layout.height} aria-hidden="true">
+          <svg className="agent-teams-board-edges" width={canvasWidth} height={boardHeight} aria-hidden="true">
+            {/* 分行后的编队带把任务层整体下移：一次 translate 覆盖泳道底板与依赖连线，
+                坐标口径（layout 的 x/y）保持不变。 */}
+            <g transform={formationOffset === 0 ? undefined : `translate(0 ${formationOffset})`}>
             {/* 泳道底板画在依赖连线之前 —— 与上游一致，连线压在上面不会被遮住。 */}
             {layout.lanes.map((lane, index) => (
               <g key={`plate-${lane.depth}`} className="agent-teams-board-plate">
@@ -296,6 +315,7 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
                 data-chain-dimmed={edge.chainDimmed ? "true" : undefined}
               />
             ))}
+            </g>
           </svg>
 
           {layout.lanes.map((lane) => {
@@ -306,7 +326,7 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
               <div
                 key={lane.depth}
                 className="agent-teams-board-lane"
-                style={{ left: lane.x, top: lane.y, width: lane.width, height: lane.height }}
+                style={{ left: lane.x, top: lane.y + formationOffset, width: lane.width, height: lane.height }}
               >
                 <div className="agent-teams-board-lane-head">
                   <span className="agent-teams-board-lane-title">
@@ -361,7 +381,7 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
                   event.preventDefault();
                   onSelectTask(ticket.id);
                 } : undefined}
-                style={{ left: task.x, top: task.y, width: TASK_WIDTH, height: TASK_HEIGHT, cursor: onSelectTask ? "pointer" : undefined }}
+                style={{ left: task.x, top: task.y + formationOffset, width: TASK_WIDTH, height: TASK_HEIGHT, cursor: onSelectTask ? "pointer" : undefined }}
               >
                 <span className="agent-teams-board-task-head">
                   <span className="agent-teams-board-task-id">#{ticket.id}</span>

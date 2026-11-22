@@ -37,9 +37,26 @@ export const MEMBER_FOOT = 352;
 export const PEER_BUS_Y = 372;
 export const MEMBER_PITCH = 200;
 export const MEMBER_SLOT_WIDTH = 176;
-/** 编队带高度（= 任务列表标题基线的 y）。 */
+/**
+ * 成员分行上限：单行最多 8 张卡（约 1600px 宽）。
+ *
+ * 为什么必须有上限：旧实现把成员排成一整行 —— 60 个成员 => 画布宽 11.8k px，整屏
+ * 只剩一条细缝能看，用户还得横向滚十倍屏宽才数得清人。分行后画布宽被上限钉住，
+ * 多出来的人往下排（见 formationRowCount / arrangeFormationRows）。
+ * 上限同时是 formationNaturalWidth 的饱和点：成员再多也不再横向撑宽。
+ */
+export const MAX_MEMBERS_PER_ROW = 8;
+/** 行间距：要同时容下上一行的 peer 总线（脚下方 20px）与下一行的行总线（顶边上方 26px）。 */
+export const MEMBER_ROW_GAP = 56;
+/** 相邻两行的卡片顶边间距（卡片高 130 + 行间 56）。 */
+export const MEMBER_ROW_PITCH = (MEMBER_FOOT - MEMBER_TOP) + MEMBER_ROW_GAP;
+/** 行总线在卡片顶边之上的距离（= LEAD_BUS_Y 与 MEMBER_TOP 的差，首行总线仍是 LEAD_BUS_Y）。 */
+export const ROW_BUS_GAP = MEMBER_TOP - LEAD_BUS_Y;
+/** peer 总线在卡片底边之下的距离。 */
+export const PEER_BUS_GAP = PEER_BUS_Y - MEMBER_FOOT;
+/** 编队带高度（= 任务列表标题基线的 y；单行成员时就是整条带高）。 */
 export const FORMATION_HEIGHT = TASKS_TITLE_Y;
-/** 编队带底边，也就是带 2 任务泳道的起点（与 DEPTH_COLUMN_TOP 一致）。 */
+/** 编队带底边，也就是带 2 任务泳道的起点（与 DEPTH_COLUMN_TOP 一致；单行成员时）。 */
 export const FORMATION_BOTTOM = 410;
 
 /**
@@ -173,23 +190,139 @@ export interface FormationMember {
   inboxCount: number;
 }
 
+/**
+ * 成员排的一行（分行布局的输出单位）。
+ *
+ * 为什么要有它：成员多时旧实现把所有卡片排成一整行（60 人 = 11.8k px 画布），
+ * 需要「按可用宽度/每行上限换行」。行对象把一行内所有卡片的几何一次给全，
+ * 组件只按行画总线、按节点画卡片，不必自己算换行。
+ */
+export interface FormationRow {
+  /** 行号（0 起，自上而下）。 */
+  index: number;
+  /** 行内卡片顶边 y。 */
+  top: number;
+  /** 行内卡片底边 y。 */
+  foot: number;
+  /** 行总线 y（卡片顶边之上 ROW_BUS_GAP；第 0 行正好是 LEAD_BUS_Y）。 */
+  busY: number;
+  /** peer 总线 y（卡片底边之下 PEER_BUS_GAP）。 */
+  peerBusY: number;
+  /** 行内成员卡片（按名册顺序，已带上本行的 top/centerX）。 */
+  members: FormationMember[];
+  /** 行内首/尾卡片中心 x（空行为 null）。 */
+  firstX: number | null;
+  lastX: number | null;
+  /** 行中心 x（首尾中点；行间竖直连线走这里）。 */
+  centerX: number | null;
+}
+
 export interface FormationLayout {
   width: number;
+  /** 编队带的实际高度（含分行带来的额外行高；单行时 = FORMATION_HEIGHT）。 */
   height: number;
+  /** 编队带底边：任务泳道从这里开始（单行时 = FORMATION_BOTTOM）。 */
+  bottom: number;
   lead: FormationMember | null;
+  /** 全部成员卡（按名册顺序、行优先展平）。 */
   workers: FormationMember[];
-  /** 两条总线：lead bus 从队长垂到 LEAD_BUS_Y，peer bus 横跨首尾成员。 */
+  /** 分行结果：每行一张卡的几何 + 行总线（组件据此画总线）。 */
+  rows: FormationRow[];
+  /** 行数（0 = 没有成员）。 */
+  rowCount: number;
+  /** 两条总线：lead bus 从队长垂到首行行总线，peer bus 每行横跨该行首尾成员。 */
   bus: {
     leadX: number | null;
+    /** 首行首张卡中心 x（单行时即整排最左）。 */
     firstWorkerX: number | null;
+    /** 首行末张卡中心 x（单行时即整排最右）。 */
     lastWorkerX: number | null;
   };
 }
 
-/** 画布自然宽度：按成员间距撑开，至少 CANVAS_MIN_WIDTH（照上游 :813）。 */
+/**
+ * 画布自然宽度：按成员间距撑开，至少 CANVAS_MIN_WIDTH（照上游 :813）。
+ *
+ * 成员数超过 MAX_MEMBERS_PER_ROW 后**饱和**：多出来的人分成新行往下排，画布不再
+ * 横向撑宽（旧实现 60 人 = 11.8k px，见 MEMBER_ROW_GAP / formationRowCount）。
+ */
 export function formationNaturalWidth(memberCount: number): number {
   const workers = Math.max(0, memberCount - 1);
-  return Math.max(CANVAS_MIN_WIDTH, 460 + Math.max(0, workers - 1) * MEMBER_PITCH);
+  const inRow = Math.min(workers, MAX_MEMBERS_PER_ROW);
+  return Math.max(CANVAS_MIN_WIDTH, 460 + Math.max(0, inRow - 1) * MEMBER_PITCH);
+}
+
+/**
+ * 可用宽度下一行能放几张成员卡：按 MEMBER_PITCH 间距与 MEMBER_SLOT_WIDTH 卡宽算，
+ * 再被 MAX_MEMBERS_PER_ROW 钉住，至少 1（极窄画布也不出现「0 张/行」死循环）。
+ */
+export function membersPerRow(availableWidth: number): number {
+  const width = Number.isFinite(availableWidth) && availableWidth > 0 ? availableWidth : CANVAS_MIN_WIDTH;
+  const fitted = Math.floor((width - MEMBER_SLOT_WIDTH) / MEMBER_PITCH) + 1;
+  return Math.max(1, Math.min(MAX_MEMBERS_PER_ROW, fitted));
+}
+
+/** 给定成员（worker）数与画布宽度，需要几行（0 = 没有成员）。 */
+export function formationRowCount(workerCount: number, availableWidth: number): number {
+  const total = Math.max(0, Math.floor(workerCount));
+  if (total === 0) return 0;
+  return Math.ceil(total / membersPerRow(availableWidth));
+}
+
+/** 编队带高度（rows 行）：单行时 = FORMATION_HEIGHT，每多一行加 MEMBER_ROW_PITCH。 */
+export function formationBandHeight(rows: number): number {
+  const extra = Math.max(0, Math.floor(rows) - 1);
+  return FORMATION_HEIGHT + extra * MEMBER_ROW_PITCH;
+}
+
+/** 编队带底边（rows 行）：单行时 = FORMATION_BOTTOM，任务泳道据此下移。 */
+export function formationBandBottom(rows: number): number {
+  const extra = Math.max(0, Math.floor(rows) - 1);
+  return FORMATION_BOTTOM + extra * MEMBER_ROW_PITCH;
+}
+
+/**
+ * 把成员卡按行排开（分行布局的唯一几何真源）。
+ *
+ * - 每行 membersPerRow(width) 张，行内以 MEMBER_PITCH 间距、整体水平居中；
+ * - 行 y 按 MEMBER_ROW_PITCH 递增，首行仍是 MEMBER_TOP；
+ * - 节点对象浅拷贝后写回 top/centerX（不就地修改入参，纯函数、可缓存）。
+ *
+ * 布局与「按紧急度重排」共用它：重排只是换一组入参，几何完全同一套口径。
+ */
+export function arrangeFormationRows(
+  workers: readonly FormationMember[],
+  availableWidth: number,
+): FormationRow[] {
+  const width = Number.isFinite(availableWidth) && availableWidth > 0 ? availableWidth : CANVAS_MIN_WIDTH;
+  const perRow = membersPerRow(width);
+  const rows: FormationRow[] = [];
+  for (let start = 0; start < workers.length; start += perRow) {
+    const index = rows.length;
+    const top = MEMBER_TOP + index * MEMBER_ROW_PITCH;
+    const foot = MEMBER_FOOT + index * MEMBER_ROW_PITCH;
+    const group = workers.slice(start, start + perRow);
+    const startX = width / 2 - Math.max(0, group.length - 1) * MEMBER_PITCH / 2;
+    const members = group.map((node, offset) => ({
+      ...node,
+      top,
+      centerX: startX + offset * MEMBER_PITCH,
+    }));
+    const firstX = members.length > 0 ? members[0].centerX : null;
+    const lastX = members.length > 0 ? members[members.length - 1].centerX : null;
+    rows.push({
+      index,
+      top,
+      foot,
+      busY: top - ROW_BUS_GAP,
+      peerBusY: foot + PEER_BUS_GAP,
+      members,
+      firstX,
+      lastX,
+      centerX: firstX !== null && lastX !== null ? (firstX + lastX) / 2 : null,
+    });
+  }
+  return rows;
 }
 
 /** 队长判定：命中名册里 sessionId 与团队 leadSessionId 一致者，退化为名字/首位。 */
@@ -312,8 +445,12 @@ function memberSegments(
 }
 
 /**
- * 编队带纯布局：给定画布宽度与快照，算出队长节点、成员节点行与两条总线的坐标。
- * 成员按名册顺序（稳定）从左到右、以 MEMBER_PITCH 固定间距排布。
+ * 编队带纯布局：给定画布宽度与快照，算出队长节点、成员分行与两条总线的坐标。
+ *
+ * 成员按名册顺序（稳定）排布：每行 membersPerRow(width) 张（上限 MAX_MEMBERS_PER_ROW），
+ * 行内以 MEMBER_PITCH 间距、整体居中，行间以 MEMBER_ROW_PITCH 往下叠 —— 成员再多也
+ * 只是多几行，画布宽度不再线性膨胀（旧实现 60 人 = 11.8k px）。几何全部由
+ * arrangeFormationRows 产出，与「按紧急度重排」共用同一套换行口径。
  */
 export function layoutFormation(snapshot: TeamWorkbenchSnapshot, width: number): FormationLayout {
   const safeWidth = Number.isFinite(width) && width > 0 ? width : CANVAS_MIN_WIDTH;
@@ -322,20 +459,20 @@ export function layoutFormation(snapshot: TeamWorkbenchSnapshot, width: number):
   const workers = allMembers.filter((member) => member !== lead);
 
   const leadCenter = safeWidth / 2;
-  const workerStart = leadCenter - Math.max(0, workers.length - 1) * MEMBER_PITCH / 2;
   // 队长没有独立 runner：用「名册 running + 最近活动」推断其是否在读流，
   // 长时间无活动就显示 idle，别永远假装在干活。
   const leadStreaming = lead ? leadIsStreaming(snapshot, lead) : false;
   const ticketsById = new Map(snapshot.tickets.map((ticket) => [ticket.id, ticket]));
   const messages = snapshot.messages ?? [];
 
-  const build = (member: WorkbenchMember, isLead: boolean, centerX: number, index: number): FormationMember => {
+  const build = (member: WorkbenchMember, isLead: boolean): FormationMember => {
     const { segments, total, completed, urgency } = memberSegments(snapshot, member.id);
     const currentTicket = currentTicketFor(snapshot, member.id);
     return {
       member,
       isLead,
-      centerX,
+      // 位置先给占位值，随后由 arrangeFormationRows 按行写回（几何只有一个真源）。
+      centerX: isLead ? leadCenter : 0,
       top: isLead ? LEAD_TOP : MEMBER_TOP,
       accent: member.color || (isLead ? "gray" : "blue"),
       workState: getMemberWorkState(member, {
@@ -353,20 +490,23 @@ export function layoutFormation(snapshot: TeamWorkbenchSnapshot, width: number):
     };
   };
 
-  const leadNode = lead ? build(lead, true, leadCenter, allMembers.indexOf(lead)) : null;
-  const workerNodes = workers.map((member, index) => (
-    build(member, false, workerStart + index * MEMBER_PITCH, allMembers.indexOf(member))
-  ));
+  const leadNode = lead ? build(lead, true) : null;
+  const rows = arrangeFormationRows(workers.map((member) => build(member, false)), safeWidth);
+  const workerNodes = rows.flatMap((row) => row.members);
+  const rowCount = rows.length;
 
   return {
     width: safeWidth,
-    height: FORMATION_HEIGHT,
+    height: formationBandHeight(rowCount),
+    bottom: formationBandBottom(rowCount),
     lead: leadNode,
     workers: workerNodes,
+    rows,
+    rowCount,
     bus: {
       leadX: leadNode ? leadNode.centerX : null,
-      firstWorkerX: workerNodes.length > 0 ? workerNodes[0].centerX : null,
-      lastWorkerX: workerNodes.length > 0 ? workerNodes[workerNodes.length - 1].centerX : null,
+      firstWorkerX: rows[0]?.firstX ?? null,
+      lastWorkerX: rows[0]?.lastX ?? null,
     },
   };
 }

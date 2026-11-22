@@ -950,7 +950,17 @@ export interface TeamConfigSnapshot {
   members: Array<{ agentId: string; name: string; sessionId?: string }>;
 }
 
-/** 读 config.json 的完整快照（含 leadSessionId；团队不存在/损坏返回 null）。 */
+/**
+ * 读 config.json 的完整快照（含 leadSessionId；团队不存在/损坏返回 null）。
+ *
+ * 名册容错与 `lib/agent-teams-roster.ts` 的 `readMergedRoster` **同口径**（上一轮只修了
+ * 那边，这里漏了）：`agentId` / `name` 单边缺失（老版本 pi-team、手工改过的 config）时
+ * 用另一边兜底，只有两边都空才丢。丢掉一条 = 该成员在全局配额（readGlobalRosterWorkers）
+ * 与停止/ended 判定里整层隐身，`resolveLeadNames` 的 lead 判定链也会跟着少证据。
+ *
+ * 复用本函数的调用点（workload / assignments / 成员模型写入）都按 memberId↔name 两列
+ * 一起用，单边缺失的条目补全后语义只会更完整，不会改变已有完整条目的取值。
+ */
 export async function readTeamConfigSnapshot(dirName: string): Promise<TeamConfigSnapshot | null> {
   const config = await readJson<Record<string, unknown>>(join(teamsRootDir(), dirName, "config.json"));
   if (!config || !Array.isArray(config.members)) return null;
@@ -958,10 +968,15 @@ export async function readTeamConfigSnapshot(dirName: string): Promise<TeamConfi
   for (const item of config.members) {
     if (!item || typeof item !== "object") continue;
     const record = item as Record<string, unknown>;
-    if (typeof record.agentId !== "string" || typeof record.name !== "string") continue;
+    const rawId = typeof record.agentId === "string" ? record.agentId : "";
+    const rawName = typeof record.name === "string" ? record.name : "";
+    // 单边缺失用另一边兜底（与 readMergedRoster 逐字对齐）；两边都空才丢。
+    const agentId = rawId || rawName;
+    const name = rawName || rawId;
+    if (!agentId || !name) continue;
     members.push({
-      agentId: record.agentId,
-      name: record.name,
+      agentId,
+      name,
       ...(typeof record.sessionId === "string" && record.sessionId ? { sessionId: record.sessionId } : {}),
     });
   }

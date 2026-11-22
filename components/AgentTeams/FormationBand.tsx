@@ -4,20 +4,18 @@ import { memo, useCallback, useMemo, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { TeamWorkbenchSnapshot, WorkbenchMessage } from "@/lib/agent-teams-swimlane";
 import {
-  FORMATION_BOTTOM,
   FORMATION_TITLE_X,
   FORMATION_TITLE_Y,
   LEAD_FOOT,
-  LEAD_BUS_Y,
-  MEMBER_FOOT,
+  MAX_MEMBERS_PER_ROW,
   MEMBER_PITCH,
   MEMBER_SLOT_WIDTH,
-  MEMBER_TOP,
-  PEER_BUS_Y,
+  arrangeFormationRows,
   identityMatches,
   layoutFormation,
   sortWorkersByUrgency,
   type FormationMember,
+  type FormationRow,
   type MemberWorkState,
 } from "@/lib/agent-teams-formation-layout";
 import type { TicketUrgency } from "@/lib/agent-teams-task-layout";
@@ -40,16 +38,20 @@ const FORMATION_SIDE_PADDING = 32;
  * 编队带需要的最小画布宽度；0 表示任意宽度都放得下。
  *
  * 为什么画布要问编队带要宽度：任务画布的自然宽度只按**依赖列数**算
- * （layoutTeamWorkbenchTasks），与成员数无关。20~60 个成员时成员卡按 MEMBER_PITCH
- * 排开，宽度远超任务画布，卡片会被画布右缘裁掉（首卡甚至是负坐标）——
- * 「多派成员」在界面上直接看不到人。任务画布取 max(任务宽, 本函数) 即可。
+ * （layoutTeamWorkbenchTasks），与成员数无关。成员一多，成员卡就会超出任务画布宽
+ * 被右缘裁掉（首卡甚至是负坐标）——「多派成员」在界面上直接看不到人。
+ *
+ * 分行之后这条要求**饱和**：单行最多 MAX_MEMBERS_PER_ROW 张卡，多出来的人分成新行
+ * 往下排（见 lib 的 arrangeFormationRows / formationBandBottom）。旧实现按 59 个成员
+ * 一整行算宽度，60 人时要求 11.8k px 的画布——那不是「放宽」，是画布失控。
  * 单人/单成员时不提要求，保持既有画布宽度（既有宽度断言也不受影响）。
  */
 export function formationRequiredWidth(memberCount: number): number {
   // lead 独占一行，不参与成员排；只有成员排会横向撑开。
   const workers = Math.max(0, memberCount - 1);
   if (workers <= 1) return 0;
-  return Math.ceil((workers - 1) * MEMBER_PITCH + MEMBER_SLOT_WIDTH + FORMATION_SIDE_PADDING);
+  const inRow = Math.min(workers, MAX_MEMBERS_PER_ROW);
+  return Math.ceil((inRow - 1) * MEMBER_PITCH + MEMBER_SLOT_WIDTH + FORMATION_SIDE_PADDING);
 }
 
 /** 调色板名 → 强调色 class（真实取值在 native-theme.css 的 --formation-accent）。 */
@@ -352,12 +354,12 @@ export const FormationBand = memo(function FormationBand({
   const runningByMember = useMemo(() => runningTicketsByMember(snapshot), [snapshot]);
   const teamRunning = useMemo(() => runningAssignmentCount(snapshot.tickets), [snapshot.tickets]);
 
-  const orderedWorkers = useMemo(() => {
-    if (sortMode === "joined") return layout.workers;
-    const sorted = sortWorkersByUrgency(layout.workers);
-    const startX = layout.bus.firstWorkerX ?? 0;
-    return sorted.map((node, index) => ({ ...node, centerX: startX + index * MEMBER_PITCH }));
-  }, [layout, sortMode]);
+  const orderedRows = useMemo<FormationRow[]>(() => {
+    if (sortMode === "joined") return layout.rows;
+    // 重排只换顺序，几何仍走同一套换行口径（行宽、每行上限、居中一致）。
+    return arrangeFormationRows(sortWorkersByUrgency(layout.workers), width);
+  }, [layout, sortMode, width]);
+  const orderedWorkers = useMemo(() => orderedRows.flatMap((row) => row.members), [orderedRows]);
 
   // useCallback：MemberCard 是 memo 的，回调一旦每次新建就整排失效。
   const handleSelect = useCallback((node: FormationMember) => {
@@ -366,17 +368,35 @@ export const FormationBand = memo(function FormationBand({
 
   const { lead, bus } = layout;
   const hasWorkers = orderedWorkers.length > 0;
+  // 分行后编队带会变高（任务泳道随之下移，见 TaskBoardCanvas 的 formationBandBottom）。
+  const bandBottom = layout.bottom;
 
   // 飞线只认当前显示位置：成员按紧急度重排后，路线必须跟着卡片走。
+  // 每张卡带上自己那一行的竖直几何（分行后第 2 行起整体下移，飞线不能还用首行坐标）。
   const flightNodes = useMemo<FlightNode[]>(() => [
-    ...(lead ? [{ id: lead.member.id, name: lead.member.name, centerX: lead.centerX, isLead: true }] : []),
-    ...orderedWorkers.map((node) => ({
+    ...(lead
+      ? [{
+        id: lead.member.id,
+        name: lead.member.name,
+        centerX: lead.centerX,
+        isLead: true,
+        top: lead.top,
+        foot: LEAD_FOOT,
+        busY: orderedRows[0]?.busY,
+        peerBusY: orderedRows.length > 0 ? orderedRows[orderedRows.length - 1].peerBusY : undefined,
+      }]
+      : []),
+    ...orderedRows.flatMap((row) => row.members.map((node) => ({
       id: node.member.id,
       name: node.member.name,
       centerX: node.centerX,
       isLead: false,
-    })),
-  ], [lead, orderedWorkers]);
+      top: node.top,
+      foot: row.foot,
+      busY: row.busY,
+      peerBusY: row.peerBusY,
+    }))),
+  ], [lead, orderedRows]);
   const activeMessage = activeMessageId
     ? (snapshot.messages ?? []).find((message) => message.id === activeMessageId)
     : undefined;
@@ -398,9 +418,10 @@ export const FormationBand = memo(function FormationBand({
   return (
     <div
       className="agent-teams-formation"
-      style={{ width, height: FORMATION_BOTTOM }}
+      style={{ width, height: bandBottom }}
       data-testid="agent-teams-formation"
       data-members={snapshot.members.length}
+      data-rows={orderedRows.length}
       data-running-assignments={teamRunning}
     >
       <span
@@ -430,44 +451,71 @@ export const FormationBand = memo(function FormationBand({
         </button>
       )}
 
-      <svg className="agent-teams-formation-buses" width={width} height={FORMATION_BOTTOM} aria-hidden="true">
-        {lead && hasWorkers && bus.leadX !== null && (
+      <svg className="agent-teams-formation-buses" width={width} height={bandBottom} aria-hidden="true">
+        {/* 队长总线：垂到首行行总线，再把首行成员串起来（行总线在卡片顶边上方，
+            首行正好落在既有的 LEAD_BUS_Y 高度上）。 */}
+        {lead && hasWorkers && bus.leadX !== null && orderedRows[0] && (
           <g data-channel="lead">
-            <path className="agent-teams-formation-bus" d={`M ${bus.leadX} ${LEAD_FOOT} L ${bus.leadX} ${LEAD_BUS_Y}`} />
+            <path className="agent-teams-formation-bus" d={`M ${bus.leadX} ${LEAD_FOOT} L ${bus.leadX} ${orderedRows[0].busY}`} />
             <path
               className="agent-teams-formation-bus"
-              d={`M ${bus.firstWorkerX} ${LEAD_BUS_Y} L ${bus.lastWorkerX} ${LEAD_BUS_Y}`}
+              d={`M ${orderedRows[0].firstX} ${orderedRows[0].busY} L ${orderedRows[0].lastX} ${orderedRows[0].busY}`}
             />
-            {orderedWorkers.map((node) => (
+            {orderedRows[0].members.map((node) => (
               <path
                 key={node.member.id}
                 className="agent-teams-formation-bus"
-                d={`M ${node.centerX} ${LEAD_BUS_Y} L ${node.centerX} ${MEMBER_TOP}`}
+                d={`M ${node.centerX} ${orderedRows[0].busY} L ${node.centerX} ${node.top}`}
               />
             ))}
           </g>
         )}
-        {orderedWorkers.length === 1 && bus.firstWorkerX !== null && (
+        {/* 第 2 行起：从上一行 peer 总线接到本行行总线（腰线折两下，居中对称）。 */}
+        {orderedRows.slice(1).map((row, offset) => {
+          const previous = orderedRows[offset];
+          if (!previous || row.centerX === null || previous.centerX === null) return null;
+          const linkY = (previous.peerBusY + row.busY) / 2;
+          return (
+            <g key={`row-link-${row.index}`} data-channel="row-link" data-row={row.index}>
+              <path
+                className="agent-teams-formation-bus"
+                d={`M ${previous.centerX} ${previous.peerBusY} L ${previous.centerX} ${linkY} L ${row.centerX} ${linkY} L ${row.centerX} ${row.busY}`}
+              />
+              <path className="agent-teams-formation-bus" d={`M ${row.firstX} ${row.busY} L ${row.lastX} ${row.busY}`} />
+              {row.members.map((node) => (
+                <path
+                  key={node.member.id}
+                  className="agent-teams-formation-bus"
+                  d={`M ${node.centerX} ${row.busY} L ${node.centerX} ${node.top}`}
+                />
+              ))}
+            </g>
+          );
+        })}
+        {/* peer 总线：每行一支（单成员行退化成一根竖线，与旧行为一致）。 */}
+        {orderedRows.map((row) => (row.members.length === 1 ? (
           <path
+            key={`peer-${row.index}`}
+            data-channel="peer"
+            data-row={row.index}
             className="agent-teams-formation-bus"
-            d={`M ${bus.firstWorkerX} ${MEMBER_FOOT} L ${bus.firstWorkerX} ${PEER_BUS_Y}`}
+            d={`M ${row.members[0].centerX} ${row.foot} L ${row.members[0].centerX} ${row.peerBusY}`}
           />
-        )}
-        {orderedWorkers.length > 1 && bus.firstWorkerX !== null && bus.lastWorkerX !== null && (
-          <g data-channel="peer">
+        ) : (
+          <g key={`peer-${row.index}`} data-channel="peer" data-row={row.index}>
             <path
               className="agent-teams-formation-bus"
-              d={`M ${bus.firstWorkerX} ${MEMBER_FOOT} L ${bus.firstWorkerX} ${PEER_BUS_Y} L ${bus.lastWorkerX} ${PEER_BUS_Y} L ${bus.lastWorkerX} ${MEMBER_FOOT}`}
+              d={`M ${row.firstX} ${row.foot} L ${row.firstX} ${row.peerBusY} L ${row.lastX} ${row.peerBusY} L ${row.lastX} ${row.foot}`}
             />
-            {orderedWorkers.slice(1, -1).map((node) => (
+            {row.members.slice(1, -1).map((node) => (
               <path
                 key={node.member.id}
                 className="agent-teams-formation-bus"
-                d={`M ${node.centerX} ${MEMBER_FOOT} L ${node.centerX} ${PEER_BUS_Y}`}
+                d={`M ${node.centerX} ${row.foot} L ${node.centerX} ${row.peerBusY}`}
               />
             ))}
           </g>
-        )}
+        )))}
         {flights.map((flight) => (
           <path
             key={flight.key}

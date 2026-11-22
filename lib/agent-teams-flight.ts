@@ -23,6 +23,19 @@ export interface FlightNode {
   /** 成员卡的水平中心（编队布局给出）。 */
   centerX: number;
   isLead: boolean;
+  /**
+   * 卡片/总线的竖直几何（分行布局给出）。缺省时回落到单行时代的常量：
+   * 老调用方与既有单测不传也不会变。
+   *
+   * 为什么节点要带几何：编队带分行后，第 2 行起的卡片与总线整体下移；飞线若还用
+   * 首行的 MEMBER_TOP / PEER_BUS_Y，就会画到空白处（线头对不上卡片）。
+   */
+  top?: number;
+  foot?: number;
+  /** 该行行总线 y（lead 总线横向段走这里）。 */
+  busY?: number;
+  /** 该行 peer 总线 y。 */
+  peerBusY?: number;
 }
 
 export type FlightTone = "assignment" | "report" | "peer" | "system";
@@ -84,11 +97,14 @@ function leadFlight(
   lead: FlightNode,
 ): FormationFlight {
   const worker = sender.isLead ? recipient : sender;
+  // 横向段走**收/发成员所在行**的行总线（首行仍是 LEAD_BUS_Y）。
+  const busY = worker.busY ?? LEAD_BUS_Y;
+  const workerTop = worker.top ?? MEMBER_TOP;
   const leadToWorker: Array<[number, number]> = [
     [lead.centerX, LEAD_FOOT],
-    [lead.centerX, LEAD_BUS_Y],
-    [worker.centerX, LEAD_BUS_Y],
-    [worker.centerX, MEMBER_TOP],
+    [lead.centerX, busY],
+    [worker.centerX, busY],
+    [worker.centerX, workerTop],
   ];
   const points = sender.isLead ? leadToWorker : leadToWorker.slice().reverse();
   const tone = toneOf(message, sender, recipient);
@@ -99,26 +115,30 @@ function leadFlight(
     labelKey: labelKeyOf(tone),
     d: polyline(points),
     chipX: (lead.centerX + worker.centerX) / 2,
-    chipY: LEAD_BUS_Y - 10,
+    chipY: busY - 10,
   };
 }
 
-/** 成员 ↔ 成员：同一条 peer bus。 */
+/** 成员 ↔ 成员：同一条 peer bus（跨行时各走各行的 peer 总线，腰线自然折过去）。 */
 function peerFlight(message: WorkbenchMessage, sender: FlightNode, recipient: FlightNode): FormationFlight {
   const tone = toneOf(message, sender, recipient);
+  const senderFoot = sender.foot ?? MEMBER_FOOT;
+  const recipientFoot = recipient.foot ?? MEMBER_FOOT;
+  const senderBus = sender.peerBusY ?? PEER_BUS_Y;
+  const recipientBus = recipient.peerBusY ?? PEER_BUS_Y;
   return {
     key: `${message.id}:peer:${sender.id}->${recipient.id}`,
     channel: "peer",
     tone,
     labelKey: labelKeyOf(tone),
     d: polyline([
-      [sender.centerX, MEMBER_FOOT],
-      [sender.centerX, PEER_BUS_Y],
-      [recipient.centerX, PEER_BUS_Y],
-      [recipient.centerX, MEMBER_FOOT],
+      [sender.centerX, senderFoot],
+      [sender.centerX, senderBus],
+      [recipient.centerX, recipientBus],
+      [recipient.centerX, recipientFoot],
     ]),
     chipX: (sender.centerX + recipient.centerX) / 2,
-    chipY: PEER_BUS_Y - 10,
+    chipY: Math.min(senderBus, recipientBus) - 10,
   };
 }
 

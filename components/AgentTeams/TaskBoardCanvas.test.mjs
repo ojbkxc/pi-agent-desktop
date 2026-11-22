@@ -291,7 +291,8 @@ test("重复依赖只画一条连线（重复 key 会重复渲染 path 并触发
 test("成员很多时画布放宽：编队带不再被任务画布裁掉", () => {
   const members = Array.from({ length: 60 }, (_, index) => ({ id: `m${index}`, name: `m${index}` }));
   const needed = formationRequiredWidth(60);
-  assert.ok(needed > 900, "60 个成员需要的宽度远超容器宽");
+  assert.ok(needed > 900, "60 个成员需要的宽度仍是容器宽的 1.7 倍以上");
+  assert.ok(needed < 2000, "分行后不再要求 11.8k px 的画布宽度");
   const html = renderToStaticMarkup(React.createElement(
     I18nProvider,
     { initialLocale: "en" },
@@ -303,6 +304,31 @@ test("成员很多时画布放宽：编队带不再被任务画布裁掉", () =>
   ));
   assert.match(html, new RegExp(`w=${needed}`), "编队带拿到的是放宽后的画布宽度");
   assert.match(html, new RegExp(`min-width:${needed}px`), "画布本身也放宽到该宽度");
+});
+
+test("成员多到要分行时任务泳道整体下移（否则第二行成员压在任务卡上）", async () => {
+  const { formationBandBottom, formationRowCount, membersPerRow } =
+    await jiti.import("@/lib/agent-teams-formation-layout.ts");
+  const members = Array.from({ length: 30 }, (_, index) => ({ id: `m${index}`, name: `m${index}` }));
+  // 30 人 = lead + 29 个成员；画布宽 = max(任务宽, 编队带要求宽)。
+  const canvasWidth = Math.max(900, formationRequiredWidth(30));
+  const rows = formationRowCount(29, canvasWidth);
+  assert.ok(rows > 1, "30 个成员确实会分行");
+  assert.equal(membersPerRow(canvasWidth), 8, "画布够宽时一行放满单行上限");
+  const expectedOffset = formationBandBottom(rows) - 410;
+  assert.ok(expectedOffset > 0);
+
+  const html = renderToStaticMarkup(React.createElement(
+    I18nProvider,
+    { initialLocale: "en" },
+    React.createElement(TaskBoardCanvas, {
+      snapshot: snapshot([ticket("t1")], members),
+      requestedWidth: 900,
+      formation: (width) => React.createElement("div", { className: "test-formation" }, `w=${width}`),
+    }),
+  ));
+  assert.match(html, new RegExp(`transform="translate\\(0 ${expectedOffset}\\)"`), "泳道底板与依赖连线整体下移");
+  assert.match(html, new RegExp(`top:${442 + expectedOffset}px`), "任务卡位置同样下移（不落在成员卡下面）");
 });
 
 test("成员很少时画布宽度不变（既有宽度断言口径保持）", () => {
@@ -317,4 +343,6 @@ test("成员很少时画布宽度不变（既有宽度断言口径保持）", ()
   ));
   assert.match(html, /w=900/);
   assert.match(html, /min-width:900px/);
+  // 单行成员不需要下移（既有几何零变化）。
+  assert.doesNotMatch(html, /transform="translate\(0 /);
 });

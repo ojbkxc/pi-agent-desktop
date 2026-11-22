@@ -91,7 +91,10 @@ test("收缩态：真实渲染出团队名 + 状态 + 成员数 + Review 按钮�
   assert.match(html, /demo/, "团队名");
   assert.match(html, /Team plan/, "标题文案");
   assert.match(html, /Awaiting review/, "状态徽标文案");
-  assert.match(html, /1 members/, "成员数（count=1）");
+  // 单数形态（1 个成员必须说 "1 member"）：复数选择在 lib/i18n/format.ts 的插值层，
+  // 消息侧声明 `{plural(count):member:members}`，见 lib/i18n/plural.test.mjs。
+  assert.match(html, /1 member\b/, "成员数（count=1 取单数）");
+  assert.doesNotMatch(html, /1 members\b/, "1 个成员不得显示复数");
   assert.match(html, /Review configuration/, "Review 按钮文案");
   // 反向：不得把 i18n 键原文漏到界面（key 被删也会在这里暴露）
   assert.doesNotMatch(html, /teams\.plan\./, "不应渲染 i18n 键原文");
