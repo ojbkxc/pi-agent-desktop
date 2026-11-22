@@ -80,6 +80,18 @@ export function interpretLifecycleOutcome(
   return { tone: "success", messageKey: "teams.lifecycle.stopDone", params: { count: stopped, already }, failed };
 }
 
+/**
+ * 这次操作是否「真的生效」。
+ *
+ * 为什么不能再用 `response.ok && payload.ok`：reclaim 的三种结局里只有
+ * `ok && removed===true` 表示团队目录真的没了。路由用 200 + `ok:true` 回
+ * `removed:false`（有成员停不下来）是正常契约，以前这里照样 onDone → 父级刷新名册、
+ * 把选中团队回落掉，用户看着团队「消失了」，实际目录还在，而且界面上再也点不到它。
+ */
+export function isLifecycleSettled(outcome: LifecycleOutcome): boolean {
+  return outcome.tone === "success";
+}
+
 /** 结论渲染：success / warning / error 三档，failed 成员单列并带原因。 */
 export function LifecycleOutcomeMessage({ outcome }: { outcome: LifecycleOutcome }) {
   const { t } = useI18n();
@@ -89,6 +101,7 @@ export function LifecycleOutcomeMessage({ outcome }: { outcome: LifecycleOutcome
       className={`team-lifecycle-outcome team-lifecycle-outcome--${outcome.tone}`}
       data-tone={outcome.tone}
       role={outcome.tone === "error" ? "alert" : "status"}
+      aria-live={outcome.tone === "error" ? "assertive" : "polite"}
     >
       <p className="team-lifecycle-outcome-message">
         {t(outcome.messageKey, {
@@ -99,7 +112,9 @@ export function LifecycleOutcomeMessage({ outcome }: { outcome: LifecycleOutcome
       {outcome.failed.length > 0 && (
         <ul className="team-lifecycle-outcome-failed">
           {outcome.failed.map((item) => (
-            <li key={item.name}>{t("teams.lifecycle.memberFailed", { name: item.name, reason: item.reason || reason })}</li>
+            <li key={item.name} style={{ overflowWrap: "anywhere" }}>
+              {t("teams.lifecycle.memberFailed", { name: item.name, reason: item.reason || reason })}
+            </li>
           ))}
         </ul>
       )}
@@ -140,11 +155,14 @@ export function ReclaimConfirm({
       ? null
       : document.activeElement as HTMLElement | null;
     cancelRef.current?.focus({ preventScroll: true });
+    // 清理时 confirmRef.current 已被 React 置空，必须在挂载期把节点抓在闭包里，
+    // 否则「焦点是否还在面板内」永远判成 false，会抢走用户已经移到别处的焦点。
+    const panel = confirmRef.current;
     return () => {
       const opener = openerRef.current;
       if (!opener || !opener.isConnected) return;
       const active = typeof document === "undefined" ? null : document.activeElement;
-      if (active === null || active === document.body || confirmRef.current?.contains(active)) {
+      if (active === null || active === document.body || panel?.contains(active)) {
         opener.focus({ preventScroll: true });
       }
     };
@@ -188,9 +206,10 @@ export interface TeamLifecycleActionsProps {
   /** 展示名（config.json 的 team.name）。 */
   displayName: string;
   memberCount: number;
-  /** 操作成功（response.ok 且 ok===true）后回调：携带操作目录名与动作。
-   *  回收（reclaim）后团队目录已删除，父级据此刷新名册并回落选中；停止（stop）
-   *  团队仍在，父级只需刷新名册。 */
+  /** 操作**真的生效**（`interpretLifecycleOutcome` 的 tone 为 success）后回调：
+   *  携带操作目录名与动作。回收（reclaim）后团队目录已删除，父级据此刷新名册并回落
+   *  选中；停止（stop）团队仍在，父级只需刷新名册。注意：200 + ok + removed:false
+   *  不算生效（目录还在），绝不通知父级。 */
   onDone?: (team: string, action: LifecycleAction) => void;
 }
 
@@ -204,11 +223,21 @@ export function TeamLifecycleActions({ team, displayName, memberCount, onDone }:
   const [confirming, setConfirming] = useState(false);
   const [outcome, setOutcome] = useState<LifecycleOutcome | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  // 在途闸用 ref 而不是只看 state：连点两下 / 回车 + 点击会在同一个 tick 内看到
+  // 还没生效的 busy=false，从而发出两条生命周期请求（stop 与 reclaim 并发跑尤其危险）。
+  const busyRef = useRef(false);
+  const aliveRef = useRef(true);
+  useEffect(() => () => { aliveRef.current = false; }, []);
 
   const run = async (action: LifecycleAction) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(action);
     setFailure(null);
     setOutcome(null);
+    // 回收失败（未被删除）时保留确认区：它和「回收」按钮是同一个决策点，
+    // 收起后用户要再点一次才能重试，而 warning 已经解释了为什么没删掉。
+    let keepConfirm = false;
     try {
       const response = await fetch(`/api/teams/${encodeURIComponent(team)}/lifecycle`, {
         method: "POST",
@@ -216,6 +245,7 @@ export function TeamLifecycleActions({ team, displayName, memberCount, onDone }:
         body: JSON.stringify({ action }),
       });
       const payload = await response.json().catch(() => null) as (LifecycleResponse & { error?: string }) | null;
+      if (!aliveRef.current) return;
       // 契约：失败也以 409 带回结构化的 ok/removed/results（逐条如实），不能当成传输错误丢掉。
       const structured = Boolean(payload) && (typeof payload!.ok === "boolean" || Array.isArray(payload!.results));
       if (!structured) {
@@ -224,20 +254,27 @@ export function TeamLifecycleActions({ team, displayName, memberCount, onDone }:
         }));
         return;
       }
-      setOutcome(interpretLifecycleOutcome(action, payload));
-      if (response.ok && payload!.ok === true) onDone?.(team, action);
+      const interpreted = interpretLifecycleOutcome(action, payload);
+      setOutcome(interpreted);
+      keepConfirm = action === "reclaim" && !isLifecycleSettled(interpreted);
+      // 只有真的生效才通知父级（见 isLifecycleSettled 的注释）。
+      if (isLifecycleSettled(interpreted)) onDone?.(team, action);
     } catch (err) {
+      if (!aliveRef.current) return;
       setFailure(t("teams.lifecycle.requestFailed", {
         message: err instanceof Error ? err.message : String(err),
       }));
     } finally {
-      setBusy(null);
-      setConfirming(false);
+      busyRef.current = false;
+      if (aliveRef.current) {
+        setBusy(null);
+        if (!keepConfirm) setConfirming(false);
+      }
     }
   };
 
   return (
-    <div className="team-lifecycle-actions">
+    <div className="team-lifecycle-actions" aria-busy={busy !== null}>
       <div className="team-lifecycle-buttons">
         <button
           type="button"
@@ -253,6 +290,7 @@ export function TeamLifecycleActions({ team, displayName, memberCount, onDone }:
           className="team-lifecycle-reclaim"
           title={t("teams.lifecycle.reclaimHint")}
           disabled={busy !== null}
+          aria-expanded={confirming}
           onClick={() => setConfirming(true)}
         >
           {t("teams.lifecycle.reclaim")}

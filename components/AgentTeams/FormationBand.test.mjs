@@ -6,7 +6,12 @@ const jiti = createJiti(import.meta.url, {
   jsx: { runtime: "automatic" },
   tsconfigPaths: true,
 });
-const { FormationBand } = await jiti.import("./FormationBand.tsx");
+const {
+  FormationBand,
+  formationRequiredWidth,
+  runningAssignmentCount,
+  runningTicketsByMember,
+} = await jiti.import("./FormationBand.tsx");
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
@@ -206,4 +211,90 @@ test("activeMessageId：消息沿编队总线飞过，带本地化标签", () =>
 test("没有活动消息时不画飞线", () => {
   const html = render(snapshot([LEAD, member("w1")]));
   assert.doesNotMatch(html, /agent-teams-formation-flight/);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 本轮修复：并发可视化（成员同时跑多张票不得被折叠成一张）+ 多人布局宽度。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 一条 running 派活（并发口径只认 status=running + memberId）。 */
+const running = (id, memberId = "w1") => ({
+  id,
+  status: "running",
+  memberId,
+  assignee: memberId,
+  sessionId: null,
+  startedAt: null,
+  lastActivityAt: null,
+  result: null,
+  outcome: null,
+});
+
+/** 取某张成员卡的属性片段（到下一个 > 为止）。 */
+function memberTag(html, id) {
+  const start = html.indexOf(`data-member-id="${id}"`);
+  assert.ok(start >= 0, `找到成员卡 ${id}`);
+  const open = html.lastIndexOf("<", start);
+  const close = html.indexOf(">", start);
+  return html.slice(open, close + 1);
+}
+
+test("formationRequiredWidth：成员排实际需要的画布宽度（单人/单成员不提要求）", () => {
+  assert.equal(formationRequiredWidth(0), 0);
+  assert.equal(formationRequiredWidth(1), 0, "只有 lead：任意宽度都放得下");
+  assert.equal(formationRequiredWidth(2), 0, "1 个成员：居中即可");
+  // 3 人 = lead + 2 个成员：两个成员中心相距一个 PITCH，再加一张卡宽与左右留白。
+  assert.equal(formationRequiredWidth(3), 200 + 176 + 32);
+  // 60 人：59 个成员按 MEMBER_PITCH 排开，任务画布必须放宽到这个宽度，
+  // 否则成员卡会被画布右缘裁掉（「多派成员」在界面上看不到人）。
+  assert.equal(formationRequiredWidth(60), 58 * 200 + 176 + 32);
+});
+
+test("runningTicketsByMember / runningAssignmentCount：成员同时跑多张票（并发不被折叠）", () => {
+  const snap = snapshot(
+    [LEAD, member("w1", { status: "running" })],
+    [
+      ticket("t1", { assignments: [running("a1")] }),
+      // 同一张票两条 running 派活：票只算一次（票是并发的单位）。
+      ticket("t2", { assignments: [running("a2"), running("a3")] }),
+      // pending 不算在跑。
+      ticket("t3", { assignments: [{ ...running("a4"), status: "pending" }] }),
+      // 未落在名册上的派活：仍按 memberId 归组（memberId 为 null 才丢弃），
+      // 只是不会有卡片渲染它；全队并发数照算。
+      ticket("t4", { assignments: [running("a5", "ghost")] }),
+    ],
+  );
+  const byMember = runningTicketsByMember(snap);
+  assert.deepEqual(byMember.get("w1"), ["t1", "t2"]);
+  assert.deepEqual(byMember.get("ghost"), ["t4"], "只按 memberId 归组，是否有名册成员由卡片层决定");
+  assert.equal(runningAssignmentCount(snap.tickets), 4, "三条 running 在名册成员 + 一条 orphan");
+
+  const html = render(snap);
+  assert.equal(memberTag(html, "w1").includes('data-concurrent-tickets="2"'), true, "卡上如实给出 2 张在跑");
+  assert.match(html, /×2/, "并发数直接写在任务行上，而不是只画第一张");
+  assert.equal(memberTag(html, "lead").includes('data-concurrent-tickets="0"'), true);
+  // 全队并发读数：标题旁的「N 项进行中」。
+  assert.match(html, /data-testid="agent-teams-formation-running"/);
+  assert.match(html, /4 running/);
+  assert.equal(memberTag(html, "w1").includes('data-current-ticket="t1"'), true, "当前票仍是最近活动的那张");
+});
+
+test("单张在跑时不加 ×N（保持既有单任务口径）", () => {
+  const html = render(snapshot(
+    [LEAD, member("w1", { status: "running" })],
+    [ticket("t1", { assignments: [running("a1")] })],
+  ));
+  const tag = memberTag(html, "w1");
+  assert.equal(tag.includes('data-concurrent-tickets="1"'), true);
+  assert.doesNotMatch(html, /×1/);
+  assert.match(html, /Working on #t1/);
+});
+
+test("长成员名不撑破卡片：名字节点带 title 与折行护栏", () => {
+  const longName = "worker-" + "x".repeat(80);
+  const html = render(snapshot([LEAD, member(longName)]));
+  const nameIndex = html.indexOf(longName);
+  assert.ok(nameIndex > 0, "全名仍在 DOM 里（title）");
+  assert.match(html, /overflow-wrap:anywhere/, "flex 子项给折行护栏");
+  assert.match(html, /min-width:0/, "flex 子项必须能收缩，ellipsis 才生效");
 });

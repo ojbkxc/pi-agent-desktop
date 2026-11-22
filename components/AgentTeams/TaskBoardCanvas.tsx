@@ -15,6 +15,7 @@ import {
 import { dependencyChain } from "@/lib/agent-teams-dependency-focus";
 import { ticketProgress, ticketStalled } from "@/lib/agent-teams-task-progress";
 import type { TeamWorkbenchSnapshot, WorkbenchTicket } from "@/lib/agent-teams-swimlane";
+import { formationRequiredWidth } from "./FormationBand";
 
 /**
  * 任务卡片的视觉色调：引擎单一紧急度口径（failed 覆盖 completed）。
@@ -72,6 +73,34 @@ export function dependencyPath(
   return `M ${fromX} ${fromY} C ${middle} ${fromY}, ${middle} ${toY}, ${toX} ${toY}`;
 }
 
+/**
+ * 一张票上的并发派活（同一张票分给多个成员同时跑）。
+ *
+ * 为什么需要：票级 urgency / owner 只描述「这张票归谁、最紧急到什么程度」，一张票被
+ * 3 个成员并行拆解时，卡片看起来和单派活完全一样——并发被画成了串行。这里按 assignments
+ * 统计 running 条数与接手成员名，卡片上给一个如实计数（>1 才渲染）。
+ */
+export interface TicketConcurrency {
+  running: number;
+  assignees: string[];
+}
+
+/** 票 id → 并发派活信息（只含 running；orders 稳定按 assignments 顺序）。 */
+export function ticketConcurrency(tickets: WorkbenchTicket[]): Map<string, TicketConcurrency> {
+  const byTicket = new Map<string, TicketConcurrency>();
+  for (const ticket of tickets) {
+    let running = 0;
+    const assignees: string[] = [];
+    for (const assignment of ticket.assignments) {
+      if (assignment.status !== "running") continue;
+      running += 1;
+      if (assignment.assignee && !assignees.includes(assignment.assignee)) assignees.push(assignment.assignee);
+    }
+    if (running > 0) byTicket.set(ticket.id, { running, assignees });
+  }
+  return byTicket;
+}
+
 interface Props {
   snapshot: TeamWorkbenchSnapshot;
   /** 画布至少占满的宽度（容器宽 / 编队带自然宽）；缺省按任务自然宽。 */
@@ -112,6 +141,10 @@ const LEGEND_ITEMS: ReadonlyArray<{ key: string; labelKey: string }> = [
  * 共享任务列表画布（Agent Teams 页任务区）：上半区是编队带（formation 槽位），
  * 下半区按依赖深度分层，每层一条竖向泳道自左向右排列（根任务 → 中间层 → 收尾）。
  * 泳道底板与依赖连线画在同一个 SVG 里、且底板在连线之前，连线才不会被底板遮挡。
+ *
+ * 宽度口径：画布宽 = max(任务布局宽, 编队带需要的最小宽)。任务布局只看依赖列数，
+ * 成员多（20~60）时编队带会横向超出画布被裁掉——同一屏里「人多」和「任务多」必须
+ * 都能看全（见 FormationBand 的 formationRequiredWidth）。
  */
 export const TaskBoardCanvas = memo(function TaskBoardCanvas({
   snapshot,
@@ -134,6 +167,11 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
     () => layoutTeamWorkbenchTasks(snapshot, requestedWidth),
     [snapshot, requestedWidth],
   );
+  // 画布宽度：任务布局宽与编队带需要宽取大者（成员多时否则会把成员卡裁在画布外）。
+  const canvasWidth = useMemo(
+    () => Math.max(layout.width, formationRequiredWidth(snapshot.members.length)),
+    [layout.width, snapshot.members.length],
+  );
   const membersById = useMemo(
     () => new Map(snapshot.members.map((member) => [member.id, member.name])),
     [snapshot.members],
@@ -150,6 +188,8 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
       previousSnapshot.tickets.map((ticket) => [ticket.id, getTicketUrgency(ticket, byId)]),
     );
   }, [previousSnapshot]);
+  // 并发口径（同一张票多个成员同时跑）：一次算好，卡片渲染时直接查。
+  const concurrencyById = useMemo(() => ticketConcurrency(snapshot.tickets), [snapshot.tickets]);
 
   /** 卡片在链路里的状态：null=无 focus；true=链内；false=链外。 */
   const chainState = (ticketId: string): boolean | null => {
@@ -171,8 +211,8 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
     }
     return (
       <div className="agent-teams-board-scroll">
-        <div className="agent-teams-board" style={{ width: layout.width, minWidth: layout.width, height: layout.height }}>
-          {formation(layout.width)}
+        <div className="agent-teams-board" style={{ width: canvasWidth, minWidth: canvasWidth, height: layout.height }}>
+          {formation(canvasWidth)}
           <p
             className="scheduled-hint agent-teams-board-empty"
             style={{ position: "absolute", top: DEPTH_COLUMN_TOP + 8, left: HORIZONTAL_PADDING }}
@@ -186,18 +226,34 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
 
   const maxDepth = Math.max(0, ...layout.lanes.map((lane) => lane.depth));
   const positionedById = new Map(layout.tasks.map((task) => [task.ticket.id, task]));
-  const edges = layout.tasks.flatMap((to) => to.ticket.dependencies.flatMap((dependencyId) => {
-    const from = positionedById.get(dependencyId);
-    if (!from) return [];
-    const inChain = chain !== null && chain.has(dependencyId) && chain.has(to.ticket.id);
-    return [{
-      key: `${dependencyId}->${to.ticket.id}`,
-      path: dependencyPath(from, to),
-      satisfied: from.ticket.status === "ended",
-      chainActive: chain !== null && inChain,
-      chainDimmed: chain !== null && !inChain,
-    }];
-  }));
+  // 同一张票的 dependencies 可能重复（计划文件手写/common case）：去重后建边，
+  // 否则 React 会拿到重复 key（重复 SVG path + 控制台警告）。
+  const edges = layout.tasks.flatMap((to) => {
+    const seen = new Set<string>();
+    return to.ticket.dependencies.flatMap((dependencyId) => {
+      if (seen.has(dependencyId)) return [];
+      seen.add(dependencyId);
+      const from = positionedById.get(dependencyId);
+      if (!from) return [];
+      const inChain = chain !== null && chain.has(dependencyId) && chain.has(to.ticket.id);
+      return [{
+        key: `${dependencyId}->${to.ticket.id}`,
+        path: dependencyPath(from, to),
+        satisfied: from.ticket.status === "ended",
+        chainActive: chain !== null && inChain,
+        chainDimmed: chain !== null && !inChain,
+      }];
+    });
+  });
+  // 每层「已完成/总数」一次算好：以前每条泳道都 filter 全表（O(层×票)），
+  // 60 张票在快照节奏下每 2s 白算一遍。
+  const laneDone = new Map<number, { completed: number; total: number }>();
+  for (const task of layout.tasks) {
+    const entry = laneDone.get(task.depth) ?? { completed: 0, total: 0 };
+    entry.total += 1;
+    if (task.urgency === "completed") entry.completed += 1;
+    laneDone.set(task.depth, entry);
+  }
 
   return (
     <>
@@ -205,10 +261,10 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
         <p className="agent-teams-board-cycle-warning" role="status">{t("teams.cycleWarning")}</p>
       )}
       <div className="agent-teams-board-scroll">
-        <div className="agent-teams-board" style={{ width: layout.width, minWidth: layout.width, height: layout.height }}>
-          {formation?.(layout.width)}
+        <div className="agent-teams-board" style={{ width: canvasWidth, minWidth: canvasWidth, height: layout.height }}>
+          {formation?.(canvasWidth)}
 
-          <svg className="agent-teams-board-edges" width={layout.width} height={layout.height} aria-hidden="true">
+          <svg className="agent-teams-board-edges" width={canvasWidth} height={layout.height} aria-hidden="true">
             {/* 泳道底板画在依赖连线之前 —— 与上游一致，连线压在上面不会被遮住。 */}
             {layout.lanes.map((lane, index) => (
               <g key={`plate-${lane.depth}`} className="agent-teams-board-plate">
@@ -243,7 +299,8 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
           </svg>
 
           {layout.lanes.map((lane) => {
-            const completed = layout.tasks.filter((task) => task.depth === lane.depth && task.urgency === "completed").length;
+            const done = laneDone.get(lane.depth);
+            const completed = done?.completed ?? 0;
             const titleKey = laneTitleKey(lane.depth, maxDepth);
             return (
               <div
@@ -271,6 +328,7 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
             const progress = ticketProgress(ticket);
             const stalled = ticketStalled(ticket, snapshot.members);
             const inChain = chainState(ticket.id);
+            const concurrent = concurrencyById.get(ticket.id);
             // 上一帧 blocked、本帧 available → 刚解锁。
             const justUnlocked = urgencyBeforeById?.get(ticket.id) === "blocked"
               && urgencyNowById.get(ticket.id) === "available";
@@ -290,6 +348,7 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
                 data-chain-active={inChain ? "true" : undefined}
                 data-chain-dimmed={inChain === false ? "true" : undefined}
                 data-just-unlocked={justUnlocked ? "true" : undefined}
+                data-concurrent-running={concurrent && concurrent.running > 1 ? concurrent.running : undefined}
                 role={onSelectTask ? "button" : undefined}
                 tabIndex={onSelectTask ? 0 : undefined}
                 onClick={onSelectTask ? () => onSelectTask(ticket.id) : undefined}
@@ -317,7 +376,9 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
                   )}
                   <span className="agent-teams-board-task-dot" aria-hidden="true" />
                 </span>
-                <span className="agent-teams-board-task-subject" title={ticket.subject}>{ticket.subject}</span>
+                <span className="agent-teams-board-task-subject" title={ticket.subject} style={{ overflowWrap: "anywhere" }}>
+                  {ticket.subject}
+                </span>
                 {progress.mode !== "none" && (
                   <span
                     className="agent-teams-board-task-progress"
@@ -334,7 +395,22 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
                 )}
                 <span className="agent-teams-board-task-foot">
                   <span className="agent-teams-board-task-avatar" aria-hidden="true">{ownerName.slice(0, 1)}</span>
-                  <span className="agent-teams-board-task-owner">{ownerName}</span>
+                  {/* minWidth:0：flex 子项默认 min-width:auto，长成员名会顶破卡片右缘
+                      （已有 ellipsis 也需要它才生效）。 */}
+                  <span className="agent-teams-board-task-owner" style={{ minWidth: 0 }} title={ownerName}>
+                    {ownerName}
+                  </span>
+                  {/* 同一张票多个成员并行：如实给出「N 项进行中」，否则并发被画成串行。 */}
+                  {concurrent && concurrent.running > 1 && (
+                    <span
+                      className="agent-teams-board-task-deps"
+                      data-concurrent-running={concurrent.running}
+                      style={{ color: "var(--info)", borderColor: "var(--info)" }}
+                      title={concurrent.assignees.join(", ")}
+                    >
+                      {t("teams.workload.running", { count: concurrent.running })}
+                    </span>
+                  )}
                   {ticket.dependencies.length > 0 && (
                     <span
                       className="agent-teams-board-task-deps"

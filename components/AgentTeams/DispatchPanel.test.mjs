@@ -18,6 +18,13 @@ const {
   createRequestGate,
   pruneRowResults,
   MEMBER_NAME_PATTERN,
+  ADD_MEMBER_MAX_PER_REQUEST,
+  DISPATCH_MAX_CONCURRENCY,
+  chunkMemberNames,
+  mergeMemberReceipts,
+  newClientRequestId,
+  parseMemberNames,
+  runWithConcurrency,
 } = await jiti.import("./DispatchPanel.tsx");
 
 const source = (await import("node:fs")).readFileSync(new URL("./DispatchPanel.tsx", import.meta.url), "utf8");
@@ -209,15 +216,23 @@ test("源码钉法：在途禁双击、仅 failed 有重试、conflict 只有刷
   // 在途：执行按钮与重试按钮都受 inFlight 禁用。
   assert.match(source, /disabled=\{inFlight \|\| !toMember\}/);
   assert.match(source, /disabled=\{inFlight\}\s*\n\s*onClick=\{\(\) => void execute\(suggestion, toMember, result\.clientRequestId\)\}/);
-  // 单飞闸：execute 与 submitMembers 共用 inFlightRef，在途直接返回。
-  assert.match(source, /if \(!team \|\| !body \|\| inFlightRef\.current\) return;/);
-  assert.match(source, /if \(!team \|\| !MEMBER_NAME_PATTERN\.test\(addName\) \|\| inFlightRef\.current\) return;/);
+  // 在途闸（本轮修复：面板级单飞 → 逐行在途）：
+  // 同一行在途时不再发（防重复派活），但不同行之间不再互相阻塞——
+  // 旧的 `inFlightRef` 会让任一行在途时其他行的「确认/重试」静默 return，
+  // 20 条建议只能一条条串着点，正是「多派成员、多并发」被 UI 按死的地方。
+  assert.doesNotMatch(source, /inFlightRef/, "不得回退到面板级单飞闸");
+  assert.match(source, /if \(pendingRowsRef\.current\.has\(rowKey\)\) return;/, "同一行在途不再发");
+  assert.match(source, /if \(membersPendingRef\.current\) return;/, "加成员提交另有独立在途闸");
+  assert.match(source, /pendingRowsRef\.current\.add\(rowKey\);/, "在途记账");
+  assert.match(source, /pendingRowsRef\.current\.delete\(rowKey\);/, "落地即释放在途记账");
   // conflict 行只有「刷新」（重取代际），没有重试投递按钮。
   const conflictBlock = source.slice(source.indexOf('result.phase === "conflict"'), source.indexOf('result.phase === "failed"'));
   assert.match(conflictBlock, /teams\.dispatch\.refresh/);
   assert.doesNotMatch(conflictBlock, /teams\.dispatch\.retry/);
-  // failed 行有「重试投递」。
-  const failedBlock = source.slice(source.indexOf('result.phase === "failed"'), source.indexOf("agent-teams-dispatch-confirm"));
+  // failed 行有「重试投递」（截到**该行之后**的确认区；批量确认区在列表之前，
+  // 所以必须从 failed 分支的位置往后找，不能取文件里第一次出现的那个类名）。
+  const failedIndex = source.indexOf('result.phase === "failed"');
+  const failedBlock = source.slice(failedIndex, source.indexOf("agent-teams-dispatch-confirm", failedIndex));
   assert.match(failedBlock, /teams\.dispatch\.retry/);
   // skipped 落地只写 skipped 文案，整个响应处理里 skipped 不产生 failed 态。
   assert.match(source, /phase: "skipped", text: t\("teams\.dispatch\.skipped"\)/);
@@ -273,4 +288,138 @@ test("源码钉法：refresh 用 createRequestGate 自增序号 + 成功刷新�
   );
   assert.match(source, /setRowResults\(\(prev\) => pruneRowResults\(prev, data\.suggestions\)\);/,
     "成功刷新后按建议集合修剪行结果");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 本轮修复（并发派发 / 批量加成员 / 焦点与播报）：纯函数 + 源码哨兵。
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("parseMemberNames：逗号/顿号/分号/空白/换行任意分隔，按小写去重，非法名原样回显", () => {
+  const parsed = parseMemberNames("worker-one, worker-two、worker-three\nworker-four; w-5");
+  assert.deepEqual(parsed.names, ["worker-one", "worker-two", "worker-three", "worker-four", "w-5"]);
+  assert.deepEqual(parsed.duplicates, []);
+  assert.deepEqual(parsed.invalid, []);
+
+  // 大小写不同视为同一个名字：后端 route 按 toLowerCase 去重并静默丢弃重复项，
+  // 前端不去重就会出现「提交 3 个、只回执 2 条」的错位。
+  const dup = parseMemberNames("Worker-One worker-one WORKER-ONE");
+  assert.deepEqual(dup.names, ["Worker-One"]);
+  assert.deepEqual(dup.duplicates.slice().sort(), ["WORKER-ONE", "worker-one"]);
+
+  const bad = parseMemberNames("中文名 ok-name ,, 9lives");
+  assert.deepEqual(bad.names, ["ok-name", "9lives"]);
+  assert.deepEqual(bad.invalid, ["中文名"]);
+  assert.deepEqual(parseMemberNames("   ").names, []);
+});
+
+test("chunkMemberNames：按后端上限 8 切块，尾部不补齐，空输入不产生请求", () => {
+  const names = Array.from({ length: 20 }, (_, index) => `w${index}`);
+  const chunks = chunkMemberNames(names);
+  assert.equal(ADD_MEMBER_MAX_PER_REQUEST, 8, "与 POST /members 的 1..8 硬上限一致");
+  assert.deepEqual(chunks.map((chunk) => chunk.length), [8, 8, 4]);
+  assert.deepEqual(chunks.flat(), names, "切块不丢不改名");
+  assert.deepEqual(chunkMemberNames([]), []);
+  assert.deepEqual(chunkMemberNames(["a", "b", "c"], 2), [["a", "b"], ["c"]]);
+});
+
+test("runWithConcurrency：并发不超上限、单条抛错不中断其余、失败条目如实带回", async () => {
+  const items = Array.from({ length: 11 }, (_, index) => index);
+  const started = [];
+  let inFlight = 0;
+  let peak = 0;
+  const outcome = await runWithConcurrency(items, DISPATCH_MAX_CONCURRENCY, async (item) => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    started.push(item);
+    await new Promise((resolve) => setTimeout(resolve, 3));
+    inFlight -= 1;
+    if (item === 4) throw new Error("boom");
+  }, { gapMs: 1 });
+  assert.equal(started.length, items.length, "抛错不吞掉其余条目（Promise.all 式的整批中断必须避免）");
+  assert.ok(peak <= DISPATCH_MAX_CONCURRENCY, `在途数不超过上限（实测 ${peak}）`);
+  assert.deepEqual(outcome.failures.map((failure) => failure.index), [4], "失败条目按索引如实带回");
+
+  // 起点节流：串行 3 条 → 只有后两条需要等 gap。
+  const sleeps = [];
+  await runWithConcurrency([1, 2, 3], 1, async () => {}, {
+    gapMs: 50,
+    sleep: async (ms) => { sleeps.push(ms); },
+  });
+  assert.deepEqual(sleeps, [50, 50]);
+
+  // 空输入：一个请求都不发。
+  let calls = 0;
+  const empty = await runWithConcurrency([], 3, async () => { calls += 1; });
+  assert.equal(calls, 0);
+  assert.deepEqual(empty.failures, []);
+});
+
+test("newClientRequestId：randomUUID 缺失/抛错时仍有唯一 id（局域网 http 打开也能派发）", () => {
+  assert.equal(newClientRequestId(() => "uuid-1"), "uuid-1");
+  const fallback = newClientRequestId(() => { throw new Error("insecure context"); });
+  assert.match(fallback, /^req-[0-9a-f]+-[0-9a-f]+$/);
+  assert.match(newClientRequestId(() => ""), /^req-/, "空串也兜底");
+  const unique = new Set(Array.from({ length: 50 }, () => newClientRequestId(() => { throw new Error("x"); })));
+  assert.equal(unique.size, 50, "兜底 id 不重复（幂等 sidecar 靠它区分请求）");
+});
+
+test("mergeMemberReceipts：分块回执按名字累积，后到的块不冲掉先到的块", () => {
+  const merged = mergeMemberReceipts(
+    [{ name: "a", status: "spawned" }],
+    [{ name: "b", status: "failed", reason: "quota" }, { name: "a", status: "failed", reason: "dup" }],
+  );
+  const byName = new Map(merged.map((receipt) => [receipt.name, receipt]));
+  assert.equal(merged.length, 2);
+  assert.equal(byName.get("a").status, "failed", "同名后者覆盖前者（最后一次尝试为准）");
+  assert.equal(byName.get("b").status, "failed");
+});
+
+test("源码钉法：批量派发仍是两段式确认，确认后按并发池扇出、结果逐行落地", () => {
+  assert.match(source, /data-testid="agent-teams-dispatch-batch"/);
+  assert.match(source, /data-testid="agent-teams-dispatch-batch-confirm"/);
+  // 批量按钮只切换确认区，绝不直接发请求（硬边界：用户显式确认后才写）。
+  const batchIndex = source.indexOf('data-testid="agent-teams-dispatch-batch"');
+  const batchButton = source.slice(batchIndex, source.indexOf("{batchConfirming && batchTargets.length > 0", batchIndex));
+  assert.match(batchButton, /onClick=\{\(\) => setBatchConfirming/);
+  assert.doesNotMatch(batchButton, /fetch\(/);
+  // 扇出走同一个并发池 + 节流；每行结果仍由 executeOne 各自写 rowResults。
+  assert.match(source, /await runWithConcurrency\(\s*work,\s*DISPATCH_MAX_CONCURRENCY/);
+  assert.match(source, /const work = batchTargets;/);
+});
+
+test("源码钉法：批量加成员按 8 分块并发，单块失败不中断其余，回执合并显示", () => {
+  assert.match(source, /const chunks = chunkMemberNames\(parsedNow\.names\);/);
+  assert.match(source, /await runWithConcurrency\(chunks, ADD_MEMBER_MAX_CONCURRENCY/);
+  assert.match(source, /mergeMemberReceipts\(prev \?\? \[\], results\)/, "逐块回执合并");
+  // 单块异常只标该块成员为失败（不整批失败、不丢掉别的块）。
+  assert.match(source, /chunk\.map\(\(name\) => \(\{ name, status: "failed", reason: message \}\)\)/);
+  // 服务端没给回执的成员也要落一条失败，不能从结果区消失。
+  assert.match(source, /const missing = chunk\.filter\(\(name\) => !covered\.has\(name\)\);/);
+});
+
+test("源码钉法：刷新失败保留上一份建议（本地在途/回执不被瞬时失败抹掉）", () => {
+  const catchStart = source.indexOf("} catch (error) {");
+  const catchBlock = source.slice(catchStart, source.indexOf("} finally {", catchStart));
+  assert.match(catchBlock, /setLoadError\(/, "仍在面板内降级");
+  assert.doesNotMatch(catchBlock, /setWorkload\(null\)/, "失败不再清空建议列表（否则空态文案会撒谎）");
+  assert.match(catchBlock, /setLoadError\(error instanceof Error \? error\.message : String\(error\)\);/);
+});
+
+test("源码钉法：切团队清空上一队建议（防止把 A 队建议投到 B 队）", () => {
+  const effectBlock = source.slice(source.indexOf("// 切团队必须清空"), source.indexOf("const refresh = useCallback"));
+  assert.match(effectBlock, /\}, \[team\]\);/);
+  assert.match(effectBlock, /setWorkload\(null\);/);
+  assert.match(effectBlock, /setRowResults\(\{\}\);/);
+  assert.match(effectBlock, /pendingRowsRef\.current\.clear\(\);/);
+});
+
+test("源码钉法：异步结果可播报可聚焦，确认区展开/收起不把焦点丢到 body", () => {
+  assert.match(source, /aria-live="polite"/, "逐行结果对读屏可播报");
+  assert.match(source, /role="status"/);
+  assert.match(source, /tabIndex=\{-1\}/, "结果节点可被程序聚焦");
+  assert.match(source, /setFocusRequest\(\{ key: rowKey, target: "confirm"/, "展开确认区 → 焦点进确认按钮");
+  assert.match(source, /setFocusRequest\(\{ key: rowKey, target: "execute"/, "收起确认区 → 焦点回执行按钮");
+  assert.match(source, /setFocusRequest\(\{ key: rowKey, target: "result"/, "派发落地 → 焦点到结果");
+  // 内联确认区的 Esc 不得冒泡到全局「Esc 停止运行中的 agent」。
+  assert.match(source, /event\.stopPropagation\(\);\s*\n\s*event\.preventDefault\(\);\s*\n\s*setBatchConfirming\(false\)/);
 });
