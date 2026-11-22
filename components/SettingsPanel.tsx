@@ -40,6 +40,7 @@ import { McpConfig } from "./McpConfig";
 import { ConfigButton, ConfigSwitch } from "./SettingsUi";
 import { ConfirmDangerButton } from "./ConfirmDangerButton";
 import { AgentGuideSettingRow, ArtifactsSettingRow, AutoTitleSettingRow } from "./ArtifactsSettingRow";
+import { FastModeSettingRow } from "./FastModeSettingRow";
 import { AgentTeamsSettingRow } from "./AgentTeamsSettingRow";
 import { LeanModeSettingRow } from "./LeanModeSettingRow";
 import { AutopilotSettingRow } from "./AutopilotSettingRow";
@@ -341,6 +342,7 @@ function GeneralSettings({
               <AutopilotSettingRow />
               <ArtifactsSettingRow />
               <AgentGuideSettingRow />
+              <FastModeSettingRow />
               <AutoTitleSettingRow />
             </div>
           </section>

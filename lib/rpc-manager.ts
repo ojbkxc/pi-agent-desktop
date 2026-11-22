@@ -74,6 +74,7 @@ import { additionalForkSkillPaths } from "./fork-skill-paths";
 import { createExactSystemPromptExtension } from "./exact-system-prompt";
 import { createArtifactGuideExtension } from "./artifact-guide-extension";
 import { createAgentGuideExtension } from "./agent-guide-extension";
+import { createFastModeExtension } from "./fast-mode/extension";
 import { createPurgeExtension } from "./purge/extension";
 // v0.8.2 压缩策略：会话级阈值包装（SettingsManager Proxy）与 session_before_compact 执行扩展。
 // 两处必须与 lib/subagent-runtime.ts 的成员新建路径装配同一套，见 lib/compaction-wiring.test.mjs。
@@ -3672,6 +3673,9 @@ export async function startRpcSession(
                 createArtifactGuideExtension(),
                 createAgentGuideExtension(),
                 createCompactionModelExtension(),
+                // 快速模式：只加 `sections.fast_mode`，不加工具、不放宽聊天策略，所以
+                // chat-only 与解锁聊天都按同一份配置走；必须排在下面的 purge 之前。
+                createFastModeExtension(),
                 // A chat with a folder saves into it; only a legacy chat still saves to Downloads.
                 ...(chatGrants && !chatFolder
                   ? [createChatDownloadsExtension({ grants: chatGrants })]
@@ -3712,6 +3716,10 @@ export async function startRpcSession(
               createAgentGuideExtension(),
               // v0.8.2：只接管本次摘要请求的模型路由；全部候选失败时返回 undefined 交回 SDK。
               createCompactionModelExtension(),
+              // 快速模式：只往 sections 里加一段，不碰整段提示词。必须排在 purge 之前——
+              // purge 用的是 forceSystemPrompt（整体替换、不带 sections），排在它后面的 handler
+              // 才能改到最终发出去的那份。
+              createFastModeExtension(),
               createProjectCommandBashExtension({
                 cwd: sessionCwd,
                 settings: settingsManager,
