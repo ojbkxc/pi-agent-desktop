@@ -116,11 +116,15 @@ jobs:
           releaseBody: |
             ## Pi Agent Desktop 0.8.7 (fork)
 
-            **2026-11-22 覆盖式重发（第六次）/ re-release.** Same version number; this build replaces the previous v0.8.7 artifacts.
+            **2026-11-22 覆盖式重发（第七次）/ re-release.** Same version number; this build replaces the previous v0.8.7 artifacts.
 
             ### 本次构建 / this build
 
-            - **本次新增（第六次重发）/ new in this build:**
+            - **本次新增（第七次重发）/ new in this build:**
+              - **长时自主「项目战役」P1 / autonomous project campaigns (P1).** 新增 Campaign 页面：给一个 git 仓库和一组待办项，agent 逐项执行，每项跑你配置的验证命令，exit 0 才算完成；失败就把输出回喂继续改，轮数或总成本触顶即停。创建时强制要求 git 工作目录、正的总成本上限、非 `off` 的命令审批档；进程重启后从第 K 项续跑，Provider 中断不计入轮次。提供 stop / pause / resume / delete，逐项日志与开销。
+              - **与自动修 Bug 共用中断账本 / shared outage ledger.** 新增 `campaign` 作用域：Provider 中断记录由战役自己的 sweep 驱动续跑，通用中断调度器只读不抢，避免双驱动。
+              - **已知边界 / known limits.** P1 为 MVP：跨天间隔（`intervalMs` 已在数据模型中预留，UI 暂不暴露）、git checkpoint、运行中成本闸、多 worker 尚未实现。
+            - **上一次重发的新增（第六次及更早）/ added in previous re-releases:**
               - **破甲控制台性能 / purge performance.** 设置读取改为 mtime+size 缓存（工具循环每轮不再全量读盘+解析），治理改写改为单次扫描并按规则缓存正则；输出逐字节等价。
               - **后台命令可见可停 / background commands.** Tasks 页新增后台命令列表（运行中/近期）与停止按钮，补上此前 `GET /api/background-jobs` 没有前端消费的缺口。
               - **闸门归属只读视图 / gate attribution.** 破甲控制台新增「闸门归属」只读面板（各闸门 allowed/denied 计数与最近事件），补上 `/api/purge/gate-log` 的前端消费；移除冗余的 `/api/purge/active-model` 路由。
