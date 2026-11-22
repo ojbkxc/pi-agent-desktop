@@ -11238,6 +11238,17 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   overflow-wrap: anywhere;
 }
 
+/* Dialog shell (inline styles carry the width formula):
+   min-width:0 lets the panel shrink inside the flex overlay instead of being
+   forced to the widest child's min-content, and max-width:100% keeps it inside
+   a <480px viewport where the overlay only leaves 2x16px of padding. Content
+   that does not fit vertically scrolls inside the panel, so the footer buttons
+   (Close / Approve / Stop) stay reachable on a short window. */
+.team-plan-dialog {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .team-plan-editor-grid,
 .team-plan-task-row,
 .team-plan-assignment-grid {
@@ -11266,6 +11277,17 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 
   .team-plan-task-row {
     grid-template-columns: minmax(0, 1fr) minmax(160px, 220px);
+  }
+}
+
+/* Dialog pinned narrower than ~420px (small window, or a very narrow chat
+   column): the multi-column layouts above cannot fit a select plus its label,
+   so force single column and let the pickers shrink instead of pushing the
+   panel into horizontal scroll. */
+@container (max-width: 420px) {
+  .team-plan-assignment-grid,
+  .team-plan-task-row {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

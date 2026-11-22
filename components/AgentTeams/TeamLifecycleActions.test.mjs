@@ -11,6 +11,7 @@ const {
   LifecycleOutcomeMessage,
   ReclaimConfirm,
   interpretLifecycleOutcome,
+  isLifecycleSettled,
   parseLifecycleResults,
 } = await jiti.import("./TeamLifecycleActions.tsx");
 const React = await jiti.import("react");
@@ -148,4 +149,46 @@ test("TeamLifecycleActions shows stop and reclaim, no confirm until requested", 
   assert.match(html, /team-lifecycle-stop/);
   assert.match(html, /team-lifecycle-reclaim/);
   assert.doesNotMatch(html, /data-testid="reclaim-confirm"/, "回收需先二次确认");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 本轮修复：成功判定收紧（200 + ok + removed:false 不算生效）+ 在途 ref 闸。
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("isLifecycleSettled：只有 tone=success 才算真的生效", () => {
+  assert.equal(isLifecycleSettled(interpretLifecycleOutcome("reclaim", { ok: true, removed: true })), true);
+  // 团队目录还在 → 不算生效：父级一旦被告知「完成」，会把选中团队回落掉，
+  // 用户看着团队消失，实际还活着，而且再也点不到它。
+  assert.equal(isLifecycleSettled(interpretLifecycleOutcome("reclaim", { ok: true, removed: false })), false);
+  assert.equal(isLifecycleSettled(interpretLifecycleOutcome("reclaim", { ok: true })), false);
+  assert.equal(isLifecycleSettled(interpretLifecycleOutcome("stop", { ok: true, results: [] })), true);
+  assert.equal(isLifecycleSettled(interpretLifecycleOutcome("stop", { ok: false })), false);
+  assert.equal(isLifecycleSettled(interpretLifecycleOutcome("stop", null)), false);
+});
+
+test("源码钉法：onDone 只在真的生效时触发，且在途闸用 ref（连点不会双发）", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("./TeamLifecycleActions.tsx", import.meta.url), "utf8");
+  assert.match(source, /if \(isLifecycleSettled\(interpreted\)\) onDone\?\.\(team, action\);/,
+    "通知父级的条件必须是「真的生效」");
+  assert.doesNotMatch(source, /response\.ok && payload!\.ok === true/,
+    "旧的宽松成功判定（只看 HTTP + ok 字段）必须消失");
+  assert.match(source, /if \(busyRef\.current\) return;/, "在途用 ref 闸，不依赖还没刷新的 state");
+  assert.match(source, /keepConfirm = action === "reclaim" && !isLifecycleSettled\(interpreted\);/,
+    "回收未删掉时保留确认区，便于就地重试");
+  assert.match(source, /if \(!keepConfirm\) setConfirming\(false\);/);
+  assert.match(source, /if \(!aliveRef\.current\) return;/, "卸载后不再 setState");
+});
+
+test("LifecycleOutcomeMessage：三档语气分别接到 status / alert，并带 aria-live", () => {
+  const success = render(React.createElement(LifecycleOutcomeMessage, {
+    outcome: interpretLifecycleOutcome("stop", { ok: true, results: [] }),
+  }));
+  assert.match(success, /role="status"/);
+  assert.match(success, /aria-live="polite"/);
+  const error = render(React.createElement(LifecycleOutcomeMessage, {
+    outcome: interpretLifecycleOutcome("stop", { ok: false, error: "boom" }),
+  }));
+  assert.match(error, /role="alert"/);
+  assert.match(error, /aria-live="assertive"/);
 });

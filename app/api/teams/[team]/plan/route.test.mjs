@@ -122,6 +122,27 @@ test("readTeamPlanView 直接调用：损坏 JSON / state 未知 → null", asyn
   assert.equal(await readTeamPlanView("demo"), null);
 });
 
+test("成员缺 runtime / 缺 name → 仍然投影出来（不静默丢成员，否则批准按钮永久禁用）", async (t) => {
+  await setup(t, {
+    plan: {
+      ...BASE_PLAN,
+      // 真实机器上 pi-team 会写出残缺成员：runtime 没落盘、name 没写。
+      members: [{ id: "m1", agentType: "general-purpose", prompt: "build it" }],
+      tasks: [{ id: "t1", subject: "build", ownerId: "m1", dependencies: [] }],
+    },
+  });
+  const { plan } = await (await get()).json();
+  assert.equal(plan.members.length, 1, "成员不能凭空消失");
+  assert.equal(plan.members[0].name, "m1", "缺 name 时用 id 兜底");
+  assert.deepEqual(plan.members[0].runtime, { providerId: "unknown", modelId: "unknown" },
+    "残缺 runtime 用显式占位，界面据此显示「未知」而不是可用的模型");
+
+  const { derivePlanReview, isUsableRuntime } = await jiti.import("@/lib/agent-teams-plan.ts");
+  assert.equal(derivePlanReview(plan).hasUnassignedTasks, false,
+    "owner 仍指向存在的成员 → 批准按钮不会被永久禁用");
+  assert.equal(isUsableRuntime(plan.members[0].runtime), false, "占位 runtime 不算可用（跟随队长不会写进去）");
+});
+
 // ── PATCH（计划编辑保存）──────────────────────────────────────────────────────
 // 写路径的字段语义与并发语义在 lib/agent-teams-plan-write.test.mjs 钉死；这里只验
 // **HTTP 层**：三重门、请求体解析、错误码透传，以及保存后状态不变。
@@ -189,4 +210,32 @@ test("PATCH 400：身份字段缺失 / JSON 非法 / 模型缺 modelId / 未知 
 test("PATCH 415：缺 JSON Content-Type", async (t) => {
   await setup(t);
   assert.equal((await patch({ ...EDIT_IDENTITY }, "demo", { "content-type": "text/plain" })).status, 415);
+});
+
+test("PATCH 返回体与 GET 同形（投影视图：缺 teamName 的磁盘计划也补上团队名）", async (t) => {
+  const { teamName, ...withoutTeamName } = BASE_PLAN;
+  await setup(t, { plan: withoutTeamName });
+  const res = await patch({
+    ...EDIT_IDENTITY,
+    members: [{ id: "m1", runtime: { providerId: "anthropic", modelId: "claude-sonnet" } }],
+  });
+  assert.equal(res.status, 200);
+  const { plan } = await res.json();
+  assert.equal(plan.teamName, "demo", "与 GET 一样用 URL 里的团队名兜底");
+  assert.equal(plan.revision, 4);
+  assert.equal(plan.members[0].runtime.modelId, "claude-sonnet");
+  assert.equal(plan.members[0].runtime.providerId, "anthropic");
+});
+
+test("PATCH 无实质改动 → 200 且 revision 不变（空保存不作废别人的编辑基线）", async (t) => {
+  await setup(t);
+  const res = await patch({
+    ...EDIT_IDENTITY,
+    members: [{ id: "m1", agentType: "general-purpose" }],
+    tasks: [{ id: "t1", ownerId: "m1" }],
+  });
+  assert.equal(res.status, 200);
+  const { plan } = await res.json();
+  assert.equal(plan.revision, 3, "什么都没改就不 bump（否则另一个窗口下一次保存/批准必然 409）");
+  assert.equal(plan.updatedAt, 2, "也没重写 updatedAt");
 });

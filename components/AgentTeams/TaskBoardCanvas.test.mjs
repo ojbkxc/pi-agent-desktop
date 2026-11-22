@@ -12,7 +12,9 @@ const {
   dependencyPath,
   laneTitleKey,
   taskToneClass,
+  ticketConcurrency,
 } = await jiti.import("./TaskBoardCanvas.tsx");
+const { formationRequiredWidth } = await jiti.import("./FormationBand.tsx");
 const {
   TASK_HEIGHT,
   TASK_WIDTH,
@@ -229,4 +231,90 @@ test("marks cycle tickets and shows a warning banner when the graph has a cycle"
   // 无环时不渲染告警
   const clean = render(snapshot([ticket("a")]));
   assert.doesNotMatch(clean, /agent-teams-board-cycle-warning/);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 本轮修复：并发可见（同票多成员并行）+ 重复依赖去重 + 成员多时画布宽度。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 一条 running 派活（并发口径只认 status=running）。 */
+function runningAssignment(memberId, assignee = memberId) {
+  return {
+    id: `as-run-${memberId}`,
+    status: "running",
+    memberId,
+    assignee,
+    sessionId: null,
+    startedAt: null,
+    lastActivityAt: null,
+    result: null,
+    outcome: null,
+  };
+}
+
+test("ticketConcurrency：同一张票多个成员并行时给出计数与接手人（成员去重）", () => {
+  const byId = ticketConcurrency([
+    ticket("t1", { assignments: [runningAssignment("m-impl", "impl"), runningAssignment("m-qa", "qa")] }),
+    ticket("t2", { assignments: [runningAssignment("m-impl", "impl")] }),
+    ticket("t3", { assignments: [] }),
+    // 同一成员在同一张票上两条 running：人手只算一次，但并发条数如实计 2。
+    ticket("t4", { assignments: [runningAssignment("m-impl", "impl"), runningAssignment("m-impl", "impl")] }),
+  ]);
+  assert.deepEqual(byId.get("t1"), { running: 2, assignees: ["impl", "qa"] });
+  assert.deepEqual(byId.get("t2"), { running: 1, assignees: ["impl"] });
+  assert.equal(byId.get("t3"), undefined);
+  assert.deepEqual(byId.get("t4"), { running: 2, assignees: ["impl"] });
+});
+
+test("并发徽标：running>1 才画，不串行化（并把接手人放进 title）", () => {
+  const html = render(snapshot([
+    ticket("t1", { assignments: [runningAssignment("m-impl", "impl"), runningAssignment("m-qa", "qa")] }),
+    ticket("t2", { assignments: [runningAssignment("m-impl", "impl")] }),
+  ], [{ id: "m-impl", name: "impl" }, { id: "m-qa", name: "qa" }]));
+  assert.match(html, /data-concurrent-running="2"/);
+  assert.match(html, /2 running/, "N 项进行中直接可见");
+  assert.match(html, /title="impl, qa"/, "接手人清单进 title");
+  // 单条 running 的票不挂并发徽标（避免噪声，也保持既有单派活口径）。
+  const single = render(snapshot([ticket("t2", { assignments: [runningAssignment("m-impl", "impl")] })]));
+  assert.doesNotMatch(single, /data-concurrent-running/);
+});
+
+test("重复依赖只画一条连线（重复 key 会重复渲染 path 并触发 React 警告）", () => {
+  const html = render(snapshot([
+    ticket("t1", { status: "ended", assignments: [assignment("ended", "completed")] }),
+    ticket("t2", { dependencies: ["t1", "t1"] }),
+  ]));
+  const edges = html.match(/agent-teams-board-edge(?![-\w])/g) ?? [];
+  assert.equal(edges.length, 1);
+});
+
+test("成员很多时画布放宽：编队带不再被任务画布裁掉", () => {
+  const members = Array.from({ length: 60 }, (_, index) => ({ id: `m${index}`, name: `m${index}` }));
+  const needed = formationRequiredWidth(60);
+  assert.ok(needed > 900, "60 个成员需要的宽度远超容器宽");
+  const html = renderToStaticMarkup(React.createElement(
+    I18nProvider,
+    { initialLocale: "en" },
+    React.createElement(TaskBoardCanvas, {
+      snapshot: snapshot([ticket("t1")], members),
+      requestedWidth: 900,
+      formation: (width) => React.createElement("div", { className: "test-formation" }, `w=${width}`),
+    }),
+  ));
+  assert.match(html, new RegExp(`w=${needed}`), "编队带拿到的是放宽后的画布宽度");
+  assert.match(html, new RegExp(`min-width:${needed}px`), "画布本身也放宽到该宽度");
+});
+
+test("成员很少时画布宽度不变（既有宽度断言口径保持）", () => {
+  const html = renderToStaticMarkup(React.createElement(
+    I18nProvider,
+    { initialLocale: "en" },
+    React.createElement(TaskBoardCanvas, {
+      snapshot: snapshot([ticket("t1")], [{ id: "m-impl", name: "impl" }]),
+      requestedWidth: 900,
+      formation: (width) => React.createElement("div", { className: "test-formation" }, `w=${width}`),
+    }),
+  ));
+  assert.match(html, /w=900/);
+  assert.match(html, /min-width:900px/);
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { TeamWorkbenchSnapshot, WorkbenchMessage } from "@/lib/agent-teams-swimlane";
 import {
@@ -26,6 +26,31 @@ import type { TranslationParams } from "@/lib/i18n/types";
 import { deriveMemberWorkloads, workloadBadgeKind, type MemberWorkload } from "./member-workload";
 
 const ACCENTS = new Set(["blue", "green", "purple", "orange", "teal", "pink", "red", "gray"]);
+
+/**
+ * 成员卡「没有在跑的票」时的空列表：必须是模块级常量。
+ * 每次渲染都写 `[]` 会给出新的引用，MemberCard 的 memo 就彻底失效（成员多时整排重绘）。
+ */
+const EMPTY_TICKET_IDS: readonly string[] = [];
+
+/** 编队带左右留白（与任务画布的 HORIZONTAL_PADDING 同量级，只用于算最小宽度）。 */
+const FORMATION_SIDE_PADDING = 32;
+
+/**
+ * 编队带需要的最小画布宽度；0 表示任意宽度都放得下。
+ *
+ * 为什么画布要问编队带要宽度：任务画布的自然宽度只按**依赖列数**算
+ * （layoutTeamWorkbenchTasks），与成员数无关。20~60 个成员时成员卡按 MEMBER_PITCH
+ * 排开，宽度远超任务画布，卡片会被画布右缘裁掉（首卡甚至是负坐标）——
+ * 「多派成员」在界面上直接看不到人。任务画布取 max(任务宽, 本函数) 即可。
+ * 单人/单成员时不提要求，保持既有画布宽度（既有宽度断言也不受影响）。
+ */
+export function formationRequiredWidth(memberCount: number): number {
+  // lead 独占一行，不参与成员排；只有成员排会横向撑开。
+  const workers = Math.max(0, memberCount - 1);
+  if (workers <= 1) return 0;
+  return Math.ceil((workers - 1) * MEMBER_PITCH + MEMBER_SLOT_WIDTH + FORMATION_SIDE_PADDING);
+}
 
 /** 调色板名 → 强调色 class（真实取值在 native-theme.css 的 --formation-accent）。 */
 function accentClass(accent: string): string {
@@ -97,6 +122,48 @@ export function activeMessageParticipants(
   return { senders, recipients };
 }
 
+/**
+ * 成员正在跑的票（**全部**，不只一张）。
+ *
+ * 布局层的 formation-layout 只给 `currentTicketId`（最近活动的那一张），这是
+ * 「串行假象」的根源：一个成员同时跑 3 张票时，卡片上永远只有 1 张，看起来和
+ * 只跑 1 张没区别。并发在这里从快照的 assignments 直接派生（status=running），
+ * 纯读、不改布局层契约；卡片据此显示「×N」与完整票号清单的 title。
+ */
+export function runningTicketsByMember(snapshot: TeamWorkbenchSnapshot): Map<string, string[]> {
+  const byMember = new Map<string, string[]>();
+  const seen = new Map<string, Set<string>>();
+  for (const ticket of snapshot.tickets) {
+    for (const assignment of ticket.assignments) {
+      if (assignment.status !== "running") continue;
+      if (assignment.memberId === null) continue;
+      let names = seen.get(assignment.memberId);
+      if (!names) {
+        names = new Set<string>();
+        seen.set(assignment.memberId, names);
+      }
+      // 同一成员在同一张票上有多条 running 派活时，票只算一次（票是并发的单位）。
+      if (names.has(ticket.id)) continue;
+      names.add(ticket.id);
+      const list = byMember.get(assignment.memberId);
+      if (list) list.push(ticket.id);
+      else byMember.set(assignment.memberId, [ticket.id]);
+    }
+  }
+  return byMember;
+}
+
+/** 全队在跑的派活总数（并发度指标，含未落在名册成员上的 orphan 派活）。 */
+export function runningAssignmentCount(tickets: TeamWorkbenchSnapshot["tickets"]): number {
+  let count = 0;
+  for (const ticket of tickets) {
+    for (const assignment of ticket.assignments) {
+      if (assignment.status === "running") count += 1;
+    }
+  }
+  return count;
+}
+
 /** 忙闲徽标文案键与计数（#55 第一段，纯读展示）：running 优先于 pending。 */
 function workloadBadge(entry: MemberWorkload, t: (key: string, params?: TranslationParams) => string): { kind: "idle" | "running" | "pending"; label: string } {
   const kind = workloadBadgeKind(entry);
@@ -148,20 +215,29 @@ function ProgressBar({ node }: { node: FormationMember }) {
   );
 }
 
-function MemberCard({
+/**
+ * 成员卡（memo）：成员多（20~60）时，编队带每次因活动消息/排序变化重渲染都会
+ * 重算所有卡片。memo 后只有本卡 props 变化才重渲染——高并发滑动时不再整排重绘。
+ */
+const MemberCard = memo(function MemberCard({
   node,
   workload,
+  runningTicketIds,
   onSelect,
   activeRole,
 }: {
   node: FormationMember;
   workload?: MemberWorkload;
+  /** 该成员全部在跑的票（见 runningTicketsByMember）；空数组合法。 */
+  runningTicketIds: readonly string[];
   onSelect: (member: FormationMember) => void;
   activeRole?: ActiveMessageRole;
 }) {
   const { t } = useI18n();
   const { member, isLead } = node;
   const stateLabel = t(workStateKey(node.workState));
+  const concurrent = runningTicketIds.length;
+  const ticketTitle = concurrent > 0 ? runningTicketIds.map((id) => `#${id}`).join(", ") : undefined;
   const taskLine = node.currentTicketId
     ? node.blockedDependencyId
       ? { key: "teams.memberState.waitingDependency", params: { ticket: `#${node.blockedDependencyId}` } }
@@ -178,17 +254,26 @@ function MemberCard({
       data-current-ticket={node.currentTicketId ?? undefined}
       data-blocked-dependency={node.blockedDependencyId ?? undefined}
       data-inbox-count={node.inboxCount}
+      data-concurrent-tickets={concurrent}
     >
       <button
         type="button"
         className="agent-teams-formation-hit"
         onClick={() => onSelect(node)}
-        aria-label={`${member.name} · ${stateLabel}`}
+        aria-label={`${member.name} · ${stateLabel}${concurrent > 1 ? ` · ×${concurrent}` : ""}`}
       >
         <span className="agent-teams-formation-avatar" aria-hidden="true">{member.name.slice(0, 1)}</span>
-        <span className="agent-teams-formation-identity">
+        <span className="agent-teams-formation-identity" style={{ minWidth: 0 }}>
           <span className="agent-teams-formation-role">{roleLabel(member.role, t)}</span>
-          <span className="agent-teams-formation-name">{member.name}</span>
+          {/* 长名不得撑破卡片：flex 子项必须 minWidth:0 才吃得住 ellipsis；
+              overflowWrap 兜住没有空格的超长 id。title 给全名。 */}
+          <span
+            className="agent-teams-formation-name"
+            style={{ minWidth: 0, overflowWrap: "anywhere" }}
+            title={member.name}
+          >
+            {member.name}
+          </span>
           {isLead && <span className="agent-teams-formation-lead-tag">{t("teams.leader")}</span>}
           <ModelChip model={member.model} />
         </span>
@@ -197,10 +282,17 @@ function MemberCard({
           <span className="agent-teams-formation-state-label">{stateLabel}</span>
         </span>
         {(taskLine || node.inboxCount > 0) && (
-          <span className="agent-teams-formation-taskline">
+          <span className="agent-teams-formation-taskline" style={{ minWidth: 0 }}>
             {taskLine && (
-              <span className="agent-teams-formation-taskline-ticket" data-member-task={taskLine.key}>
+              <span
+                className="agent-teams-formation-taskline-ticket"
+                data-member-task={taskLine.key}
+                title={ticketTitle}
+                style={{ minWidth: 0 }}
+              >
                 {t(taskLine.key, taskLine.params)}
+                {/* 并发事实必须写在卡上：同时跑 N 张票时显示 ×N，而不是只画第一张。 */}
+                {concurrent > 1 ? ` ×${concurrent}` : ""}
               </span>
             )}
             {node.inboxCount > 0 && (
@@ -224,7 +316,7 @@ function MemberCard({
       </button>
     </article>
   );
-}
+});
 
 interface Props {
   snapshot: TeamWorkbenchSnapshot;
@@ -256,6 +348,9 @@ export const FormationBand = memo(function FormationBand({
   // #55（忙闲可见）：从 tickets[].assignments[] 派生的名册成员忙闲计数（纯客户端，
   // 不依赖服务端投影改动）。无票成员也在这里得到「空闲」徽标——最闲的人必须可见。
   const workloads = useMemo(() => deriveMemberWorkloads(snapshot).byMemberId, [snapshot]);
+  // 并发口径：每成员在跑的**全部**票 + 全队在跑的派活数（见两个纯函数）。
+  const runningByMember = useMemo(() => runningTicketsByMember(snapshot), [snapshot]);
+  const teamRunning = useMemo(() => runningAssignmentCount(snapshot.tickets), [snapshot.tickets]);
 
   const orderedWorkers = useMemo(() => {
     if (sortMode === "joined") return layout.workers;
@@ -264,9 +359,10 @@ export const FormationBand = memo(function FormationBand({
     return sorted.map((node, index) => ({ ...node, centerX: startX + index * MEMBER_PITCH }));
   }, [layout, sortMode]);
 
-  const handleSelect = (node: FormationMember) => {
+  // useCallback：MemberCard 是 memo 的，回调一旦每次新建就整排失效。
+  const handleSelect = useCallback((node: FormationMember) => {
     onSelectMember?.(node.member.id, node.member.sessionId);
-  };
+  }, [onSelectMember]);
 
   const { lead, bus } = layout;
   const hasWorkers = orderedWorkers.length > 0;
@@ -304,9 +400,24 @@ export const FormationBand = memo(function FormationBand({
       className="agent-teams-formation"
       style={{ width, height: FORMATION_BOTTOM }}
       data-testid="agent-teams-formation"
+      data-members={snapshot.members.length}
+      data-running-assignments={teamRunning}
     >
-      <span className="agent-teams-formation-title" style={{ left: FORMATION_TITLE_X, top: FORMATION_TITLE_Y }}>
+      <span
+        className="agent-teams-formation-title"
+        style={{ left: FORMATION_TITLE_X, top: FORMATION_TITLE_Y, whiteSpace: "nowrap" }}
+      >
         {t("teams.formation.title")}
+        {/* 全队同时在跑的派活数：并发是这一屏最重要的读数，不该只能靠数卡片。 */}
+        {teamRunning > 0 && (
+          <span
+            className="agent-teams-formation-inbox"
+            data-testid="agent-teams-formation-running"
+            style={{ marginLeft: 8, color: "var(--info)" }}
+          >
+            {t("teams.workload.running", { count: teamRunning })}
+          </span>
+        )}
       </span>
       {orderedWorkers.length > 1 && (
         <button
@@ -379,12 +490,20 @@ export const FormationBand = memo(function FormationBand({
         </span>
       ))}
 
-      {lead && <MemberCard node={lead} onSelect={handleSelect} activeRole={activeRoleOf(lead.member.id)} />}
+      {lead && (
+        <MemberCard
+          node={lead}
+          runningTicketIds={runningByMember.get(lead.member.id) ?? EMPTY_TICKET_IDS}
+          onSelect={handleSelect}
+          activeRole={activeRoleOf(lead.member.id)}
+        />
+      )}
       {orderedWorkers.map((node) => (
         <MemberCard
           key={node.member.id}
           node={node}
           workload={workloads.get(node.member.id)}
+          runningTicketIds={runningByMember.get(node.member.id) ?? EMPTY_TICKET_IDS}
           onSelect={handleSelect}
           activeRole={activeRoleOf(node.member.id)}
         />

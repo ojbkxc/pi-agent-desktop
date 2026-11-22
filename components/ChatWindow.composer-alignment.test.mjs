@@ -70,10 +70,42 @@ test("composer and message columns share one padding and one max width", () => {
   const maxWidth = "var(--chat-content-max-width, 820px)";
   assert.equal(
     source.split(maxWidth).length - 1,
-    3,
-    "message list, goal strip and extension widgets share the appearance width",
+    4,
+    "message list, goal strip, extension widgets and the team-plan dock share the appearance width",
   );
   assert.equal(inputSource.split(maxWidth).length - 1, 1, "the composer shares the appearance width");
+});
+
+test("the team-plan dock sits on the same axis and width as the composer", () => {
+  // Regression: the dock used to be a bare wrapper in the composer column, so the
+  // card bar spanned the whole column (wider than the composer by 2 脳 16px, and
+  // on a wide window wider than the 820px appearance width). The user reported it
+  // as "太宽". The card must be wrapped exactly like ChatInput itself: outer
+  // padding, inner max-width + centring.
+  const dockStart = source.indexOf("(isPlanCardVisible(teamPlan.plan)");
+  assert.ok(dockStart > 0, "the plan dock must be rendered from the same visibility predicate");
+  const dock = source.slice(dockStart, dockStart + 900);
+
+  assert.match(
+    dock,
+    /padding: `0 \$\{CHAT_COLUMN_PADDING\}px`/,
+    "the dock insets the column like the composer fieldset",
+  );
+  assert.match(
+    dock,
+    /maxWidth: "var\(--chat-content-max-width, 820px\)"/,
+    "the dock caps at the appearance width instead of the column width",
+  );
+  assert.match(dock, /margin: "0 auto"/, "the dock centres on the column axis");
+  assert.match(dock, /minWidth: 0/, "the dock must be able to shrink inside the composer column");
+
+  // A failed poll must stay visible: the gate used to be `plan && visible`, which
+  // made the card's load-failed branch dead code and hid a broken plan entirely.
+  assert.match(
+    dock,
+    /!teamPlan\.plan && Boolean\(teamPlan\.error\)/,
+    "a failed plan fetch renders the load-failed bar instead of vanishing",
+  );
 });
 
 test("publishes the chat column's inner width for portal dialogs", () => {

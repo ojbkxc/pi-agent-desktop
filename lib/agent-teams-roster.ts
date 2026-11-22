@@ -41,13 +41,24 @@ export interface PlanRosterMember {
 /**
  * 纯合并：config 名册在前（以 config 为准），plan 独有成员按序追加（按 name 去重，
  * 与 buildRoster 的裁决一致）。导出以便单测与三处调用点复用同一口径。
+ *
+ * 规模口径（团队几十个成员时不能变形）：
+ * - **O(n)**：去重靠一个 Set 查表 + 一次 push，不做 `some/includes` 的嵌套扫描；
+ * - **不截断**：没有 slice/limit/break，成员表多长就合多长（历史上「派出去的成员
+ *   名册里看不见」就是漏合并，而不是数量多——这里宁可长也不能吞）。
  */
 export function mergeRosterMembers(
   configMembers: readonly RosterMember[],
   planMembers: readonly PlanRosterMember[],
 ): RosterMember[] {
-  const seen = new Set(configMembers.map((member) => member.name));
-  const merged = [...configMembers];
+  const seen = new Set<string>();
+  const merged: RosterMember[] = [];
+  for (const member of configMembers) {
+    // config 里同名的重复条目（手工改过 config）只留第一条：身份以 config 为准。
+    if (member.name && seen.has(member.name)) continue;
+    if (member.name) seen.add(member.name);
+    merged.push(member);
+  }
   for (const planMember of planMembers) {
     if (!planMember.name || seen.has(planMember.name)) continue;
     seen.add(planMember.name);
@@ -77,9 +88,13 @@ export async function readPlanRosterMembers(teamDir: string): Promise<PlanRoster
   for (const item of raw) {
     if (!item || typeof item !== "object") continue;
     const record = item as Record<string, unknown>;
-    const name = typeof record.name === "string" ? record.name : "";
+    const rawName = typeof record.name === "string" ? record.name : "";
+    const rawId = typeof record.id === "string" && record.id ? record.id : "";
+    // 缺 name 用 id 兜底、缺 id 用 name 兜底：只有两者都空才丢——单边缺失的成员
+    // 若直接跳过，会在配额/停止/ended 三处整层隐身（「派出去的成员不见」类故障）。
+    const name = rawName || rawId;
     if (!name) continue;
-    const id = typeof record.id === "string" && record.id ? record.id : name;
+    const id = rawId || rawName;
     const runtimeRaw = record.runtime;
     const runtime = runtimeRaw && typeof runtimeRaw === "object" ? runtimeRaw as Record<string, unknown> : null;
     const runtimeMember: PlanRosterMember = { agentId: id, name };
@@ -106,8 +121,12 @@ export async function readMergedRoster(teamDir: string): Promise<RosterMember[] 
   for (const item of raw) {
     if (!item || typeof item !== "object") continue;
     const record = item as Record<string, unknown>;
-    const agentId = typeof record.agentId === "string" ? record.agentId : "";
-    const name = typeof record.name === "string" ? record.name : "";
+    const rawId = typeof record.agentId === "string" ? record.agentId : "";
+    const rawName = typeof record.name === "string" ? record.name : "";
+    // 单边缺失（老版本/手工改过的 config）用另一边兜底，只有两者都空才丢。
+    // 丢一条 = 该成员在全局配额与停止/ended 判定里隐身，宁可保留。
+    const agentId = rawId || rawName;
+    const name = rawName || rawId;
     if (!agentId || !name) continue;
     const sessionId = typeof record.sessionId === "string" && record.sessionId ? record.sessionId : undefined;
     const runtimeRaw = record;

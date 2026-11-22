@@ -72,15 +72,37 @@ async function setup(t, { plan = BASE_PLAN } = {}) {
   return { dir };
 }
 
-const approve = (body, team = "demo") =>
+const approve = (body, team = "demo", headers = { "content-type": "application/json" }) =>
   approveRoute.POST(
     new Request(`http://localhost/api/teams/${team}/plan/approve`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      // host 必须显式带上：Node 的 new Request() 不补 host，而路由的 host allow-list
+      // 在没有 host 时直接 403（真实浏览器请求必带 host）。
+      headers: { host: "localhost", ...headers },
       body: typeof body === "string" ? body : JSON.stringify(body),
     }),
     { params: Promise.resolve({ team }) },
   );
+
+test("403：host 不可信（跨站页面借浏览器发起的批准）不投递", async (t) => {
+  await setup(t);
+  globalThis.__deliverResult = { ok: true };
+  const res = await approve(IDENTITY, "demo", { "content-type": "application/json", host: "evil.example" });
+  assert.equal(res.status, 403);
+  const data = await res.json();
+  assert.equal(data.ok, false);
+  assert.match(data.reason, /Untrusted API request/);
+  assert.equal(globalThis.__deliverCalls.length, 0, "门禁挡下就不能投递（这一步会让 lead spawn 整个团队）");
+});
+
+test("415：缺 application/json（表单/纯文本的简单请求可以绕过预检）", async (t) => {
+  await setup(t);
+  globalThis.__deliverResult = { ok: true };
+  const res = await approve(IDENTITY, "demo", { "content-type": "text/plain" });
+  assert.equal(res.status, 415);
+  assert.equal((await res.json()).ok, false);
+  assert.equal(globalThis.__deliverCalls.length, 0);
+});
 
 test("400：缺任一 identity 字段 / JSON 非法", async (t) => {
   await setup(t);
@@ -129,6 +151,33 @@ test("happy：投递成功 → 200 { ok:true, requestId 确定性 }，且投给 
   assert.match(prompt, /p-1/);
   assert.match(prompt, /desktop-approve-p-1-r3/, "prompt 里钉住同一条确定性 request_id");
   assert.match(prompt, /launch/, "要求 lead 再执行 launch");
+  // 「多派成员、多并发」：投递文案必须要求一次把全部成员并行派出、任务按依赖并行推进，
+  // 否则 lead 会只派一两个成员然后串行等结果。四件身份信息也必须在文案里。
+  assert.match(prompt, /team=demo/, "team 名（否则 lead 对不上团队）");
+  assert.match(prompt, /revision=3/);
+  assert.match(prompt, /全部 1 个成员/, "要求整批派发全部成员");
+  assert.match(prompt, /并行/, "要求任务并行推进");
+  assert.match(prompt, /impl/, "列出成员名册，避免派错人");
+});
+
+test("400：显式传入的 requestId 必须等于确定性值（随机 id 会跳过上游 revision 校验）", async (t) => {
+  await setup(t);
+  globalThis.__deliverResult = { ok: true };
+  const res = await approve({ ...IDENTITY, requestId: "desktop-approve-p-1-r3-random" });
+  assert.equal(res.status, 400, "不一致就拒绝，不能静默换成别的 id 投递");
+  const data = await res.json();
+  assert.equal(data.ok, false);
+  assert.match(data.reason, /desktop-approve-p-1-r3/, "告诉调用方唯一合法的值");
+  assert.equal(globalThis.__deliverCalls.length, 0);
+});
+
+test("显式传入正确的确定性 requestId → 照常批准（向后兼容）", async (t) => {
+  await setup(t);
+  globalThis.__deliverResult = { ok: true };
+  const res = await approve({ ...IDENTITY, requestId: "desktop-approve-p-1-r3" });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).requestId, "desktop-approve-p-1-r3");
+  assert.equal(globalThis.__deliverCalls.length, 1);
 });
 
 test("502：投递失败 → { ok:false, reason }（不静默）", async (t) => {

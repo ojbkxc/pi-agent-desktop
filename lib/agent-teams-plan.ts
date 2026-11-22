@@ -195,21 +195,47 @@ export function desktopApprovalRequestId(plan: Pick<TeamPlanView, "planId" | "re
   return `desktop-approve-${plan.planId}-r${plan.revision}`;
 }
 
+/** 成员名册的一行（prompt 里用；名字 + 预设 + 它负责的任务 id）。 */
+function describePlanMember(plan: TeamPlanView, member: PlanMemberView): string {
+  const owned = plan.tasks.filter((task) => task.ownerId === member.id).map((task) => task.id);
+  const preset = member.agentType?.trim() || "general-purpose";
+  return `- ${member.name}（${preset}）：${owned.length > 0 ? `负责任务 ${owned.join("、")}` : "暂无负责任务，派发后按依赖接力领活"}`;
+}
+
 /**
  * 用户手动「批准」时投递给 lead 的 prompt。
  *
  * 桌面**不能**自己 approve（会漏写 approvedSnapshot → 审批判定 false）也**不能** launch
  * （需要 TeamHost spawn 子会话）。所以让 lead 用 team_plan 工具分两步做：approve → launch。
  * 上游 approve **不会自动 launch**（计划批准后停在 launching/pending），必须显式 launch。
+ *
+ * 文案必须把「一次把全部成员并行派出、任务并行推进」说清楚：lead 是模型，没人催它就会
+ * 图省事只派一两个成员、然后串行等每个成员返回（用户看到的是「团队只干了一件事」）。
+ * 计划里的成员名册也一并列出，避免它拿着 id 猜名字派错人。四件身份信息
+ * （team 名 / planId / revision / request_id）缺一个它就找不到对应计划。
  */
 export function buildUserApprovalPrompt(plan: TeamPlanView): string {
   const requestId = desktopApprovalRequestId(plan);
+  const memberCount = plan.members.length;
+  const taskCount = plan.tasks.length;
+  const roster =
+    memberCount > 0
+      ? plan.members.map((member) => describePlanMember(plan, member))
+      : ["- （计划里没有成员：先按用户批准的这份计划补成员，再 launch，不要空跑）"];
+  const launchStep =
+    memberCount > 0
+      ? `3. launch 要**一次把计划里的全部 ${memberCount} 个成员一起派出去**（一次 launch 就是整批派发）：不要只派队长或前几个、不要漏人、不要为同一个成员反复 launch（会重复 spawn），也不要先等某个成员跑完再派下一个。目标是 ${memberCount} 个成员同时在跑。`
+      : `3. 计划里没有成员：先按用户批准的这份计划补齐成员，再用一次 launch 整批派出；不要空跑，也不要因为没成员就跳过 launch。`;
   return [
-    `这是用户在界面里手动批准的「计划评审」，不是你本人（模型）发起的——用户点了「批准」。`,
-    `团队「${plan.teamName}」的计划（planId=${plan.planId}，revision=${plan.revision}）已获用户批准，请立刻收尾，不要再等用户：`,
-    `1. 用 team_plan 的 approve 操作批准当前计划。批准必须带 request_id，且**只能**用这个值：${requestId}（系统按 planId + revision 生成）。不要自己另编 id——同 id 才幂等，编新 id 会导致重复批准。`,
-    `2. approve 成功后**再调用一次** team_plan 的 launch 操作派发成员——上游 approve 只把计划置为 launching（launch.status=pending），不会自动派发；不 launch 计划会永远停在待派发。`,
-    `3. 若 approve 返回「该批准已记录过」（committed=false，幂等命中），**不要重复批准**，直接执行上面的 launch。`,
-    `4. 完成后用一句话汇报你实际做了什么。`,
+    `这是用户在界面里手动批准的「计划评审」，不是你本人（模型）发起的——用户点了「批准」，不需要再向用户确认。`,
+    `团队「${plan.teamName}」的计划（team=${plan.teamName}，planId=${plan.planId}，revision=${plan.revision}）已获用户批准：成员 ${memberCount} 个、任务 ${taskCount} 个。请立刻收尾：`,
+    `1. 先用 team_plan 的 approve 操作批准当前计划。批准必须带 request_id，且**只能**用这个值：${requestId}（系统按 planId + revision 生成）。不要自己另编 id——同 id 才幂等，编新 id 会导致重复批准。`,
+    `2. approve 成功后**立刻**用 team_plan 的 launch 操作派发成员——上游 approve 只把计划置为 launching（launch.status=pending），不会自动派发；不 launch 计划会永远停在待派发。`,
+    launchStep,
+    `4. 任务并行推进，只按 dependencies 卡顺序：互不依赖的任务**同时**开工；有依赖的任务在依赖完成的第一时间接力。不要为了「稳」把本可并行的任务串成一条链，也不要把活压到一两个成员身上——成员空转时给它补活。`,
+    `5. 若 approve 返回「该批准已记录过」（committed=false，幂等命中），**不要重复批准**，直接执行第 2 步的 launch。`,
+    `6. 完成后用一句话汇报：approve 用的 request_id、实际 launch 的成员数、并行开出的任务。`,
+    `成员与分工（同一次 launch 全部派出）：`,
+    ...roster,
   ].join("\n");
 }

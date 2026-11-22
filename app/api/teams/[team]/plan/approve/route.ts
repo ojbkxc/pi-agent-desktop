@@ -3,6 +3,7 @@ import { readTeamPlanView } from "@/lib/agent-teams-plan-store";
 import { buildUserApprovalPrompt, checkPlanIdentity, desktopApprovalRequestId } from "@/lib/agent-teams-plan";
 import { resolveTeamLeadSession } from "@/lib/agent-teams-swimlane-store";
 import { defaultDeliver } from "@/lib/agent-teams-unattended-runtime";
+import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 
@@ -18,8 +19,16 @@ export const dynamic = "force-dynamic";
  * revision 确定性生成（上游 A8：同 requestId 会先于 revision/state 校验直接 committed=false，
  * 随机 id 会导致重复批准）。
  *
+ * 三重门（与其它会触发副作用的 POST 路由一致）：
+ * - host/Origin 校验：挡掉跨站页面借用户浏览器发起的「批准」（本路由会让 lead 立刻 spawn
+ *   一整个团队，是最贵的副作用之一）；
+ * - `application/json`：挡掉表单/text-plain 的「简单请求」CSRF（那种请求不触发预检，也不
+ *   被 Origin 头覆盖）；
+ * - **不**要求 `isLocalRequest`：中继手机/Tailscale 上的用户也该能批准自己团队的计划，
+ *   投递目标仍是本机的 lead 会话（与远程用户发一条聊天消息等价）。
+ *
  * body: { planId, sessionId, incarnationId, expectedRevision, requestId? }
- * 返回: { ok, requestId, reason? }（投递失败不静默：ok=false + reason，HTTP 502）。
+ * 返回: { ok, requestId, reason? }（投递失败不静默：ok=false + reason，HTTP 502）
  */
 interface ApproveBody {
   planId?: unknown;
@@ -36,6 +45,15 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ team: string }> },
 ) {
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ ok: false, reason: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json(
+      { ok: false, reason: "Content-Type must be application/json" },
+      { status: 415 },
+    );
+  }
   const { team } = await params;
 
   let body: ApproveBody;
@@ -75,7 +93,21 @@ export async function POST(
     );
   }
 
-  const requestId = asNonEmptyString(body.requestId) ?? desktopApprovalRequestId(plan);
+  // 幂等键只认 planId + revision 的确定性值。调用方**可以**传 requestId，但只要跟确定性
+  // 值不一致就一律 400：上游对同一个 requestId 会在 revision/state 校验之前直接返回
+  // committed=false，一个随机/过期 id 会让「批准」看起来成功、实际什么都没派发。
+  const requestId = desktopApprovalRequestId(plan);
+  const suppliedRequestId = asNonEmptyString(body.requestId);
+  if (suppliedRequestId && suppliedRequestId !== requestId) {
+    return NextResponse.json(
+      {
+        ok: false,
+        reason: `requestId must be the deterministic value ${requestId} (planId + revision); a random id silently skips the upstream revision check`,
+      },
+      { status: 400 },
+    );
+  }
+
   const prompt = buildUserApprovalPrompt(plan);
   // 投递目的地：**不能**直接用 plan.sessionId —— 那也是 pi-team 读 PI_SESSION_ID 记的
   // 占位 'unknown-session'（见 docs/agents/agent-teams-upstream-defects.md B1）。优先用

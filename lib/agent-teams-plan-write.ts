@@ -71,6 +71,9 @@ export interface PlanPatch {
 /**
  * 写回计划。返回**新的** `TeamPlanView`（revision 已 +1，状态保持）。
  *
+ * 没有实质改动时**不写盘**，原样返回磁盘上的计划（revision 不变）：空保存不该作废别人的
+ * 编辑基线，调用方拿到的 revision 继续可用于后续 PATCH / approve。
+ *
  * 改动只落在请求列出的字段上：`members[]` 只覆盖 `agentType` / `runtime`，其余（prompt、
  * reason、difficulty、agentSnapshot…）逐字保留；`tasks[]` 只覆盖 `ownerId`。这样并发
  * 编辑（另一个窗口、lead 自己）不会因为界面传来的残片丢掉字段。
@@ -78,11 +81,24 @@ export interface PlanPatch {
 export async function applyTeamPlanEdits(teamName: string, patch: PlanPatch): Promise<TeamPlanView> {
   const dir = teamDirFor(teamName);
   const target = join(dir, "plan.json");
-  const release = await lockfile.lock(target, {
-    lockfilePath: `${target}.lock`,
-    realpath: false,
-    retries: { ...PLAN_LOCK_RETRIES },
-  });
+  let release: () => Promise<void>;
+  try {
+    release = await lockfile.lock(target, {
+      lockfilePath: `${target}.lock`,
+      realpath: false,
+      retries: { ...PLAN_LOCK_RETRIES },
+    });
+  } catch (error) {
+    // 锁等不到（别的窗口/lead 正在写，或 Windows 上锁文件被占）**不是**服务端故障：
+    // 报 500 只会让界面显示一条看不懂的错误，也没有「重试」的动作。这里翻成 409
+    // 「计划正在被改，刷新后再保存」，与 revision 冲突同一档语义。
+    throw new TeamPlanWriteError(
+      `团队「${teamName}」的计划正在被另一个写入者编辑（计划锁超时）：请稍后重试。${
+        error instanceof Error ? `（${error.message}）` : ""
+      }`,
+      409,
+    );
+  }
   try {
     const plan = readPlanSync(dir, teamName);
     if (!plan) throw new TeamPlanWriteError(`团队「${teamName}」尚无计划`, 404);
@@ -101,6 +117,10 @@ export async function applyTeamPlanEdits(teamName: string, patch: PlanPatch): Pr
 
     const next = applyEdits(structuredClone(plan), patch);
     validatePlanGraph(next);
+    // 校验通过但**字段一个都没变**（用户把值改回原样；或编辑指向已被删掉的成员/任务）：
+    // 不写盘、不 bump revision。空保存也 bump 会平白作废另一个窗口的编辑基线——它下一次
+    // 保存/批准必然 409，而用户根本没改过东西。返回磁盘原值，调用方的 revision 继续有效。
+    if (!planContentChanged(plan, next)) return plan as unknown as TeamPlanView;
     next.revision = plan.revision + 1;
     next.updatedAt = Date.now();
     await writePlanWithRetry(dir, next);
@@ -108,6 +128,15 @@ export async function applyTeamPlanEdits(teamName: string, patch: PlanPatch): Pr
   } finally {
     await release().catch(() => undefined);
   }
+}
+
+/**
+ * 这次 PATCH 是否真的改了东西：只有 `members` / `tasks` 可能被 `applyEdits` 改动，
+ * 逐字比较这两组的序列化结果即可（键顺序由磁盘内容决定，两侧同源，不会误判）。
+ */
+function planContentChanged(before: Record<string, unknown>, after: Record<string, unknown>): boolean {
+  return JSON.stringify(before.members ?? null) !== JSON.stringify(after.members ?? null)
+    || JSON.stringify(before.tasks ?? null) !== JSON.stringify(after.tasks ?? null);
 }
 
 /** 纯改动：只覆盖允许的字段，其余原样保留。导出以便单测。 */

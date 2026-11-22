@@ -202,7 +202,7 @@ repeat tick 在投递前先把 `nextRunAt` 推到下一档（`goal-repeat.ts:84-
 ## 9. 多 worker（P4，复用 agent-teams）
 
 P1–P3 单会话逐项推进即可覆盖大多数「单线程也能干」的项目。当单项足够大需要并行时：campaign
-的一项可 spawn 一个 **agent-teams** 团队（lead+workers，上限 12/32，`docs/agent-teams-design.md:885-899`），
+的一项可 spawn 一个 **agent-teams** 团队（lead+workers，上限 16/64，`docs/agent-teams-design.md:883-905`），
 由 lead 拆更细的 ticket 并行；`accepted.jsonl`（`lib/agent-teams-swimlane.ts:14-15`）的验收记录
 回流映射为 item 完成。**注意**：team tickets 随团队销毁（`agent-teams-swimlane.ts:14-15`），
 所以真相源永远是 **campaign 文件**，team 只是阶段内临时执行器。

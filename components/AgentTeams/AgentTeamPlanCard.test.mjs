@@ -130,7 +130,7 @@ test("Modal 内容：成员名册（含 runtime）+ 任务（owner/依赖）+ �
   assert.match(html, /data-testid="team-plan-unassigned"/, "未分配任务给告警");
   assert.match(html, /Owner/, "owner 标签");
   assert.match(html, /Depends on/, "依赖标签");
-  assert.match(html, /Members/, "名册标题");
+  assert.match(html, /2 members/, "成员标题用 memberCount 文案（与可编辑分支同一个 key）");
   assert.match(html, /Tasks/, "任务标题");
   assert.doesNotMatch(html, /teams\.plan\./, "不应渲染 i18n 键原文");
 });
@@ -251,19 +251,49 @@ test("overlay 用 --z-modal 令牌（不是 literal 60，不得掉到顶栏 90 �
 
 // 宽度：弹框与输入框等宽，跟随聊天内容列实际宽度（--chat-content-region-width，
 // ChatWindow 用 ResizeObserver 写入）；聊天列窄时同步收窄，宽于上限时取
-// --chat-content-max-width。旧的 720 固定封顶会横跨屏幕（用户反馈）。
-test("dialog 宽度与输入框等宽：跟随聊天内容列，不再 720 固定封顶", async () => {
+// --chat-content-max-width。**兜底必须是真实像素**：region 变量只在 ChatWindow 挂载时
+// 写入，别的页面拿到 fallback，旧写法 `var(..., 100%)` 会让弹框铺满整屏（用户截图）。
+test("dialog 宽度与输入框等宽：跟随聊天内容列，缺失 region 变量时回落到 820px 像素上限", async () => {
   const { readFile } = await jiti.import("node:fs/promises");
   const source = (await readFile(new URL("./AgentTeamPlanCard.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
   assert.match(
     source,
-    /width: "min\(var\(--chat-content-max-width, 820px\), var\(--chat-content-region-width, 100%\), 100%\)"/,
-    "与输入框同一公式",
+    /width: "min\(var\(--chat-content-max-width, 820px\), var\(--chat-content-region-width, 820px\), 100%\)"/,
+    "与输入框同一公式，且 region 缺失时回落到 820px 而不是 100%",
   );
   assert.match(source, /--chat-content-region-width/, "宽度跟随聊天内容列");
+  assert.doesNotMatch(source, /var\(--chat-content-region-width, 100%\)/, "region 缺失不得回落到 100%（会铺满整屏）");
   assert.doesNotMatch(source, /720px/, "不得再用 720 固定封顶");
   assert.match(source, /className="team-plan-dialog"/, "弹框挂载容器查询/换行规则的类名");
   assert.match(source, /overflowWrap: "anywhere"/, "长文本可断行，防撑宽弹框");
+  // 小窗口（<480px 视口）不溢出、内容可滚：border-box + maxWidth 100% + 面板内滚动。
+  assert.match(source, /boxSizing: "border-box"/, "padding 不吃宽");
+  assert.match(source, /maxWidth: "100%"/);
+  assert.match(source, /overflow: "auto"/, "内容超出时面板内滚动（footer 按钮仍可达）");
+  assert.match(source, /overscrollBehavior: "contain"/, "滚到底不带动背后的聊天列");
+  assert.match(source, /padding: "clamp\(10px, 2\.5vw, 16px\)"/, "窄窗口内边距收一档");
+});
+
+// 收缩态卡片本身不写死宽度：宽度归外层 ChatWindow wrapper 管，卡片只保证「容器多窄都不溢出」，
+// 且「查看配置」永远不会被长团队名挤掉。
+test("收缩态卡片：width/minWidth/boxSizing 可收缩，「查看配置」不被挤掉", async () => {
+  const { readFile } = await jiti.import("node:fs/promises");
+  const source = (await readFile(new URL("./AgentTeamPlanCard.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+  const bar = source.match(/bar: \{[\s\S]*?\n  \},/)?.[0] ?? "";
+  assert.match(bar, /width: "100%"/, "按容器宽铺满，由外层决定上限");
+  assert.match(bar, /maxWidth: "100%"/);
+  assert.match(bar, /minWidth: 0/, "作为 flex/grid 子项时可收缩，长文本不顶出聊天列");
+  assert.match(bar, /boxSizing: "border-box"/, "padding 不额外吃宽");
+  assert.doesNotMatch(bar, /\bwidth: \d+/, "收缩态不写死宽度（避免与外层 wrapper 打架）");
+  const review = source.match(/review: \{[\s\S]*?\n  \},/)?.[0] ?? "";
+  assert.match(review, /flexShrink: 0/, "「查看配置」按钮不被长团队名挤掉");
+  assert.match(review, /whiteSpace: "nowrap"/);
+  const meta = source.match(/meta: \{[\s\S]*?\n  \},/)?.[0] ?? "";
+  assert.match(meta, /flexWrap: "wrap"/, "窄容器里徽标/成员数换行而不是溢出");
+  // 长团队名省略 + 卡片错误文本换行。
+  assert.match(source, /textOverflow: "ellipsis"/);
+  assert.match(source, /title=\{plan\.teamName\}/);
+  assert.match(source, /title=\{error\}/, "长错误文本换行 + 悬停看全文");
 });
 
 test("状态标签键与徽标色覆盖四态（纯函数输出）", () => {
@@ -284,9 +314,70 @@ test("dirty 时关闭路径走 requestClose（遮罩 / Close / Esc 同一条）�
   // 原来的 document 冒泡监听直接把 setOpen(false)。
   assert.match(source, /useModalDismiss<HTMLDivElement>\(requestClose, open\)/);
   assert.doesNotMatch(source, /document\.addEventListener\("keydown", onKey\)/, "不得留旧的 Esc 冒泡监听");
-  // requestClose：busy 按住；确认态再按一次 = 撤销这次关闭（不是放弃草稿）；
-  // dirty 进二次确认；否则真关。
-  assert.match(source, /if \(busy\) return;[\s\S]*if \(discardPrompt\) \{\s*\n\s*setDiscardPrompt\(false\);\s*\n\s*return;[\s\S]*if \(dirty\) setDiscardPrompt\(true\);[\s\S]*setOpen\(false\);/);
+  // requestClose：确认态再按一次 = 撤销这次关闭（不是放弃草稿）；busy / 非 dirty 直接关；
+  // dirty（且不在 busy）进二次确认。
+  // 旧写法 `if (busy) return` 会让 Esc / 遮罩在批准在途时「点了没反应」（用户反馈的死路）。
+  assert.doesNotMatch(source, /if \(busy\) return;/, "busy 不再吞掉关闭请求");
+  assert.match(
+    source,
+    /if \(discardPrompt\) \{\s*\n\s*setDiscardPrompt\(false\);\s*\n\s*return;\s*\n\s*\}\s*\n\s*if \(busy \|\| !dirty\) \{\s*\n\s*setOpen\(false\);\s*\n\s*return;\s*\n\s*\}\s*\n\s*setDiscardPrompt\(true\);/,
+    "确认态撤销 → busy/非 dirty 直接关 → 否则进二次确认",
+  );
+  // busy 时 Close 按钮不再变灰（否则只有 Esc/遮罩能关，两个入口行为还不一致）。
+  assert.match(source, /disabled=\{options\.closeDisabled \?\? false\}/, "Close 由调用方决定是否禁用");
+  assert.doesNotMatch(source, /disabled=\{options\.closeDisabled \?\? options\.busy\}/);
+});
+
+// 停止按钮「正在停止…」必须能复位：旧实现只 set 不 clear，abort 没带来计划状态变化时
+// 按钮永远卡住，第二次点不动。
+test("停止态复位：planId/state 变化、弹框关闭、15s 兜底三条路径", async () => {
+  const { readFile } = await jiti.import("node:fs/promises");
+  const source = (await readFile(new URL("./AgentTeamPlanCard.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+  assert.match(source, /setStoppingPlanId\(plan\.planId\)/, "点击时记录 planId");
+  // 计划换了一条 / 状态真的流转 → 复位（依赖 planId+state 的 key，不是 plan 对象身份）。
+  assert.match(source, /const stoppingResetKey = `\$\{plan\?\.planId \?\? ""\}:\$\{plan\?\.state \?\? ""\}`/);
+  assert.match(source, /useEffect\(\(\) => \{\s*\n\s*setStoppingPlanId\(null\);\s*\n\s*\}, \[stoppingResetKey\]\)/, "planId/state 变化复位");
+  // 弹框关闭 → 复位（重新打开是一次新操作）。
+  assert.match(source, /if \(!open\) \{[\s\S]*?setStoppingPlanId\(null\);[\s\S]*?\}, \[open\]\)/, "关闭弹框复位");
+  // 请求没落地时按钮必须自己活过来。
+  assert.match(source, /setTimeout\(\(\) => setStoppingPlanId\(null\), 15_000\)/, "15s 兜底复位");
+});
+
+// 告警区集中到弹框顶部：启动失败 → 非法成员名 → 未分配任务 → 批准失败。
+test("告警区顺序：launch error → invalid names → 未分配 → approve error，都在正文之前", () => {
+  const html = renderToStaticMarkup(planModalView(tFake, view({
+    state: "launch_failed",
+    launch: { status: "failed", error: "所有成员都派发失败" },
+    members: [member({ name: "team-lead" })],
+    tasks: [task({ ownerId: undefined })],
+  }), { approveError: "投递失败" }));
+  const at = (id) => html.indexOf(`data-testid="${id}"`);
+  assert.ok(at("team-plan-launch-error") >= 0, "启动失败可见");
+  assert.ok(at("team-plan-invalid-names") >= 0, "非法成员名可见");
+  assert.ok(at("team-plan-unassigned-summary") >= 0, "未分配任务给出汇总告警");
+  assert.ok(at("team-plan-approve-error") >= 0, "批准失败可见");
+  assert.ok(at("team-plan-launch-error") < at("team-plan-invalid-names"), "严重度递减：启动失败在前");
+  assert.ok(at("team-plan-invalid-names") < at("team-plan-unassigned-summary"));
+  assert.ok(at("team-plan-unassigned-summary") < at("team-plan-approve-error"));
+  // 全部集中在正文（只读名册）之前，用户不用滚到底部才发现不能批准。
+  assert.ok(at("team-plan-approve-error") < html.indexOf('data-member-id="m1"'), "告警区在名册之前");
+  // 同一条未分配任务：汇总一条 + 行内一条，不再重复成「负责人: 未分配 + 告警」两遍同样的话。
+  const ownerLines = html.match(/Owner: Unassigned/g) ?? [];
+  assert.equal(ownerLines.length, 1, "行内负责人行只出现一次");
+});
+
+// 只读名册与可编辑名册的成员数文案必须同一个 key（teams.plan.memberCount），
+// 否则两个分支一个显示「成员 (2)」、一个显示「2 名成员」。
+test("成员数文案统一走 teams.plan.memberCount（只读 / 可编辑两个分支）", async () => {
+  const { readFile } = await jiti.import("node:fs/promises");
+  const card = (await readFile(new URL("./AgentTeamPlanCard.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+  const editor = (await readFile(new URL("./PlanEditor.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+  assert.doesNotMatch(card, /t\("teams\.plan\.roster"\)\s*\(\{plan\.members\.length\}\)/, "只读分支不再手拼 (count)");
+  assert.match(card, /t\("teams\.plan\.memberCount", \{ count: plan\.members\.length \}\)/, "只读分支用 memberCount");
+  assert.match(editor, /t\("teams\.plan\.memberCount", \{ count: plan\.members\.length \}\)/, "可编辑分支用同一个 key");
+  const html = renderToStaticMarkup(planModalView(tFake, view()));
+  assert.match(html, /1 members/, "渲染出真实文案而不是 key");
+  assert.doesNotMatch(html, /teams\.plan\./);
 });
 
 test("二次确认行：dirty+discardPrompt 时出现，取消留在卡片、确认才真关", () => {

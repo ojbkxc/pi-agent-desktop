@@ -21,7 +21,12 @@
  *   只串行自己的写者，残余如实，不宣称完全防护。
  */
 
-import { enqueueTeamMutation, withTeamConfigLock } from "./agent-teams-swimlane-store";
+import {
+  enqueueTeamMutation,
+  releaseQuotaSlot,
+  tryReserveTeamWorkerSlot,
+  withTeamConfigLock,
+} from "./agent-teams-swimlane-store";
 
 /** 409 语义（上限/冲突/在跑）。 */
 export class MemberConflictError extends Error {
@@ -63,6 +68,84 @@ export interface RemoveMemberResult {
   sessionId?: string;
   warning?: string;
   reason?: string;
+}
+
+/**
+ * ── 批量派成员/删成员 body 的解析（route 只做 HTTP，判定在这里，便于单测）──────
+ *
+ * 上限口径（为什么是 64）：
+ * - 旧值 8（删 12）是「一次点一个」年代的防呆，与配额完全脱节：每团队上限已抬到
+ *   16～24、全局 64，一次请求填满一个团队就必然超 8 → 直接 400，「多派成员」在
+ *   HTTP 层就被拦住。现在批上限 = 一个满编团队（64 ≥ 全局上限），配额才是真闸；
+ * - 这里只防超大 body（一次几千条会把宿主 spawn 队列打爆、请求体也过大），
+ *   不是并发闸——并发由 runGlobalQuotaGate 的原子名额控制。
+ */
+export const MAX_BATCH_ADD_MEMBERS = 64;
+export const MAX_BATCH_REMOVE_MEMBERS = 64;
+/** prompt 正文上限（超长截断而不是拒单：派活正文长一点不该让整个请求失败）。 */
+export const MAX_MEMBER_PROMPT_LENGTH = 2000;
+
+/** 成员名合法字符（与 pi-team 名册/工单键同口径）。 */
+export const MEMBER_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+export type BatchParse<T> = { ok: true; value: T } | { ok: false; error: string };
+
+/**
+ * 解析 `action:"add"` 的 members 数组：名非法 ⇒ 整单 400（宁可整单拒，也不静默跳过——
+ * 静默跳过会让用户以为成员派出去了）；同名（大小写不敏感）去重保序；超批上限 ⇒ 400
+ * 并给出当前上限。
+ */
+export function parseAddMembersBatch(raw: unknown): BatchParse<AddMemberInput[]> {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return { ok: false, error: "members 必须是非空数组" };
+  }
+  if (raw.length > MAX_BATCH_ADD_MEMBERS) {
+    return {
+      ok: false,
+      error: `members 一次最多 ${MAX_BATCH_ADD_MEMBERS} 个（收到 ${raw.length} 个）：请拆成多批，批内会被并发派发`,
+    };
+  }
+  const seen = new Set<string>();
+  const inputs: AddMemberInput[] = [];
+  for (const item of raw) {
+    const record = item && typeof item === "object" && !Array.isArray(item)
+      ? item as Record<string, unknown>
+      : null;
+    const name = typeof record?.name === "string" ? record.name : "";
+    if (!MEMBER_NAME_PATTERN.test(name)) {
+      return { ok: false, error: `成员名不合法（限字母数字与 ._-，1..64 字符）：${JSON.stringify(name)}` };
+    }
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    inputs.push({
+      name,
+      ...(typeof record?.agentType === "string" && record.agentType ? { agentType: record.agentType } : {}),
+      ...(typeof record?.prompt === "string" && record.prompt
+        ? { prompt: record.prompt.slice(0, MAX_MEMBER_PROMPT_LENGTH) }
+        : {}),
+      ...(typeof record?.model === "string" && record.model ? { model: record.model } : {}),
+    });
+  }
+  return { ok: true, value: inputs };
+}
+
+/** 解析 `action:"remove"` 的 names 数组（去重保序；任何非法名 ⇒ 整单 400）。 */
+export function parseRemoveMemberNames(raw: unknown): BatchParse<string[]> {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return { ok: false, error: "names 必须是非空数组" };
+  }
+  if (raw.length > MAX_BATCH_REMOVE_MEMBERS) {
+    return { ok: false, error: `names 一次最多 ${MAX_BATCH_REMOVE_MEMBERS} 个（收到 ${raw.length} 个）` };
+  }
+  const names: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string" || !MEMBER_NAME_PATTERN.test(item)) {
+      return { ok: false, error: `成员名不合法：${JSON.stringify(item)}` };
+    }
+    if (!names.includes(item)) names.push(item);
+  }
+  return { ok: true, value: names };
 }
 
 export interface LifecyclePort {
@@ -140,6 +223,42 @@ function memberName(item: Record<string, unknown>): string {
 }
 
 /**
+ * LIMIT_EXCEEDED 文案口径：前缀 + `(上限)` 保持英文原文（前端/日志按它分支），
+ * 后面接**中文可执行出路**——旧文案只说「等别人收工或精简团队」，用户拿不到下一步动作。
+ * 每条出路都必须是**现在就能做的事**，并且带上当前数字（已用/上限）。
+ */
+function perTeamLimitMessage(teamName: string, used: number, limit: number): string {
+  const team = encodeURIComponent(teamName);
+  return `LIMIT_EXCEEDED: per-team worker limit reached (${limit}). `
+    + `团队「${teamName}」已有 ${used} 名 worker（lead 不计入），每团队上限 ${limit}，再加会超。`
+    + `出路：① 调高上限——设置项 teamQuota.perTeamLimit（PUT /api/teams/quota { "perTeamLimit": ${limit + 8} }）`
+    + `或环境变量 PI_TEAM_MAX_MEMBERS，改完立即生效、不必重启；`
+    + `② 开第二个团队分担，各自一份配额（跨团队派发不互抢）；`
+    + `③ 腾名额——移除跑完/parked 的成员：POST /api/teams/${team}/members {"action":"remove","names":["<成员名>"]}；`
+    + `④ 同一成员连续接手多件事用工单排队（POST /api/teams/${team}/assignments），不必一人一个新成员。`;
+}
+
+/** 全局上限文案（同样带数字 + 可执行出路）。 */
+function globalLimitMessage(input: {
+  limit: number;
+  used: number;
+  inflight: number;
+  pendingName?: string;
+  limitHint?: string;
+}): string {
+  const total = input.used + input.inflight;
+  return `LIMIT_EXCEEDED: global worker limit reached (${input.limit}). `
+    + `全进程已有 ${input.used} 名成员${input.inflight > 0 ? `，另有 ${input.inflight} 名正在派发中（合计 ${total}）` : ""}，`
+    + `全局上限 ${input.limit}${input.pendingName ? `，无法再派「${input.pendingName}」` : ""}。`
+    + `出路：① 只重派剩下没成功的成员（本批 status=spawned 的别重发，重发同名会 409），等某个成员收工即有余额；`
+    + `② 调高全局上限——设置项 teamQuota.globalLimit（PUT /api/teams/quota { "globalLimit": ${input.limit * 2} }）`
+    + `或环境变量 PI_TEAM_MAX_GLOBAL_WORKERS / PI_TEAM_MAX_WORKERS，改完立即生效；`
+    + `③ 腾名额——删掉跑完的团队或 parked 成员（POST /api/teams/<team>/members {"action":"remove",...}）；`
+    + `④ 把多件事压进工单队列（assignments）而不是多开成员。`
+    + (input.limitHint ? `（本次上限来自 ${input.limitHint}）` : "");
+}
+
+/**
  * start/ensureLive 失败后恢复名册：原条目不存在 ⇒ 摘除刚加的；存在 ⇒ 恢复原内容；
  * 被并发改写 ⇒ 不覆盖、如实冲突。
  *
@@ -182,13 +301,28 @@ async function restoreRosterEntry(
 }
 
 /**
- * 加成员（对外入口）：整体进本团队 `team:<dir>` 共享队列（lead 裁定：同团队所有
- * 编排串行；内部 config 临界区走 withTeamConfigLock——同 key 队列嵌套会死锁，严禁
- * 在队列 task 内再走 mutateTeamConfigFile）。全局配额预检由 route 在 `.quota.lock`
- * 内包整个循环完成。
+ * 加成员（对外入口）。
+ *
+ * 队列键 **按成员名分槽**（`team:<dir>#member:<name>`），不再是整团队一把锁：
+ * 旧口径「同团队所有编排串行」让同一团队的两名成员只能一个接一个 spawn（每个秒级），
+ * 多派几名就排长队——那是「派成员串行」的另一半瓶颈。现在：
+ * - 不同成员 ⇒ 不同队列槽 ⇒ 同时 spawn（配合 runGlobalQuotaGate 的并发名额，批内真并行）；
+ * - 同名 add/remove ⇒ 同一槽 ⇒ 仍然串行，保住「不会为同一个名字起两个会话、不会
+ *   ensureLive 撞上还没 adopt 完的 spawn」这条硬约束（并发同名会让第一个会话变孤儿）。
+ *
+ * 跨成员的共享状态只有 config.json，而它由 withTeamConfigLock（上游同款文件锁）兜底：
+ * 必须先拿锁再判重名/追加，锁内重读的是磁盘最新内容。
+ * ⚠️ 内部 config 临界区必须走 withTeamConfigLock，**不能**走 mutateTeamConfigFile
+ * （同 key 队列嵌套会死锁，见 restoreRosterEntry 注释）。
+ * 全局配额判定在 runGlobalQuotaGate 的 `.quota.lock` 临界区内完成。
  */
 export function addTeamMember(deps: MembersDeps, input: AddMemberInput): Promise<AddMemberResult> {
-  return enqueueTeamMutation(`team:${deps.teamDir}`, () => addTeamMemberCore(deps, input));
+  return enqueueTeamMutation(memberQueueKey(deps.teamDir, input.name), () => addTeamMemberCore(deps, input));
+}
+
+/** 成员级队列槽键（同团队不同成员可并行；同名 add/remove 仍串行）。 */
+function memberQueueKey(teamDir: string, name: string): string {
+  return `team:${teamDir}#member:${name.toLowerCase()}`;
 }
 
 async function addTeamMemberCore(deps: MembersDeps, input: AddMemberInput): Promise<AddMemberResult> {
@@ -224,11 +358,7 @@ async function addTeamMemberCore(deps: MembersDeps, input: AddMemberInput): Prom
       const leadNames = deps.leadNamesOf(members.filter(isMemberObject));
       const workers = members.filter((item) => isMemberObject(item) && !leadNames.has(memberName(item))).length;
       if (workers >= deps.quotaPerTeamLimit) {
-        throw new MemberConflictError(
-          `LIMIT_EXCEEDED: per-team worker limit reached (${deps.quotaPerTeamLimit}). ` +
-          `团队「${deps.rawTeamName}」名册已有 ${workers} 名成员，达到每团队上限 ${deps.quotaPerTeamLimit}。` +
-          `请拆成多个团队，或减少成员数量。`,
-        );
+        throw new MemberConflictError(perTeamLimitMessage(deps.rawTeamName, workers, deps.quotaPerTeamLimit));
       }
       const agentId = `${name}-${deps.now()}-${deps.uuid().slice(0, 8)}`;
       const entry = buildRosterEntry(input, agentId, deps.now());
@@ -323,19 +453,36 @@ async function addTeamMemberCore(deps: MembersDeps, input: AddMemberInput): Prom
 
 /**
  * POST add 的全局配额闸（route 与测试共用同一函数——lead 门禁：不能靠 route 外复刻
- * 流程声称已覆盖）。`.quota.lock` 锁内：
- * - 入口重读全局计数，limit 已满 ⇒ 拒任何新增（limit 0 = 全拒）；
- * - 每 input 前**锁内重读**（前序 spawn/失败恢复都反映在盘上名册里，重读即真实余量）；
- * - spawned=新占 1 个全局名额；respawned 复用既有会话不占；failed（补偿已回滚名册）不占；
- * - MemberConflictError ⇒ 整批返回 409 语义（conflict 携带原因）。
+ * 流程声称已覆盖）。
  *
- * `deps.addOne` 由 route 装配（addTeamMember 的 team 队列在 addTeamMember 内部）；
- * `deps.readTotal` 注入 readGlobalRosterWorkers（测试换假计数）。
+ * 旧实现把整批派发塞进一个 `.quota.lock` 临界区里，于是**全进程任何时刻只起一个成员**
+ * （spawn 是秒级），多团队/多成员一起派就排队——这是「派成员串行」的真瓶颈。现在：
+ *
+ * 1. **名额先原子占**：每个成员开派前调 `tryReserveTeamWorkerSlot`，在 `.quota.lock`
+ *    内「读盘名册 + 看在途预留」判余量；够就记一笔预留再出锁。并发请求因此看到
+ *    `已用 = 盘上 + 在途`，不会出现「双双预检都通过 ⇒ 超卖」；也不会把别的请求
+ *    正在派的成员算成自己的余量。
+ * 2. **起进程在锁外并发**：出锁后按 `concurrency`（默认 4，env
+ *    `PI_TEAM_MAX_SPAWN_CONCURRENCY`）并行 spawn。锁只覆盖毫秒级判定额。
+ * 3. **失败隔离**：单个成员失败（重名 409 / 该团队已满 / 宿主拒绝）只记一条 failed，
+ *    **不再整批中止**——其余成员照派。只有全局名额耗尽才停（剩余 input 不派，
+ *    conflict 如实带数字与出路）。
+ * 4. **预留必释放**：`addOne` 一结束就 release——spawned 由盘上名册接手计数，
+ *    failed 的补偿已回滚名册，respawned 本来不占；漏释放会把名额永久吃掉。
+ *
+ * `deps.addOne` 由 route 装配（addTeamMember 的**成员级**队列槽在 addTeamMember 内部，
+ * 不同成员互不阻塞）；`deps.readTotal` 注入 readGlobalRosterWorkers（测试换假计数）。
  */
 export interface GlobalQuotaGateDeps {
   globalLimit: number;
   readTotal(): Promise<number>;
   addOne(input: AddMemberInput): Promise<AddMemberResult>;
+  /** 原子临界区注入（测试用假锁）；默认 store 的 withQuotaLock（真实 `.quota.lock`）。 */
+  withLock?: <T>(task: () => Promise<T>) => Promise<T>;
+  /** 同时在起的成员数上限（默认 DEFAULT_SPAWN_CONCURRENCY）。 */
+  concurrency?: number;
+  /** 上限来源描述（env 名 / 设置项），只用于文案。 */
+  limitHint?: string;
 }
 
 export interface GlobalQuotaGateResult {
@@ -343,43 +490,77 @@ export interface GlobalQuotaGateResult {
   results: AddMemberResult[];
 }
 
-export async function runGlobalQuotaGate(deps: GlobalQuotaGateDeps, inputs: readonly AddMemberInput[]): Promise<GlobalQuotaGateResult> {
-  let used = await deps.readTotal();
-  if (used >= deps.globalLimit) {
-    return {
-      conflict: `LIMIT_EXCEEDED: global worker limit reached (${deps.globalLimit}). 当前全进程已有 ${used} 名成员，无余量再添加。请等待其他团队的成员收工，或先精简不再需要的团队。`,
-      results: [],
-    };
-  }
-  const results: AddMemberResult[] = [];
-  for (const input of inputs) {
-    // 每 input 前锁内重读（前序 spawned/failed 已落盘名册，重读即真实余量）。
-    const freshTotal = await deps.readTotal();
-    if (freshTotal >= deps.globalLimit) {
-      return {
-        conflict: `LIMIT_EXCEEDED: global worker limit reached (${deps.globalLimit}). 当前全进程已有 ${freshTotal} 名成员，无余量再添加「${input.name}」。请等待其他团队的成员收工，或先精简不再需要的团队。`,
-        results,
-      };
-    }
-    try {
-      const result = await deps.addOne(input);
-      results.push(result);
-      if (result.status === "spawned") used += 1;
-    } catch (error) {
-      results.push({
-        name: input.name,
-        status: "failed",
-        reason: error instanceof Error ? error.message : String(error),
-      });
-      if (error instanceof MemberConflictError) {
-        return {
-          conflict: error instanceof Error ? error.message : String(error),
-          results,
-        };
+/** 默认并发派成员数：4 个宿主进程同时起，够快又不把 spawn 风暴灌满机器。 */
+export const DEFAULT_SPAWN_CONCURRENCY = 4;
+
+/** 极简信号量：限制同时在飞的 spawn 数（12 个成员 → 4 路并发，而不是排队等锁）。 */
+function createSemaphore(size: number): { acquire: () => Promise<void>; release: () => void } {
+  let available = Math.max(1, size);
+  const waiters: Array<() => void> = [];
+  return {
+    acquire: () => {
+      if (available > 0) {
+        available -= 1;
+        return Promise.resolve();
       }
+      return new Promise<void>((resolve) => waiters.push(resolve));
+    },
+    release: () => {
+      const next = waiters.shift();
+      if (next) next(); // 名额直接转手，available 不变。
+      else available += 1;
+    },
+  };
+}
+
+export async function runGlobalQuotaGate(deps: GlobalQuotaGateDeps, inputs: readonly AddMemberInput[]): Promise<GlobalQuotaGateResult> {
+  if (inputs.length === 0) return { conflict: null, results: [] };
+  const results = new Array<AddMemberResult | undefined>(inputs.length);
+  const semaphore = createSemaphore(Math.min(deps.concurrency ?? DEFAULT_SPAWN_CONCURRENCY, inputs.length));
+  let conflict: string | null = null;
+  let stopped = false;
+  const inflight: Promise<void>[] = [];
+
+  for (let index = 0; index < inputs.length; index += 1) {
+    if (stopped) break;
+    const input = inputs[index]!;
+    // 先等一个并发位再占名额：等待中的成员不持预留，否则会把名额卡在排队上。
+    await semaphore.acquire();
+    const slot = await tryReserveTeamWorkerSlot({
+      globalLimit: deps.globalLimit,
+      readTotal: deps.readTotal,
+      ...(deps.withLock ? { withLock: deps.withLock } : {}),
+    });
+    if (!slot.granted) {
+      semaphore.release();
+      stopped = true;
+      conflict = globalLimitMessage({
+        limit: slot.limit,
+        used: slot.used,
+        inflight: slot.inflight,
+        pendingName: input.name,
+        ...(deps.limitHint ? { limitHint: deps.limitHint } : {}),
+      });
+      break;
     }
+    inflight.push((async () => {
+      try {
+        results[index] = await deps.addOne(input);
+      } catch (error) {
+        // 单个成员失败不中止整批（旧实现遇 MemberConflictError 直接丢掉剩余成员）。
+        results[index] = {
+          name: input.name,
+          status: "failed",
+          reason: error instanceof Error ? error.message : String(error),
+        };
+      } finally {
+        if (slot.reservationId) releaseQuotaSlot(slot.reservationId);
+        semaphore.release();
+      }
+    })());
   }
-  return { conflict: null, results };
+  await Promise.all(inflight);
+  return { conflict, results: results.filter((result): result is AddMemberResult => result !== undefined) };
 }
 
 /**
@@ -387,9 +568,54 @@ export async function runGlobalQuotaGate(deps: GlobalQuotaGateDeps, inputs: read
  * 才进临界区移名册（先移再探会在长跑期间制造孤儿）；移出时重读发现原值被并发改写
  * ⇒ 409 冲突不移除；停止成功而移除失败 ⇒ 如实报。running 成员禁止 remove。
  */
-/** 删成员（对外入口）：整体进本团队 `team:<dir>` 共享队列（与 add/工单编排串行）。 */
+/** 删成员（对外入口）：进**成员级**队列槽（与同名 add 串行；不同成员互不阻塞）。 */
 export function removeTeamMember(deps: MembersDeps, name: string): Promise<RemoveMemberResult> {
-  return enqueueTeamMutation(`team:${deps.teamDir}`, () => removeTeamMemberCore(deps, name));
+  return enqueueTeamMutation(memberQueueKey(deps.teamDir, name), () => removeTeamMemberCore(deps, name));
+}
+
+/**
+ * 批量删成员：**逐成员失败隔离 + 小并发**。
+ *
+ * 旧 route 遇第一个 MemberConflictError 就 `break`——删 10 个成员时第 3 个在 running，
+ * 后面 7 个根本没被尝试，用户还以为「删不动」。现在每个成员各自走自己的队列槽：
+ * - 失败/冲突只记一条 failed（reason 原样），**继续**处理剩下的；
+ * - 小并发（默认 4）：每个成员要 release + probe（真探会话是否已停），串行会拖很久；
+ * - 结果按请求顺序返回。
+ */
+export interface RemoveMembersBatchResult {
+  results: RemoveMemberResult[];
+  /** 首个 409 语义（running / 被并发改写）的原因；没有则为 null。 */
+  conflict: string | null;
+}
+
+export async function removeTeamMembersBatch(
+  deps: MembersDeps,
+  names: readonly string[],
+  options: { concurrency?: number } = {},
+): Promise<RemoveMembersBatchResult> {
+  const results = new Array<RemoveMemberResult | undefined>(names.length);
+  let conflict: string | null = null;
+  const cursor = { value: 0 };
+  const workerCount = Math.min(Math.max(1, options.concurrency ?? 4), names.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    for (;;) {
+      const index = cursor.value;
+      if (index >= names.length) return;
+      cursor.value += 1;
+      const name = names[index]!;
+      try {
+        results[index] = await removeTeamMember(deps, name);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        if (error instanceof MemberConflictError && conflict === null) conflict = reason;
+        results[index] = { name, status: "failed", reason };
+      }
+    }
+  }));
+  return {
+    results: results.filter((result): result is RemoveMemberResult => result !== undefined),
+    conflict,
+  };
 }
 
 async function removeTeamMemberCore(deps: MembersDeps, name: string): Promise<RemoveMemberResult> {
