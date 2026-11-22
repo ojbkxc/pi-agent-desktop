@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useId } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { useServerSetting } from "@/hooks/useServerSetting";
+import { field, shown } from "./server-setting-machine";
 import { ConfigSwitch } from "./SettingsUi";
 
 /**
  * A Settings › General › Chat switch whose value lives on the server: GET
  * `endpoint` reads `{ enabled }`, PUT writes it. Optimistic, rolled back with
- * `failedHint` shown when the save fails.
+ * `failedHint` shown when the save fails. The race rules live in
+ * `hooks/useServerSetting.ts`, shared with the preset row.
  */
 export function ServerSwitchSettingRow({
   endpoint,
@@ -27,66 +30,19 @@ export function ServerSwitchSettingRow({
 }) {
   const hintId = useId();
   const { t } = useI18n();
-  const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** Monotonic save generation: a response from a superseded toggle must not win. */
-  const saveSeq = useRef(0);
-  const read = (data: { enabled?: unknown }) => (typeof data.enabled === "boolean" ? data.enabled : defaultEnabled);
-
-  useEffect(() => () => {
-    if (savedTimer.current) clearTimeout(savedTimer.current);
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch(endpoint)
-      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
-      .then((data: { enabled?: unknown }) => {
-        if (!cancelled) setEnabled(read(data));
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [endpoint]);
-
-  const update = (next: boolean) => {
-    const previous = enabled;
-    const seq = ++saveSeq.current;
-    const isCurrent = () => seq === saveSeq.current;
-    setEnabled(next);
-    setSaving(true);
-    setFailed(false);
-    if (savedTimer.current) { clearTimeout(savedTimer.current); savedTimer.current = null; }
-    setSaved(false);
-    fetch(endpoint, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled: next }),
-    })
-      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
-      .then((data: { enabled?: unknown }) => {
-        if (!isCurrent()) return;
-        setEnabled(read(data));
-        setSaved(true);
-        savedTimer.current = setTimeout(() => setSaved(false), 2000);
-      })
-      .catch(() => {
-        // Only a superseded response may not roll back: the later toggle owns the state.
-        if (!isCurrent()) return;
-        setEnabled(previous);
-        setFailed(true);
-      })
-      .finally(() => {
-        if (isCurrent()) setSaving(false);
-      });
-  };
+  const { value, saving, failed, saved, update } = useServerSetting<boolean>({
+    endpoint,
+    body: (enabled) => ({ enabled }),
+    read: (payload) => {
+      const enabled = field(payload, "enabled");
+      return typeof enabled === "boolean" ? enabled : undefined;
+    },
+    fallback: defaultEnabled,
+  });
+  const enabled = shown(value, defaultEnabled);
+  // Only a save disables the switch: a GET that failed leaves the row on its default
+  // and still usable, with `failed` said in the hint line.
+  const loading = saving;
 
   return (
     <div className={`settings-chat-option settings-chat-switch-option artifacts-setting-row${className ? ` ${className}` : ""}`}>
@@ -97,8 +53,8 @@ export function ServerSwitchSettingRow({
         </span>
       </span>
       <ConfigSwitch
-        checked={enabled ?? defaultEnabled}
-        loading={enabled === null || saving}
+        checked={enabled}
+        loading={loading}
         label={label}
         describedBy={hintId}
         onChange={update}

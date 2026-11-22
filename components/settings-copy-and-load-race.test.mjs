@@ -44,19 +44,20 @@ test("SkillsConfig keeps its superseded-load guard and drops the Error: prefix",
 
 test("ServerSwitchSettingRow ignores a superseded save response", async () => {
   const source = await read("./ServerSwitchSettingRow.tsx");
-  const start = source.indexOf("const update = (next: boolean) => {");
-  assert.ok(start > 0, "update not found");
-  const body = source.slice(start, source.indexOf("};", source.indexOf(".finally(() =>")));
-  // Rapid toggles: the first PUT may answer last. Without a sequence guard its
-  // value (or its rollback) would overwrite the newer toggle.
-  assert.match(body, /const seq = \+\+saveSeq\.current;/);
-  assert.match(body, /const isCurrent = \(\) => seq === saveSeq\.current;/);
-  assert.match(body, /\.then\(\(data: \{ enabled\?: unknown \}\) => \{\r?\n\s+if \(!isCurrent\(\)\) return;/);
-  const catchStart = body.indexOf(".catch(() => {");
-  const finallyStart = body.indexOf(".finally(");
-  assert.ok(catchStart > 0 && finallyStart > catchStart, "catch/finally blocks found");
-  assert.match(body.slice(catchStart, finallyStart), /if \(!isCurrent\(\)\) return;/);
-  assert.match(body, /if \(isCurrent\(\)\) setSaving\(false\)/);
+  // The row defers to the shared round trip, so this guard lives in one place for
+  // every server-backed row (the three-way fast-mode row included).
+  assert.match(source, /useServerSetting<boolean>/, "the row must use the shared hook");
+  assert.doesNotMatch(source, /saveSeq/, "the row must not keep a private save counter");
+
+  const hook = await read("../hooks/useServerSetting.ts");
+  // Rapid toggles: the first PUT may answer last. The hook mints a token per save
+  // and the reducer drops any answer carrying an older one.
+  assert.match(hook, /tokenRef\.current \+= 1;/);
+  assert.match(hook, /dispatch\(\{ type: "ok", token, /);
+  assert.match(hook, /dispatch\(\{ type: "fail", token \}\)/);
+  const machine = await read("./server-setting-machine.ts");
+  assert.match(machine, /if \(action\.token !== state\.token\) return state;/, "stale responses are dropped");
+  assert.match(machine, /value: state\.previous/, "a real failure rolls back");
 });
 
 test("OutageSettings' cancel-all treats a non-OK response as a failure", async () => {
