@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { PurgePresetLibrary, upsertPresetTemplate } from "./PurgePresetLibrary";
+import { PurgeGateLogSection } from "./PurgeGateLogSection";
 import { ConfigButton, ConfigSwitch } from "./SettingsUi";
 
 export type PurgeReasoningFloor = "off" | "low" | "medium" | "high" | "xhigh";
@@ -1015,6 +1016,8 @@ export function PurgeConsoleSection() {
           </dl>
         )}
       </section>
+
+      <PurgeGateLogSection />
 
       <div className="settings-purge-actions">
         <ConfigButton
