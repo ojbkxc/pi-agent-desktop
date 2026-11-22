@@ -75,13 +75,15 @@ test("a cron preview only counts for the expression it was computed from", () =>
   const stale = { expr: "*/5 * * * *", result: { valid: true, nextRuns: ["2026-11-18T00:05:00Z"] } };
 
   // 表达式变了：旧预览既不能展示，也不能放行提交；此时处于「校验中」。
-  assert.deepEqual(h.bindCronPreview("* * * *", stale), { shown: null, pending: true, invalid: false });
+  assert.deepEqual(h.bindCronPreview("* * * *", stale), { shown: null, pending: true, invalid: false, failed: false, errorMessage: null });
 
   // 表达式一致：合法预览可展示、无 pending、不算非法。
   assert.deepEqual(h.bindCronPreview("*/5 * * * *", stale), {
     shown: stale.result,
     pending: false,
     invalid: false,
+    failed: false,
+    errorMessage: null,
   });
 
   // 一致但非法：不允许提交。
@@ -90,8 +92,29 @@ test("a cron preview only counts for the expression it was computed from", () =>
     shown: invalidPreview.result,
     pending: false,
     invalid: true,
+    failed: false,
+    errorMessage: null,
   });
 
   // 非 cron 表单（expr 为 null）：没有预览，也不算 pending/非法。
-  assert.deepEqual(h.bindCronPreview(null, stale), { shown: null, pending: false, invalid: false });
+  assert.deepEqual(h.bindCronPreview(null, stale), { shown: null, pending: false, invalid: false, failed: false, errorMessage: null });
+});
+
+test("cron 预览请求失败：failed + 错误文案，且仍 pending（禁止提交、不卡在「检查中」）", () => {
+  const previewError = { expr: "* * * * *", message: "Network down" };
+  assert.deepEqual(h.bindCronPreview("* * * * *", null, previewError), {
+    shown: null,
+    pending: true,
+    invalid: false,
+    failed: true,
+    errorMessage: "Network down",
+  });
+  // 旧表达式的错误不算数：当前表达式仍按「检查中/待校验」处理，不显示旧错误。
+  assert.deepEqual(h.bindCronPreview("*/5 * * * *", null, previewError), {
+    shown: null,
+    pending: true,
+    invalid: false,
+    failed: false,
+    errorMessage: null,
+  });
 });

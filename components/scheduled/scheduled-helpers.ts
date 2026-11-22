@@ -89,9 +89,19 @@ export function canWrite(preset: ScheduledTaskView["toolPreset"]): boolean {
 export function bindCronPreview<T extends { valid: boolean }>(
   expr: string | null,
   preview: { expr: string; result: T } | null,
-): { shown: T | null; pending: boolean; invalid: boolean } {
+  previewError: { expr: string; message: string } | null = null,
+): { shown: T | null; pending: boolean; invalid: boolean; failed: boolean; errorMessage: string | null } {
   const shown = expr && preview && preview.expr === expr ? preview.result : null;
-  return { shown, pending: Boolean(expr && !shown), invalid: Boolean(shown && !shown.valid) };
+  // `failed` only when the check for *this* expression errored: a stale error or
+  // stale preview for another expression never counts.
+  const failed = Boolean(expr && !shown && previewError && previewError.expr === expr);
+  return {
+    shown,
+    pending: Boolean(expr && !shown),
+    invalid: Boolean(shown && !shown.valid),
+    failed,
+    errorMessage: failed ? previewError!.message : null,
+  };
 }
 
 /** `datetime-local` value for an ISO instant, in the viewer's own time zone. */

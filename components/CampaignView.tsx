@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { formatRelativeTime } from "@/lib/i18n/format";
+import { nextSeededCwd } from "@/lib/seed-default-cwd";
 import {
   CAMPAIGN_DEFAULT_ITEM_MAX_ROUNDS,
   CAMPAIGN_DEFAULT_MAX_ITEMS,
@@ -103,6 +104,8 @@ export function CampaignView({ defaultCwd, onOpenSession }: Props) {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const rootRef = useRef<HTMLElement>(null);
   const aliveRef = useRef(true);
+  const cwdSeededRef = useRef(false);
+  const cwdEditedRef = useRef(false);
 
   useEffect(() => {
     rootRef.current?.focus({ preventScroll: true });
@@ -113,7 +116,15 @@ export function CampaignView({ defaultCwd, onOpenSession }: Props) {
   }, []);
 
   useEffect(() => {
-    if (!cwd && defaultCwd) setCwd(defaultCwd);
+    // 只 seed 一次：用户清空/改过 cwd 之后不再回弹默认目录
+    // （此前 `if (!cwd && defaultCwd)` 每次渲染都会把空值填回）。
+    const decision = nextSeededCwd(
+      { seeded: cwdSeededRef.current, userEdited: cwdEditedRef.current },
+      cwd,
+      defaultCwd,
+    );
+    cwdSeededRef.current = decision.seeded;
+    if (decision.value !== null) setCwd(decision.value);
   }, [cwd, defaultCwd]);
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -341,7 +352,7 @@ export function CampaignView({ defaultCwd, onOpenSession }: Props) {
                 id="campaign-cwd"
                 className="scheduled-input"
                 value={cwd}
-                onChange={(event) => setCwd(event.target.value)}
+                onChange={(event) => { cwdEditedRef.current = true; setCwd(event.target.value); }}
                 placeholder={t("campaign.cwdPlaceholder")}
                 spellCheck={false}
               />

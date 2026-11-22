@@ -5,6 +5,7 @@ import { AppSelect } from "./AppSelect";
 import { useI18n } from "@/hooks/useI18n";
 import { refreshAutofixTasks, useAutofix } from "@/hooks/useAutofix";
 import { autofixApi, autofixErrorText } from "@/lib/autofix/client";
+import { nextSeededCwd } from "@/lib/seed-default-cwd";
 import { formatRelativeTime } from "@/lib/i18n/format";
 import {
   AUTOFIX_DEFAULT_MAX_ROUNDS,
@@ -41,14 +42,23 @@ export function AutofixView({ defaultCwd, onOpenSession }: Props) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const rootRef = useRef<HTMLElement>(null);
+  const cwdSeededRef = useRef(false);
+  const cwdEditedRef = useRef(false);
 
   useEffect(() => {
     rootRef.current?.focus({ preventScroll: true });
   }, []);
 
-  // 当前会话 cwd 后来才解析出来时补一个空值。
+  // 当前会话 cwd 后来才解析出来时补一个空值。只 seed 一次：用户清空/改过之后
+  // 不再回弹（此前 `if (!cwd && defaultCwd)` 每次渲染都会把空值填回默认目录）。
   useEffect(() => {
-    if (!cwd && defaultCwd) setCwd(defaultCwd);
+    const decision = nextSeededCwd(
+      { seeded: cwdSeededRef.current, userEdited: cwdEditedRef.current },
+      cwd,
+      defaultCwd,
+    );
+    cwdSeededRef.current = decision.seeded;
+    if (decision.value !== null) setCwd(decision.value);
   }, [cwd, defaultCwd]);
 
   async function act(key: string, action: () => Promise<unknown>) {
@@ -180,7 +190,7 @@ export function AutofixView({ defaultCwd, onOpenSession }: Props) {
                 id="autofix-cwd"
                 className="scheduled-input"
                 value={cwd}
-                onChange={(event) => setCwd(event.target.value)}
+                onChange={(event) => { cwdEditedRef.current = true; setCwd(event.target.value); }}
                 placeholder={t("autofix.cwdPlaceholder")}
                 spellCheck={false}
               />
