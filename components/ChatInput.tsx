@@ -48,6 +48,7 @@ import { useI18n } from "@/hooks/useI18n";
 import type { ReactNode } from "react";
 import type { ContextUsage, SessionStatsInfo } from "@/lib/pi-types";
 import { ContextUsageRing } from "./ContextUsageRing";
+import { ApprovalModeIndicator } from "./ApprovalModeIndicator";
 import { useChatAppearance } from "@/hooks/useChatAppearance";
 import type { ToolPreset } from "@/lib/tool-presets";
 import { SelectorRow } from "./SelectorRow";
@@ -3366,6 +3367,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 onSetDefault={onSetDefaultModel}
               />
             )}
+            {/* 命令审批档位快捷入口：只读写档位，取数与请求都在组件内部。 */}
+            <ApprovalModeIndicator />
             {/* A virtual model routes each request; show where the latest response went, like pi's footer. */}
             {routedModel && routedModelName && (
               <span

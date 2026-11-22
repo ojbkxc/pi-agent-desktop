@@ -10846,6 +10846,54 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .composer-goal-button:hover { background: var(--bg-hover); color: var(--text); }
 .composer-goal-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/* 输入框底栏的「命令审批档位」指示器：跟着模型按钮排在同一行，保持紧凑。
+   按钮本身沿用 .native-toolbar-button 的 hover/active/disabled 语义，这里只补
+   内边距、字号与圆角，让它像一枚小胶囊而不是图标按钮。 */
+.approval-mode-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.approval-mode-indicator-button {
+  min-height: var(--control-h-sm);
+  max-width: 160px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm) !important;
+  font-size: var(--fs-micro);
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.approval-mode-indicator-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* aria-live 播报区只给辅助技术，不占视觉空间。 */
+.approval-mode-indicator-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.approval-mode-indicator-error {
+  color: var(--warning);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+
 /* 「新建目标」弹窗（对齐 Alma 的 goal 面板）。与团队成本弹窗同一套版式与层级，
    但表单是两栏自由文本 + 预设小按钮 + 置灰的 Start。 */
 .goal-dialog-backdrop {
