@@ -2626,7 +2626,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (!sid) return complete({ handled: true, error: "No active session to name" });
           if (!args) return complete({ handled: true, error: "Usage: /name <name>" });
           await sendAgentCommand(sid, { type: "set_session_name", name: args });
-          if (await loadSession(sid)) promoteNewSession();
+          // includeState must be true: with the default `false` loadSession returns
+          // null on success, so promoteNewSession (draft rekey + AppShell notice)
+          // never ran for a freshly-created composer session.
+          if (await loadSession(sid, false, true)) promoteNewSession();
           return complete({ handled: true, message: `Session renamed to ${args}` });
         }
 
