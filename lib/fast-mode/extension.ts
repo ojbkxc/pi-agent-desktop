@@ -82,7 +82,7 @@ export function createFastModeExtension(
       pi.registerCommand?.(FAST_MODE_COMMAND_NAME, {
         description: "Show or set fast mode (off | conservative | standard)",
         getArgumentCompletions: (prefix: string) => fastModeCompletions(prefix),
-        handler: async (args: unknown, ctx: { ui?: { notify?: (message: string, level?: string) => void } }) => {
+        handler: async (args, ctx) => {
           const parsed = parseFastModeArgs(args);
           const notify = ctx?.ui?.notify;
           if (parsed.kind === "status") {
