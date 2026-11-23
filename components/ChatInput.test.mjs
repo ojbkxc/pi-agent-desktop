@@ -594,7 +594,9 @@ test("locks built-in command submission until it settles", async () => {
     setBuiltinCommandPending(value) { callback.pendingStates.push(value); },
     valueRef: { current: "/reload" },
     // d5-19：runBuiltinCommand 的 15s 超时竞速需要 setTimeout（node 全局传入沙盒）。
+    // clearTimeout 同步传入：命令先回来时新代码会立刻清计时器（孤儿 timer 修复）。
     setTimeout,
+    clearTimeout,
     BUILTIN_COMMAND_TIMEOUT_MS: 15_000,
   });
   callback.pendingStates = [];
@@ -632,6 +634,7 @@ test("runBuiltinCommand 超时返回 timeout（而不是 unhandled），且不�
     setBuiltinCommandPending() {},
     valueRef: { current: "/reload" },
     setTimeout,
+    clearTimeout,
     BUILTIN_COMMAND_TIMEOUT_MS: 5,
   });
   callback.cleared = 0;

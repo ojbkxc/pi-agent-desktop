@@ -34,7 +34,7 @@ import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { phaseLabel } from "@/lib/chat-phase-label";
 import { useAgentSession, type AgentEndInfo, type NoticeItem } from "@/hooks/useAgentSession";
-import { selectHasStreamingContent, selectIsStreaming, selectStreamingMessage, useStreamingSelector } from "@/hooks/useStreamingSelector";
+import { selectHasStreamingContent, selectIsStreaming, selectStreamingArtifactMessage, selectStreamingMessage, useStreamingSelector } from "@/hooks/useStreamingSelector";
 import type { StreamingStore } from "@/lib/streaming-message";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useScrollbarVisibility } from "@/hooks/useScrollbarVisibility";
@@ -1219,7 +1219,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
 
   // The artifact panel follows the live reply: it reads the message through the
   // getter each commit, so a chunk re-renders StreamingReply alone.
-  const streamingArtifactMessage = useStreamingSelector(streamingStore, (state) => state.isStreaming ? state.streamingMessage : null);
+  const streamingArtifactMessage = useStreamingSelector(streamingStore, selectStreamingArtifactMessage);
   useArtifactPublisher(
     session?.id ?? sessionIdRef.current,
     messages,

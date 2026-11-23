@@ -1587,10 +1587,16 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       // 超时若按未处理 fall-through，/命令 会被当普通消息发给模型并清空输入，
       // 而原请求仍可能在服务端完成 → 命令与聊天消息双执行。
       const timedOut = Symbol("builtin-command-timeout");
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
       const result = await Promise.race([
         onBuiltinCommand(msg),
-        new Promise<typeof timedOut>((resolve) => setTimeout(() => resolve(timedOut), BUILTIN_COMMAND_TIMEOUT_MS)),
+        new Promise<typeof timedOut>((resolve) => {
+          // 命令先回来就立刻清掉计时器：它本来只会 resolve 一个已 settle 的
+          // race，无害但白挂 15 秒事件循环（快命令连发会堆积）。
+          timeoutId = setTimeout(() => resolve(timedOut), BUILTIN_COMMAND_TIMEOUT_MS);
+        }),
       ]);
+      clearTimeout(timeoutId);
       if (result === timedOut) return "timeout";
       if (!result || !result.handled) return "unhandled";
       if (!result.error && canClearBuiltinCommandInput(valueRef.current, attachedImagesRef.current.length, msg)) clearInput();
@@ -1804,6 +1810,10 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     if (fileIndexFetchingRef.current === cwd) return;
     fileIndexFetchingRef.current = cwd;
     const fetchCwd = cwd;
+    // 竞态防御（chat-ui 审计 D6）：两个 cwd 的会话快速切换时，前一发的 finally 会
+    // 提前熄掉后一发的 loading、失败还会清掉后一发刚写好的 meta。落地以
+    // fileIndexFetchingRef 当前值是否仍是自己为准；清理（effect 重跑/卸载）一律不落地。
+    let cancelled = false;
     setFileIndexLoading(true);
     fetch(`/api/file-index?cwd=${encodeURIComponent(fetchCwd)}`)
       .then((res) => {
@@ -1811,17 +1821,21 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         return res.json() as Promise<{ files?: string[]; truncated?: boolean }>;
       })
       .then((data) => {
+        if (cancelled || fileIndexFetchingRef.current !== fetchCwd) return;
         setFileIndex({ cwd: fetchCwd, entries: buildEntriesFromFiles(data.files ?? []), truncated: !!data.truncated });
         fileIndexMetaRef.current = { cwd: fetchCwd, fetchedAt: Date.now() };
       })
       .catch(() => {
         // Leave any previous index in place; next open retries.
-        fileIndexMetaRef.current = null;
+        if (!cancelled && fileIndexFetchingRef.current === fetchCwd) fileIndexMetaRef.current = null;
       })
       .finally(() => {
-        fileIndexFetchingRef.current = null;
-        setFileIndexLoading(false);
+        if (fileIndexFetchingRef.current === fetchCwd) fileIndexFetchingRef.current = null;
+        if (!cancelled) setFileIndexLoading(false);
       });
+    return () => {
+      cancelled = true;
+    };
   }, [atTokenActive, cwd]);
 
   const applyAtCompletion = useCallback((entry: FileIndexEntry) => {

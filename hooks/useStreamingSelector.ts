@@ -25,3 +25,5 @@ export function useStreamingSelector<T>(store: StreamingStore, select: (state: S
 export const selectIsStreaming = (state: StreamingState) => state.isStreaming;
 export const selectHasStreamingContent = (state: StreamingState) => Boolean(state.streamingMessage?.content.length);
 export const selectStreamingMessage = (state: StreamingState) => state.streamingMessage;
+/** The streaming bubble the artifact publisher follows: null while not streaming. */
+export const selectStreamingArtifactMessage = (state: StreamingState) => (state.isStreaming ? state.streamingMessage : null);
