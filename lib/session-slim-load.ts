@@ -17,7 +17,7 @@
 
 import { readFileSync, statSync } from "fs";
 import { dirname, resolve } from "path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { migrateSessionEntries, parseSessionEntries, SessionManager } from "@earendil-works/pi-coding-agent";
 
 /** Lines shorter than this are parsed as-is; the strip only pays off on big ones. */
 const SLIM_MIN_LINE_BYTES = 256 * 1024;
@@ -141,6 +141,44 @@ export function openSlimSessionManager(filePath: string): SessionManager | undef
     // persist=false: the manager can never rewrite or append to the real file.
     // The constructor is private in the typings but public at runtime;
     // session-slim-load.test.mjs pins this against SessionManager.open().
+    const Ctor = SessionManager as unknown as SessionManagerCtor;
+    const cwd = typeof header.cwd === "string" ? header.cwd : process.cwd();
+    return new Ctor(cwd, dirname(resolved), resolved, false, undefined, entries);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 只读打开任意大小的会话文件——**绝不写回**。
+ *
+ * 为什么需要它（persistence 审计 P0）：`SessionManager.open()` 传的是
+ * `persist=true`，而它读入后会对 legacy 文件跑 `migrateToCurrentVersion`——
+ * 版本 < 3 时 `_rewriteFile()` 当场截断重写，且只写回**解析成功**的条目。
+ * 也就是说：一个普通的 `GET /api/sessions/<id>`（还有 context / 文件引用 /
+ * web-push 这些读路径）会悄悄丢掉文件里任何一行坏 JSON（实测 387 字节变 289），
+ * 并把 header 就地改成 `version:3`；重写还是先归零再写，非原子，窗口内 pi 运行时
+ * 的 append 会一并消失。
+ *
+ * 这里改走同一条 `persist=false` 构造路径，但**在内存里**跑同一份
+ * `migrateSessionEntries()`，所以 legacy 文件照样渲染正确，磁盘一个字节都不动。
+ * 迁移与落盘只在写路径（`mutable: true`）发生，那是调用方明确要改文件的时候。
+ */
+export function openReadOnlySessionManager(filePath: string): SessionManager | undefined {
+  try {
+    const resolved = resolve(filePath);
+    const { size } = statSync(resolved);
+    if (size === 0) return undefined;
+
+    const entries = size >= SLIM_LOAD_MIN_FILE_BYTES && size <= SLIM_LOAD_MAX_FILE_BYTES
+      ? loadSlimSessionEntries(readFileSync(resolved))
+      : parseSessionEntries(readFileSync(resolved, "utf8")) as unknown as RawEntry[];
+    const header = entries[0];
+    if (!header || header.type !== "session" || typeof header.id !== "string") return undefined;
+
+    // In-memory only: the same normalisation `open()` would have done on disk.
+    migrateSessionEntries(entries as unknown as Parameters<typeof migrateSessionEntries>[0]);
+
     const Ctor = SessionManager as unknown as SessionManagerCtor;
     const cwd = typeof header.cwd === "string" ? header.cwd : process.cwd();
     return new Ctor(cwd, dirname(resolved), resolved, false, undefined, entries);
