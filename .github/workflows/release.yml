@@ -124,22 +124,32 @@ jobs:
           releaseBody: |
             ## Pi Agent Desktop 0.8.7 (fork)
 
-            **2026-11-23 · 覆盖式重发（第十一次）**
+            **2026-11-24 · 覆盖式重发（第十二次）**
 
             > 版本号保持 0.8.7 不变，本次构建替换上一版的全部安装包。升级方式与普通更新相同，直接覆盖安装即可；配置、会话与任务记录都在 `~/.pi/agent/`，不受影响。
 
             本 fork 基于上游 pi-agent-desktop 0.8.2 / pi-web 0.10 构建，已并入上游 pi-web **v0.10 → v0.17** 的全部安全、稳定性与性能修复，并在此之上维护本 fork 的桌面功能线。
 
-            本次是第十一次覆盖重发，修复 6 个已证实缺陷（1 个 P1、3 个 P2），全部带回归测试。
+            本次是第十二次覆盖重发：5 个并发审计（安全面 / API 闸门 / 聊天界面 / i18n / 文档）的产出全部收口——**129 个 API 写处理器三闸门齐全，两条安全 P1、环境变量泄漏链与全部 P0/P2 修复**，外加实时 tok/s 与破甲试跑两个新功能，共 16 个提交。
 
-            ### 本次重发新增：缺陷修复 / Fixes in this re-release
+            ### 本次重发新增：缺陷修复与功能 / Fixes and features in this re-release
+
+            - **API 闸门全量 / API gates (P1×29 + P2×21 + P3×4).** 129 个写处理器此前分三类不达标：畸形 JSON 被报成 500 并回显解析器原文（29 条）；读 body 却缺来源守卫/Content-Type 闸门（21 条）；无 body 路由无来源守卫（4 条）。现统一为 来源守卫 403 → 415 → 400(JSON) → 400(字段) → 500，新增 96 条回归探针。
+            - **安全 P1×2 / security.** ① 密码节流分桶：此前隧道访客每分钟一个错误 Basic 头就能把操作员永久锁死在本机登录之外，现本机与远端分账互不拖累；② `/api/files` 的会话引用旁路：repo 内指向 roots 外的符号链接，agent 触碰过一次即可被浏览器借 sessionId 读穿，现 realpath 后比对黑名单。
+            - **环境变量泄漏链 / env leak chain (P0).** 终端、后台任务、git 三条子进程路径各自手搓 env 剥离，只有一份是完整的——而漏掉的 `PI_DESKTOP_API_TOKEN` 正是「任意路径写文件」端点的唯一凭据。现统一走共享剥离清单。
+            - **实时 tok/s / live tok/s.** 输入框下方新增速度条（流式字符 ÷4 ÷ 秒数的量级估算）；首版两处口径缺陷当场修掉：分母冻结导致速率虚高 60 倍、重连首采样直冲 2000 tok/s。
+            - **破甲试跑 / purge preview.** 控制台新增「试跑」面板：粘一段样例文本按**草稿**设置跑，左右对照改写前后与命中计数——不必先保存（保存是全局生效的）。服务端与数据面共用同一批纯函数，预览即实际。
+            - **聊天界面 / chat (P2/P3×3).** 内置命令 15s 超时不再留孤儿计时器；`@` 文件索引跨目录切换不再错乱；流式 selector 提升为模块级（消除每次渲染的重订阅）。
+            - **README 与 i18n.** 双语 README 的更新检查口径对齐实际行为（只查 pi-agent-desktop 本身）、中文版补齐 Linux 全部缺项、功能清单增补后台命令/团队/破甲控制台；zh-TW 漏键补齐。
+
+            ### 第十一次重发内容 / Fixes in the previous re-release
 
             - **后台命令 / background-jobs (P1).** Windows 上没有 Git Bash 的机器（Git 装在 D 盘、只装了 MSYS2、干净装机）此前**每一条后台任务都直接失败**（`No bash shell found`）；现在三级兜底（SDK 探测 → 仓库终端探测 → PowerShell），降级只提示一次不静默，旧版 WSL bash 的 stdin 传输路径一并补上。
             - **破甲 / purge (P2).** 「降低思考档位」此前只压不还，一轮跑完会话被永久留在低档位、关掉开关也不回升（「关闭=纯转发」失效）；现改为运行结束自动还原，操作者中途手动改过档位则尊重手动选择。「写入技能文件」此前把预设标题写进 frontmatter `name`，而 53 条预设里 33 条标题不是合法技能名；现改为写规范 id（标题保留在 description），落盘改原子写。
             - **API 健壮性 / API hardening (P2).** autopilot、lean-mode、network-proxy、pinned-sessions、relay、terminal、skills、open-in-explorer 八条写路由此前把非法 JSON 报成 500 并回显解析器原文；现在统一返回 400 与通用文案，open-in-explorer 顺带补上缺失的 Content-Type 闸门。
             - **已知未修 / known gaps.** dsh-purge 适配缺口四项（boost 强化段、refusal-retry、技能归档导入、上游 agent 预设正文提炼）维持现状，判定与证据见 `docs/agents/purge-adaptation-audit.md`。
 
-            ### 第十次重发内容 / Fixes in the previous re-release
+            ### 第十次重发内容 / Fixes two re-releases ago
 
             - **安全 / security.** models-config 的模型发现与测试不再把本机存储的 API 凭据发往请求指定的新 Base URL；未保存的私网/环回目标（含 IPv4 与 IPv6-mapped）一律拒绝，已保存的本地 provider（Ollama 等）仍然放行。远端读取网络代理配置时遮蔽 `user:pass@`。
             - **团队 / teams.** 「暂停」按钮现在真正调用服务端 pause（此前只 abort lead）；lifecycle 请求加 15s 超时，挂起后按钮不再永久禁用。
