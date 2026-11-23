@@ -1,13 +1,17 @@
 import { invalidateModelsCache } from "@/lib/models-cache";
 import { removeStoredCredentialIfType } from "@/lib/provider-credential-store";
 import { getModelRuntimeWithExtensions } from "@/lib/model-runtime";
+import { isApiRequestAllowed } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ provider: string }> }
 ) {
+  if (!isApiRequestAllowed(req)) {
+    return Response.json({ error: "Untrusted API request" }, { status: 403 });
+  }
   const { provider } = await params;
   const modelRuntime = await getModelRuntimeWithExtensions();
   if (!modelRuntime.getProvider(provider)?.auth.oauth) {

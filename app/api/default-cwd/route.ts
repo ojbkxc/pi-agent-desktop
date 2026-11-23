@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { mkdirSync } from "fs";
 import { defaultCwdPath } from "@/lib/default-cwd";
 import { allowFileRoot } from "@/lib/file-access";
+import { isApiRequestAllowed } from "@/lib/request-security";
 
 // POST /api/default-cwd
 // Creates ~/pi-cwd/<YYYYMMDD> (local date) if it doesn't exist and returns the path.
@@ -9,7 +10,10 @@ import { allowFileRoot } from "@/lib/file-access";
 // The base comes from userHome() (inside defaultCwdPath) rather than homedir()
 // directly — see the note there for why a literal home directory breaks the
 // Windows build.
-export async function POST() {
+export async function POST(req: Request) {
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
   try {
     const dir = defaultCwdPath();
     mkdirSync(dir, { recursive: true });
