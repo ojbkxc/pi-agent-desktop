@@ -789,11 +789,21 @@ export class AgentSessionWrapper {
   }
 
   private notifyAgentRunCompleteIfIdle(): void {
+    // `runStartedAt` is the only honest "a run happened" signal: it is set by the
+    // SDK's `agent_start` (and by admission for queued work) and nowhere else.
+    // An extension command accepted with disposition `handled` never emits
+    // `agent_start`, so it leaves it null — see the guard below.
+    const runHadStarted = this.runStartedAt !== null;
     if (!this.isRunning()) this.runStartedAt = null;
     if (!this.agentRunNeedsCompletion || this.isRunning() || this.composerQueue.snapshot().length) return;
     this.agentRunNeedsCompletion = false;
     this.runStartedAt = null;
     this.retrying = false;
+    // Only a turn that actually ran can "finish". Recording one for a bare
+    // extension command wrote a phantom entry into the recent-run list and fed
+    // its text to the auto-title and the team auto-approval heuristics — the last
+    // of which could approve a team plan on the strength of a `/command`.
+    if (!runHadStarted) return;
     this.lastFinishedRun = { outcome: this.lastRunOutcome, finishedAt: Date.now() };
     if (this.suppressCompletionNotifications) return;
     this.autoTitleAfterRun();
@@ -1437,12 +1447,19 @@ export class AgentSessionWrapper {
           // A prompt parked behind compaction is answered with `{ queued: true }`:
           // the message is not a sent one yet.
           let parked = false;
-          let acceptPreflight!: () => void;
+          // `handled` means an extension command / skill ran in place and **no agent
+          // run started**; `queued` and `started` both begin (or join) a run.
+          // Treating every disposition as a run made a `/command` report a finished
+          // agent run: a bogus "complete" push, a recent-run record for a run that
+          // never happened, an auto title generated from the command text, and —
+          // the damaging one — `autoApproveTeamAfterRun()` could auto-approve a team
+          // plan on the strength of a command that never ran.
+          let acceptPreflight!: (disposition?: "handled" | "queued" | "started") => void;
           let rejectPreflight!: (error: unknown) => void;
           const preflight = new Promise<void>((resolve, reject) => {
-            acceptPreflight = () => {
+            acceptPreflight = (disposition) => {
               preflightAccepted = true;
-              this.agentRunNeedsCompletion = true;
+              if (disposition !== "handled") this.agentRunNeedsCompletion = true;
               if (preflightSettled) return;
               preflightSettled = true;
               resolve();
@@ -1527,7 +1544,7 @@ export class AgentSessionWrapper {
               // validation and extension preflight have accepted the submission.
               // Every disposition (handled, queued, started) is an acceptance; a
               // rejected prompt never calls this and rejects `prompt` instead.
-              preflightResult: () => acceptPreflight(),
+              preflightResult: (disposition) => acceptPreflight(disposition),
             });
           } catch (error) {
             finishPrompt();
@@ -1610,8 +1627,29 @@ export class AgentSessionWrapper {
         // take at its next turn boundary was still sent, and the rest went out with the
         // next prompt. Prompts parked behind a compaction come back too: Stop ends the
         // compaction, whose end would send them.
-        const cleared = this.inner.clearQueue();
-        const recalled = this.recallParkedPrompts();
+        //
+        // Queue recall is best-effort: it used to sit OUTSIDE the try, so a throwing
+        // `clearQueue()` skipped `inner.abort()` entirely — Stop silently did nothing
+        // while `forceShutdownOnIdle` stayed armed, and the idle timer then tore the
+        // still-running session down ten minutes later, losing that turn's output.
+        let cleared: { steering: string[]; followUp: string[] } = { steering: [], followUp: [] };
+        let recalled: { steering: string[]; followUp: string[]; images?: unknown } = { steering: [], followUp: [] };
+        try {
+          cleared = this.inner.clearQueue();
+        } catch (error) {
+          console.error(
+            "[pi-web] clearQueue failed during Stop; continuing with the abort:",
+            error instanceof Error ? error.message : error,
+          );
+        }
+        try {
+          recalled = this.recallParkedPrompts();
+        } catch (error) {
+          console.error(
+            "[pi-web] recalling parked prompts failed during Stop:",
+            error instanceof Error ? error.message : error,
+          );
+        }
         try {
           await this.withFinalIdleReset(() => this.inner.abort());
           const steering = [...cleared.steering, ...recalled.steering];
@@ -2090,11 +2128,35 @@ export class AgentSessionWrapper {
     this.activeToolEvents.clear();
     this.clearExtensionWidgets(false);
 
+    /**
+     * Teardown must never throw. `inner.dispose()` is not exception-free: the SDK
+     * only guards the abort calls inside it, then runs extension-runner
+     * invalidation, agent disconnection, cache-warmer cancel and resource cleanup
+     * unguarded. The deferred path below hands this to `.finally()`, so a throw
+     * there became an **unhandled rejection** — fatal by default on Node ≥ 15,
+     * i.e. one failing PTY teardown would take the whole desktop server (and
+     * every other session) down with it. Every other teardown in this file
+     * (MCP host, extension widgets, custom components) already logs and goes on;
+     * this one now does the same.
+     */
     const finishDispose = () => {
       try {
         this.inner.dispose();
+      } catch (error) {
+        console.error(
+          "[pi-web] disposing the SDK session failed:",
+          error instanceof Error ? error.message : error,
+        );
       } finally {
-        this.onDestroyCallback?.();
+        try {
+          this.onDestroyCallback?.();
+        } catch (error) {
+          // Registry bookkeeping must not mask the disposal failure above.
+          console.error(
+            "[pi-web] session destroy callback failed:",
+            error instanceof Error ? error.message : error,
+          );
+        }
         this.resolveDisposed();
       }
     };
@@ -2121,7 +2183,9 @@ export class AgentSessionWrapper {
           error instanceof Error ? error.message : error,
         );
       })
-      .finally(finishDispose);
+      // `.then(onBoth)` rather than `.finally(finishDispose)`: a throw inside
+      // finishDispose escaped the chain as an unhandled rejection.
+      .then(finishDispose, finishDispose);
   }
 
   async shutdown(): Promise<void> {
