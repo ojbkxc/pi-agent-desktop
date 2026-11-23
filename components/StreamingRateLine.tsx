@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { StreamingStore } from "@/lib/streaming-message";
 
@@ -22,22 +22,20 @@ import type { StreamingStore } from "@/lib/streaming-message";
 export function StreamingRateLine({ store }: { store: StreamingStore }) {
   const { t } = useI18n();
   const [sample, setSample] = useState(() => measure(store));
-  const sinceRef = useRef<number | null>(null);
 
-  // 只在数字变了时提交状态：静默期（工具执行、长思考）不清零也不闪。
+  // 只在数字变了时提交状态：静默期（工具执行、长思考）字符不变，但 streamingMs
+  // 仍在走——把它纳入比较，速率才会随时间平滑衰减，而不是钉在静默前一刻。
   useEffect(() => {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     const tick = () => {
       if (stopped) return;
       const next = measure(store);
-      setSample((previous) =>
-        next.chars === previous.chars && next.streaming === previous.streaming
-          ? previous
-          : next,
-      );
-      if (next.streaming) sinceRef.current ??= Date.now() - next.streamingMs;
-      else sinceRef.current = null;
+      setSample((previous) => (
+        next.chars === previous.chars
+        && next.streaming === previous.streaming
+        && next.streamingMs === previous.streamingMs
+      ) ? previous : next);
       timer = setTimeout(tick, 500);
     };
     timer = setTimeout(tick, 500);
@@ -73,7 +71,7 @@ interface RateSample {
   streamingMs: number;
 }
 
-/** 累计流字符数：文本 + 思考 + 工具调用的原始输入，与真正到达的增量一致。 */
+/** 累计流字符数（扣除重连基线）：与真正到达的增量一致。 */
 function measure(store: StreamingStore): RateSample {
   const state = store.getState();
   if (!state.isStreaming || !state.streamingMessage) {
@@ -85,5 +83,8 @@ function measure(store: StreamingStore): RateSample {
     else if (block.type === "thinking") chars += block.thinking.length;
     else if (block.type === "toolCall") chars += (block.rawInput ?? "").length;
   }
-  return { streaming: true, chars, streamingMs: state.streamingMs };
+  // snapshot 已经带来的那部分不参与速率：分母从 snapshot 时刻起算，分子就得只数
+  // 之后的增量，否则首采样是一个几乎全是虚高的数（实测 4000 字符 → 2000 tok/s）。
+  const baseline = typeof state.baselineChars === "number" && state.baselineChars > 0 ? state.baselineChars : 0;
+  return { streaming: true, chars: Math.max(0, chars - baseline), streamingMs: state.streamingMs };
 }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { PurgePresetLibrary, upsertPresetTemplate } from "./PurgePresetLibrary";
 import { PurgeGateLogSection } from "./PurgeGateLogSection";
+import { PurgePreviewPanel } from "./PurgePreviewPanel";
 import { ConfigButton, ConfigSwitch } from "./SettingsUi";
 
 export type PurgeReasoningFloor = "off" | "low" | "medium" | "high" | "xhigh";
@@ -1018,6 +1019,14 @@ export function PurgeConsoleSection() {
       </section>
 
       <PurgeGateLogSection />
+
+      {/* 试跑放在最后一节之前：它读的是上面的草稿，先看完效果再决定按不按保存。 */}
+      <PurgePreviewPanel
+        draft={draft}
+        model={autoPreview?.model ?? undefined}
+        dirty={dirty}
+        disabled={!loaded}
+      />
 
       <div className="settings-purge-actions">
         <ConfigButton

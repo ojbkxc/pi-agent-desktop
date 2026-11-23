@@ -14613,6 +14613,43 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   font-size: var(--fs-micro);
 }
 
+/* 试跑：左右对照。两栏等宽，各自独立滚动——改写前后的长度通常不一样，
+   让短的一侧跟着长的一侧拉伸会把「差多少」这件事藏起来。 */
+.settings-purge-preview-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+  margin-block: 8px;
+}
+
+.settings-purge-preview-side {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-purge-preview-label {
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.02em;
+}
+
+.settings-purge-preview-text {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 220px;
+  overflow: auto;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken, var(--bg-subtle, transparent));
+  color: var(--text);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .settings-purge-stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));

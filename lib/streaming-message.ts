@@ -18,6 +18,11 @@ export interface StreamingState {
   streamingMs: number;
   /** `start` 的墙钟时刻；每个 delta 用它把 streamingMs 推到「现在 − 开始」。 */
   startedAt?: number;
+  /**
+   * 重连时 snapshot 已经带来的字符数。速度条只数这之后的增量，否则分子含重连
+   * 之前的内容而分母从零起算，首采样会显示一个几乎全是虚高的数。
+   */
+  baselineChars?: number;
 }
 
 export type StreamAction =
@@ -46,10 +51,13 @@ function updateContentBlock(
   if (!nextBlock) return state;
   content[contentIndex] = nextBlock;
   return {
+    // `...state` 是必须的：不展开会把 `startedAt` 丢掉，于是从第二个增量起
+    // `Date.now() - (undefined ?? Date.now())` 恒为 0，`Math.max` 保留第一个
+    // 增量的时刻 —— streamingMs 永久冻结，速度条的分母不再增长，tok/s 随流时长
+    // 无界虚涨（实测 5.2s / 1000 字符：显示 500、实际 48）。
+    ...state,
     isStreaming: true,
     streamingMessage: { ...message, content },
-    // 每个 delta 事件把时间轴推进它的「到达时刻差」由 store 统一维护太复杂，
-    // 这里用「事件发生时刻 − 流开始时刻」：与字符累计完全同基线。
     streamingMs: Math.max(state.streamingMs, Date.now() - (state.startedAt ?? Date.now())),
   };
 }
@@ -149,14 +157,22 @@ export function streamReducer(
       return { ...state, isStreaming: true, startedAt: state.startedAt ?? Date.now() };
     case "snapshot": {
       const message = normalizeStreamingToolCalls(action.message);
-      return message.role === "assistant"
-        ? {
-          isStreaming: true,
-          streamingMessage: message,
-          streamingMs: state.streamingMs,
-          startedAt: state.startedAt ?? Date.now(),
-        }
-        : state;
+      if (message.role !== "assistant") return state;
+      // 重连时 snapshot 带来的是「已经流了数千字符的部分回复」——分子立刻很大，
+      // 分母却是刚归零的时钟（速率条首采样直冲 ~2000 tok/s）。基线改落在这里：
+      // 分母从这一刻起算，并把此刻已有的字符记成 baselineChars，速度条只数之后的
+      // 新增。首帧与重连两条路径因此共用同一个语义。
+      const baseline = message.content.reduce((total, block) => total
+        + (block.type === "text" ? block.text.length
+          : block.type === "thinking" ? block.thinking.length
+            : block.type === "toolCall" ? (block.rawInput ?? "").length : 0), 0);
+      return {
+        isStreaming: true,
+        streamingMessage: message,
+        streamingMs: 0,
+        startedAt: Date.now(),
+        baselineChars: baseline,
+      };
     }
     case "delta":
       return applyDelta(state, action.event);
