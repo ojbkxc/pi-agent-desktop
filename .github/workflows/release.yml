@@ -105,6 +105,11 @@ jobs:
         if: runner.os == 'Windows' || runner.os == 'Linux'
         run: cargo test --release --manifest-path src-tauri/Cargo.toml --lib --target ${{ matrix.target }}
 
+      # bundle_dmg.sh 在 GitHub 的 macOS runner 上偶发挂死（2026-11-23 第十一次重发
+      # 实测：同一提交、同一 runner 镜像，上一轮成功、这一轮 32 秒无输出即退 1，
+      # 与 hdiutil/AppleScript 接触 runner 残留挂载卷有关）。tauri-action 不是命令、
+      # 没法套通用 retry 包装；记录在案，失败时重跑整个 build job——updater 的
+      # .app.tar.gz 在 dmg 之前就已生成，重跑大概率直接全绿。
       - name: Build, sign, and upload updater artifacts
         uses: tauri-apps/tauri-action@v1
         env:
