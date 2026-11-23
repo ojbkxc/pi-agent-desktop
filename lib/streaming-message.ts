@@ -11,6 +11,13 @@ export type { ClientAssistantMessageEvent } from "./agent-event-wire";
 export interface StreamingState {
   isStreaming: boolean;
   streamingMessage: AssistantMessage | null;
+  /**
+   * 本轮流式持续的毫秒数：`start` 时归零、每个 delta 推进到「现在 − 开始」。
+   * tok/s 速度条（components/StreamingRateLine.tsx）需要一个不依赖渲染时机的口径。
+   */
+  streamingMs: number;
+  /** `start` 的墙钟时刻；每个 delta 用它把 streamingMs 推到「现在 − 开始」。 */
+  startedAt?: number;
 }
 
 export type StreamAction =
@@ -23,6 +30,7 @@ export type StreamAction =
 export const INITIAL_STREAMING_STATE: StreamingState = {
   isStreaming: false,
   streamingMessage: null,
+  streamingMs: 0,
 };
 
 function updateContentBlock(
@@ -40,6 +48,9 @@ function updateContentBlock(
   return {
     isStreaming: true,
     streamingMessage: { ...message, content },
+    // 每个 delta 事件把时间轴推进它的「到达时刻差」由 store 统一维护太复杂，
+    // 这里用「事件发生时刻 − 流开始时刻」：与字符累计完全同基线。
+    streamingMs: Math.max(state.streamingMs, Date.now() - (state.startedAt ?? Date.now())),
   };
 }
 
@@ -133,13 +144,18 @@ export function streamReducer(
 ): StreamingState {
   switch (action.type) {
     case "start":
-      return { isStreaming: true, streamingMessage: null };
+      return { isStreaming: true, streamingMessage: null, streamingMs: 0, startedAt: Date.now() };
     case "resume":
-      return { ...state, isStreaming: true };
+      return { ...state, isStreaming: true, startedAt: state.startedAt ?? Date.now() };
     case "snapshot": {
       const message = normalizeStreamingToolCalls(action.message);
       return message.role === "assistant"
-        ? { isStreaming: true, streamingMessage: message }
+        ? {
+          isStreaming: true,
+          streamingMessage: message,
+          streamingMs: state.streamingMs,
+          startedAt: state.startedAt ?? Date.now(),
+        }
         : state;
     }
     case "delta":

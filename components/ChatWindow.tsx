@@ -57,6 +57,7 @@ import { sessionVisibleCounts } from "@/lib/scroll-memory";
 import { isImeComposing } from "@/lib/ime";
 import { useChatAccess } from "@/hooks/useChatAccess";
 import { ChatShellPrompt } from "./ChatShellPrompt";
+import { StreamingRateLine } from "./StreamingRateLine";
 import { lastTurnHitChatShellBlock } from "@/lib/chat-shell-block";
 import { assignMessageKeys, createMessageKeyTracker } from "@/lib/message-keys";
 
@@ -2017,6 +2018,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
           </div>
         )}
         {chatInputElement}
+        <StreamingRateLine store={streamingStore} />
         {(belowEditorWidgets.length > 0 || hasExtensionStatus) && (
           <div className={`extension-status-shelf${belowEditorWidgets.length > 0 ? " has-widgets" : ""}${hasExtensionStatus ? " has-status" : ""}`}>
             {belowEditorWidgets.length > 0 && <ExtensionWidgets widgets={belowEditorWidgets} />}

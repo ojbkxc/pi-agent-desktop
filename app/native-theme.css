@@ -9283,6 +9283,44 @@ html.native-desktop :is(
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
+/* ── 输入框下方的实时 tok/s 速度条 ────────────────────────────────────────────
+   只在流式时渲染（组件自己控制）。宽度口径与输入框一致：外层 16px 内边距，
+   内层取同一个 max-width 居中——比输入框宽或窄一截都会立刻被看出来。 */
+.composer-rate-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 16px 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.composer-rate-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  /* 流式心跳：dot 常亮只是又一个装饰；闪一下表示「正在流」。 */
+  animation: composer-rate-pulse 1.6s var(--ease-native) infinite;
+}
+.composer-rate-value {
+  font-weight: 600;
+  color: var(--text);
+}
+.composer-rate-unit {
+  color: var(--text-muted);
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-rate-dot { animation: none; }
+}
+@keyframes composer-rate-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 .composer-stop-button {
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 8%, transparent);
