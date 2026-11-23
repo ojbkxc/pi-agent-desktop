@@ -25,26 +25,57 @@ export const FAST_MODE_CHECK_FILES = [
   "scripts/measure-turns.test.mjs",
 ];
 
-/** The TAP summary node's counts, or null when the block has none. */
+/**
+ * 两种汇总行都要认：
+ * - TAP（`--test-reporter=tap`，或旧版 node）：`# tests 12`
+ * - spec（node ≥22 的默认 reporter）：`ℹ tests 12`（`ℹ` 后面可能跟一个 U+FE0F 变体选择符）
+ *
+ * 只认 TAP 的那一版在默认 reporter 下永远解析出 null，于是 `check-fast-mode.mjs`
+ * 在**测试全绿**的情况下也退 1，`scripts/doc-commands.test.mjs` 跟着红。
+ */
+const SUMMARY_LINE = /^(?:#|ℹ\uFE0F?)\s*(tests|pass|fail|cancelled)\s+(\d+)\s*$/;
+
+/** The summary counts node printed, or null when the output has none. */
 export function parseTestSummary(output) {
-  const number = (label) => {
-    const match = output.match(new RegExp(`^# ${label} (\\d+)$`, "m"));
-    return match ? Number(match[1]) : null;
-  };
-  const tests = number("tests");
-  if (tests === null) return null;
+  const counts = new Map();
+  for (const line of String(output ?? "").split(/\r?\n/)) {
+    const match = SUMMARY_LINE.exec(line.trim());
+    if (!match) continue;
+    // 同一份输出里 TAP 与 spec 不会混用，但重复出现的键以先到的为准。
+    if (!counts.has(match[1])) counts.set(match[1], Number(match[2]));
+  }
+  if (!counts.has("tests")) return null;
   return {
-    tests,
-    pass: number("pass") ?? 0,
-    fail: number("fail") ?? 0,
-    cancelled: number("cancelled") ?? 0,
+    tests: counts.get("tests"),
+    pass: counts.get("pass") ?? 0,
+    fail: counts.get("fail") ?? 0,
+    cancelled: counts.get("cancelled") ?? 0,
   };
 }
 
-/** Failing subtests, as `not ok N - name` lines, for the report. */
+/** Trailing `(12.75ms)` / `(2s)` the spec reporter puts after a test name. */
+const SPEC_DURATION = /\s+\(\d+(?:\.\d+)?(?:ms|s)\)$/;
+
+/**
+ * Failing subtests, for the report. TAP spells them `not ok 2 - name`; spec puts a
+ * `✖ name (12ms)` line in the run and repeats the name under "failing tests:",
+ * so the same name shows up twice — dedupe instead of double-reporting.
+ */
 export function parseFailures(output) {
-  return output
-    .split(/\r?\n/)
-    .filter((line) => /^not ok \d+ - /.test(line))
-    .map((line) => line.replace(/^not ok \d+ - /, "").trim());
+  const names = [];
+  const seen = new Set();
+  for (const raw of String(output ?? "").split(/\r?\n/)) {
+    const line = raw.trim();
+    let name = null;
+    const tap = /^not ok \d+ - (.*)$/.exec(line);
+    if (tap) name = tap[1];
+    else if (line.startsWith("✖ ")) name = line.slice(2);
+    if (name === null) continue;
+    name = name.replace(SPEC_DURATION, "").trim();
+    // `✖ failing tests:` 是那一段的标题，不是一条失败用例。
+    if (!name || name.endsWith(":") || seen.has(name)) continue;
+    seen.add(name);
+    names.push(name);
+  }
+  return names;
 }

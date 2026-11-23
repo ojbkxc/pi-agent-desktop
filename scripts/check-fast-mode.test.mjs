@@ -36,9 +36,39 @@ test("the summary parser reads the TAP counts it is given", () => {
   assert.equal(parseTestSummary("no summary here"), null);
 });
 
+test("the summary parser also reads the spec reporter node prints by default", () => {
+  // node ≥22 在非 TTY 下写 `ℹ tests 144`（ℹ = U+2139，有时跟 U+FE0F）。只认 TAP 的
+  // 解析器在这里返回 null，于是测试全绿也被判成失败——这条断言钉住那次回归。
+  const output = [
+    "ℹ tests 144",
+    "ℹ suites 0",
+    "ℹ pass 144",
+    "ℹ fail 0",
+    "ℹ cancelled 0",
+    "ℹ duration_ms 10948.9",
+  ].join("\r\n");
+  assert.deepEqual(parseTestSummary(output), { tests: 144, pass: 144, fail: 0, cancelled: 0 });
+  assert.deepEqual(
+    parseTestSummary("ℹ\uFE0F tests 3\nℹ\uFE0F pass 2\nℹ\uFE0F fail 1"),
+    { tests: 3, pass: 2, fail: 1, cancelled: 0 },
+    "the variation selector must not defeat the match",
+  );
+});
+
 test("failures are named, so the report says what broke", () => {
   const output = ["ok 1 - fine", "not ok 2 - the guard is missing", "not ok 7 - rolls back"].join("\n");
   assert.deepEqual(parseFailures(output), ["the guard is missing", "rolls back"]);
+});
+
+test("spec failures are named too, once each", () => {
+  // spec 会在运行行报一次、在 "failing tests:" 段再报一次同名条目。
+  const output = [
+    "✖ sibling calls run concurrently (593.4ms)",
+    "✔ something fine (1.2ms)",
+    "✖ failing tests:",
+    "✖ sibling calls run concurrently (593.4ms)",
+  ].join("\n");
+  assert.deepEqual(parseFailures(output), ["sibling calls run concurrently"]);
 });
 
 test("the runner refuses a broken list instead of reporting success", () => {
