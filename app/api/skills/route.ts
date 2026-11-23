@@ -9,6 +9,7 @@ import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-acces
 import { userHome } from "@/lib/user-home";
 import { ccHahaSkillsDir, hasCcHahaSkills } from "@/lib/cc-haha-skills";
 import { replaceFileAtomicSync } from "@/lib/atomic-file";
+import { readJsonBody } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 
@@ -74,7 +75,9 @@ function toggleSkillFile(
 // a skill the route refuses does not stop the rest.
 export async function PATCH(req: Request) {
   try {
-    const body = await req.json() as {
+    const read = await readJsonBody(req);
+    if (!read.ok) return read.response;
+    const body = read.body as {
       filePath?: string;
       filePaths?: unknown;
       disableModelInvocation: boolean;

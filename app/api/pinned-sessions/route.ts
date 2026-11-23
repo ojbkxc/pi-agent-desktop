@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 import { isSessionRole } from "@/lib/pinned-sessions/types";
 import {
   getPinnedRegistryHealth,
@@ -50,7 +50,9 @@ export async function PUT(request: Request) {
     return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
   }
   try {
-    const body = await request.json() as { sessionId?: unknown; role?: unknown; note?: unknown };
+    const read = await readJsonBody(request);
+    if (!read.ok) return read.response;
+    const body = read.body as { sessionId?: unknown; role?: unknown; note?: unknown };
     const sessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
     if (!sessionId) return NextResponse.json({ error: "sessionId is required" }, { status: 400 });
     if (!isSessionRole(body.role)) {

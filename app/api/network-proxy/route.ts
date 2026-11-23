@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isLocalRequest } from "@/lib/remote-access";
-import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 import {
   applyNetworkProxy,
   isNetworkProxyMode,
@@ -41,7 +41,9 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
   }
   try {
-    const body = await req.json() as { mode?: unknown; url?: unknown };
+    const read = await readJsonBody(req);
+    if (!read.ok) return read.response;
+    const body = read.body as { mode?: unknown; url?: unknown };
     if (!isNetworkProxyMode(body?.mode)) {
       return NextResponse.json(
         { error: "mode must be one of direct, system, manual" },

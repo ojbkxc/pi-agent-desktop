@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isLocalRequest } from "@/lib/remote-access";
-import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 import { getRelayConnector, relayFilesDir, restartRelayFromConfig } from "@/lib/relay/runtime";
 import { normalizeEntryUrl, normalizeRelayUrl, readDevices, readRelayConfig, writeRelayConfig } from "@/lib/relay/store";
 
@@ -33,7 +33,9 @@ export async function PUT(req: Request) {
   if (!isLocalRequest(req)) return NextResponse.json({ error: "The relay can only be changed on this computer." }, { status: 403 });
   if (!hasJsonContentType(req)) return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
   try {
-    const body = await req.json() as { url?: unknown; entryUrl?: unknown; enabled?: unknown; adminToken?: unknown };
+    const read = await readJsonBody(req);
+    if (!read.ok) return read.response;
+    const body = read.body as { url?: unknown; entryUrl?: unknown; enabled?: unknown; adminToken?: unknown };
     const url = normalizeRelayUrl(body.url);
     const entryUrl = normalizeEntryUrl(body.entryUrl);
     if (!url) return NextResponse.json({ error: "Relay URL must be wss://… (ws:// only on this computer)" }, { status: 400 });

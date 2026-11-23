@@ -3,6 +3,7 @@ import { resolve } from "path";
 import { NextResponse } from "next/server";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { isFileManagerSupported, launchFileManager } from "@/lib/open-in-file-manager";
+import { hasJsonContentType, readJsonBody } from "@/lib/request-security";
 import { isLocalRequest } from "@/lib/remote-access";
 
 export const dynamic = "force-dynamic";
@@ -29,8 +30,13 @@ export async function POST(request: Request) {
     if (!supported) {
       return NextResponse.json({ error: reason }, { status: 403 });
     }
+    if (!hasJsonContentType(request)) {
+      return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+    }
 
-    const body = await request.json() as { cwd?: unknown };
+    const read = await readJsonBody(request);
+    if (!read.ok) return read.response;
+    const body = read.body as { cwd?: unknown };
     if (typeof body.cwd !== "string" || !body.cwd.trim()) {
       return NextResponse.json({ error: "cwd-required" }, { status: 400 });
     }

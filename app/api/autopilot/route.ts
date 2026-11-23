@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 import {
   MAX_AUTOPILOT_FIX_ROUNDS,
   readAutopilotSettings,
@@ -21,7 +21,9 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
   }
   try {
-    const body = (await req.json()) as Record<string, unknown>;
+    const read = await readJsonBody(req);
+    if (!read.ok) return read.response;
+    const body = read.body as Record<string, unknown>;
     const patch: Partial<AutopilotSettings> = {};
     for (const key of ["enabled", "autoApproveTeamPlans", "autoFixFailedRuns"] as const) {
       if (body[key] === undefined) continue;

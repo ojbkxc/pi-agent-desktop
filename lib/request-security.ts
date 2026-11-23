@@ -224,3 +224,23 @@ export function hasJsonContentType(request: Request): boolean {
   return mediaType === "application/json"
     || Boolean(mediaType?.startsWith("application/") && mediaType.endsWith("+json"));
 }
+
+/** `readJsonBody` 的两种出口：要么拿到 body，要么直接返回这条响应。 */
+export type JsonBodyRead = { ok: true; body: unknown } | { ok: false; response: Response };
+
+/**
+ * 读 JSON body，解析失败时给出一条 400。
+ *
+ * 写路由的次序是 **来源守卫 → 415（Content-Type）→ 400（JSON 不合法）→ 400（字段不合法）
+ * → 500（真的是我们的错）**。把 `await request.json()` 直接放在一个 catch 一律 500 的
+ * try 里，等于让客户端发个 `{` 就拿到 500，并且回显里带着解析器原话
+ * （"Expected property name or '}' in JSON at position 1"）——状态码骗调用方说服务器坏了，
+ * 正文还把实现细节送出去。统一走这里，两条都不会再发生。
+ */
+export async function readJsonBody(request: Request): Promise<JsonBodyRead> {
+  try {
+    return { ok: true, body: await request.json() };
+  } catch {
+    return { ok: false, response: Response.json({ error: "Invalid JSON body" }, { status: 400 }) };
+  }
+}
