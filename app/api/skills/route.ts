@@ -9,7 +9,7 @@ import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-acces
 import { userHome } from "@/lib/user-home";
 import { ccHahaSkillsDir, hasCcHahaSkills } from "@/lib/cc-haha-skills";
 import { replaceFileAtomicSync } from "@/lib/atomic-file";
-import { readJsonBody } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 
@@ -74,6 +74,12 @@ function toggleSkillFile(
 // "Disable all". A batch edits each file on its own and reports every one, so
 // a skill the route refuses does not stop the rest.
 export async function PATCH(req: Request) {
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   try {
     const read = await readJsonBody(req);
     if (!read.ok) return read.response;

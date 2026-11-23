@@ -4,6 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { getLifecycle, resolveTeamHost } from "pi-team";
 import { enqueueTeamMutation, teamDirFor, teamsRootDir } from "@/lib/agent-teams-swimlane-store";
 import { readPlanRosterMembers } from "@/lib/agent-teams-roster";
+import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import {
   readTeamConfig,
   readLifecycleSnapshot,
@@ -140,6 +141,12 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ team: string }> },
 ) {
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   const { team } = await params;
 
   let body: { action?: unknown };

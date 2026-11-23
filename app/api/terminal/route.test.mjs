@@ -22,7 +22,7 @@ function allowOnly(...roots) {
 function createRequest(body) {
   return POST(new Request("http://localhost/api/terminal", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Host: "localhost" },
     body: JSON.stringify(body),
   }));
 }

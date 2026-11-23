@@ -23,7 +23,7 @@ function allowOnly(...roots) {
 function call(handler, method, body) {
   return handler(new Request("http://localhost/api/worktrees", {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Host: "localhost" },
     body: JSON.stringify(body),
   }));
 }

@@ -66,7 +66,7 @@ function patch(body, team = "demo") {
   return route.PATCH(
     new Request(`http://localhost/api/teams/${team}/members`, {
       method: "PATCH",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", Host: "localhost" },
       body: JSON.stringify(body),
     }),
     { params: Promise.resolve({ team }) },
@@ -185,7 +185,7 @@ test("请求体非法 → 400（缺 memberId、缺 provider/modelId、空数组�
   assert.equal((await patch({ memberIds: [1, 2], provider: "ty", modelId: "m" })).status, 400);
 
   const bad = route.PATCH(
-    new Request("http://localhost/api/teams/demo/members", { method: "PATCH", body: "not json" }),
+    new Request("http://localhost/api/teams/demo/members", { method: "PATCH", headers: { "content-type": "application/json", Host: "localhost" }, body: "not json" }),
     { params: Promise.resolve({ team: "demo" }) },
   );
   assert.equal((await bad).status, 400);

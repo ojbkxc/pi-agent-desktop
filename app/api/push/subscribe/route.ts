@@ -1,6 +1,7 @@
 import { tailscaleLoginOf } from "@/lib/remote-access";
 import { readRelayMark } from "@/lib/relay/mark";
 import { addSubscription, type PushSubscriptionRecord } from "@/lib/web-push";
+import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,12 @@ function isValidSubscription(subscription: Partial<PushSubscriptionRecord> | und
 // POST /api/push/subscribe - register a browser push subscription. Upserts by
 // endpoint, so the client can safely re-send its subscription on every load.
 export async function POST(req: Request): Promise<Response> {
+  if (!isApiRequestAllowed(req)) {
+    return Response.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return Response.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   let body: SubscribeRequestBody;
   try {
     const parsed: unknown = await req.json();

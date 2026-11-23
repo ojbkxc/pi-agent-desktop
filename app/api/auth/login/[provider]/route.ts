@@ -2,6 +2,7 @@ import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 import { invalidateModelsCache } from "@/lib/models-cache";
 import { createLoginOptions, createModelRuntimeWithExtensions } from "@/lib/model-runtime";
+import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,12 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ provider: string }> }
 ) {
+  if (!isApiRequestAllowed(req)) {
+    return Response.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return Response.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   const { provider } = await params;
   let body: { token?: string; code?: string };
   try {

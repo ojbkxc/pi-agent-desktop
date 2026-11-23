@@ -3,12 +3,18 @@ import { resolve } from "path";
 import { NextResponse } from "next/server";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { createTerminal } from "@/lib/terminal-manager";
-import { readJsonBody } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   try {
     const read = await readJsonBody(req);
     if (!read.ok) return read.response;

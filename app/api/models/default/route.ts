@@ -13,6 +13,7 @@ import { resolveVisibleModels } from "@/lib/model-scope";
 import { invalidateModelsCache } from "@/lib/models-cache";
 import { projectTrustReloadOptions } from "@/lib/project-trust";
 import { llamaCppExtension } from "@/lib/pi-sdk-internals";
+import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +47,12 @@ function parseEdit(body: DefaultPreferencesRequest): DefaultPreferencesEdit | nu
  * so it goes through the same allow-list as `/api/models`.
  */
 export async function PUT(req: Request) {
+  if (!isApiRequestAllowed(req)) {
+    return Response.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return Response.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   let body: DefaultPreferencesRequest;
   try {
     body = await req.json() as DefaultPreferencesRequest;

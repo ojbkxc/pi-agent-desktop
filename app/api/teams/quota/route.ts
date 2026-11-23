@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import {
   TEAM_QUOTA_DEFAULTS,
   TEAM_QUOTA_RANGES,
@@ -58,6 +59,12 @@ export async function GET() {
 }
 
 export async function PUT(request: Request) {
+  if (!isApiRequestAllowed(request)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(request)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   let body: unknown;
   try {
     body = await request.json();

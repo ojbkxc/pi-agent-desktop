@@ -43,7 +43,7 @@ test("saving requires a non-empty key", async () => {
   for (const apiKey of [undefined, "", "   ", 42]) {
     const response = await apiKeyRoute.POST(new Request("http://localhost/api/auth/api-key/openai", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", Host: "localhost" },
       body: JSON.stringify({ apiKey }),
     }), params("openai"));
     assert.equal(response.status, 400, JSON.stringify(apiKey));

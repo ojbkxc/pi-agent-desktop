@@ -95,7 +95,7 @@ async function setup(t, { rawName = RAW_NAME, members, lifecycleEntries = {}, in
 const post = (body, team = DIR_NAME) => route.POST(
   new Request(`http://localhost/api/teams/${encodeURIComponent(team)}/lifecycle`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", Host: "localhost" },
     body: typeof body === "string" ? body : JSON.stringify(body),
   }),
   { params: Promise.resolve({ team }) },

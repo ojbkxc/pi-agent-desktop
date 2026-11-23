@@ -29,7 +29,7 @@ async function writeSkill(dir, name, frontmatter = "") {
 function patchSkills(body) {
   return PATCH(new Request("http://localhost/api/skills", {
     method: "PATCH",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", Host: "localhost" },
     body: JSON.stringify(body),
   }));
 }

@@ -4,6 +4,7 @@ import { invalidateModelsCache } from "@/lib/models-cache";
 import { removeStoredCredentialIfType, storeProviderCredential } from "@/lib/provider-credential-store";
 import { getModelRuntimeWithExtensions } from "@/lib/model-runtime";
 import { refreshModelCatalogs } from "@/lib/model-catalog-refresh";
+import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,12 @@ type Params = { params: Promise<{ provider: string }> };
 // POST /api/auth/api-key/[provider]  body: { apiKey: string }
 // llama.cpp takes the router URL and an optional key through its own login.
 export async function POST(req: Request, { params }: Params) {
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   const { provider } = await params;
   try {
     let parsed: { apiKey?: unknown; serverUrl?: unknown };

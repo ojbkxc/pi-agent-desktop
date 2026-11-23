@@ -28,6 +28,7 @@ import { getModelRuntimeWithExtensions } from "@/lib/model-runtime";
 import { filterProvidersWithoutStoredCredential } from "@/lib/model-scope";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { invalidateModelsCache } from "@/lib/models-cache";
+import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 
@@ -196,6 +197,12 @@ async function resyncAfterModelsConfigSave(
 }
 
 export async function PUT(req: Request) {
+  if (!isApiRequestAllowed(req)) {
+    return Response.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return Response.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   let body: EnabledModelsRequest;
   try {
     const parsed: unknown = await req.json();

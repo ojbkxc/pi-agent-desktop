@@ -71,7 +71,7 @@ test("POST：action 非法 / 身份缺失 ⇒ 400", async (t) => {
   await setup(t);
   const json = (body) => new Request("http://x/api/teams/demo/runtime-control", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", Host: "localhost" },
     body: JSON.stringify(body),
   });
 
@@ -83,7 +83,7 @@ test("POST：action 非法 / 身份缺失 ⇒ 400", async (t) => {
   assert.equal(badBody.status, 400);
   assert.match(await badBody.json().then((d) => d.error), /leadSessionId/);
 
-  const badJson = await controlRoute.POST(new Request("http://x", { method: "POST", body: "{", headers: { "content-type": "application/json" } }), params("demo"));
+  const badJson = await controlRoute.POST(new Request("http://x", { method: "POST", body: "{", headers: { "content-type": "application/json", Host: "localhost" } }), params("demo"));
   assert.equal(badJson.status, 400);
 });
 
@@ -92,7 +92,7 @@ test("member 路由：必填缺失 ⇒ 400（不触发生命周期）", async (t
   const response = await memberRoute.POST(
     new Request("http://x/api/teams/demo/runtime-control/member", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", Host: "localhost" },
       body: JSON.stringify({ agentId: "m-impl" }),
     }),
     params("demo"),

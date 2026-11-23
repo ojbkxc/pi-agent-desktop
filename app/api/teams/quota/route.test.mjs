@@ -50,7 +50,7 @@ async function setup(t) {
 function put(body) {
   return route.PUT(new Request("http://localhost/api/teams/quota", {
     method: "PUT",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", Host: "localhost" },
     body: JSON.stringify(body),
   }));
 }
@@ -113,7 +113,7 @@ test("PUT：越界/非整数/空 body ⇒ 400 且不落盘", async (t) => {
   assert.equal((await put({ globalLimit: 9999 })).status, 400);
   assert.equal((await put({})).status, 400);
   assert.equal((await put({ perTeamLimit: "24" })).status, 400);
-  const bad = route.PUT(new Request("http://localhost/api/teams/quota", { method: "PUT", body: "not json" }));
+  const bad = route.PUT(new Request("http://localhost/api/teams/quota", { method: "PUT", headers: { "content-type": "application/json", Host: "localhost" }, body: "not json" }));
   assert.equal((await bad).status, 400);
   await assert.rejects(readFile(settingsPath, "utf8"), /ENOENT/, "被拒的请求不写文件");
 });

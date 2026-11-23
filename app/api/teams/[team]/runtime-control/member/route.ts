@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { enqueueTeamMutation, teamDirFor } from "@/lib/agent-teams-swimlane-store";
 import { readLifecycleSnapshot } from "@/lib/agent-teams-team-actions";
+import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import {
   readTeamStateForRuntime,
   RuntimeControlError,
@@ -27,6 +28,12 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ team: string }> },
 ) {
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   const { team } = await params;
 
   let body: Record<string, unknown>;

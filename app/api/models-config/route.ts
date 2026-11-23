@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { ModelsConfigReadError, readModelsConfig, writeModelsConfig } from "@/lib/models-config-store";
 import { mergeStoredLiteralApiKeys, redactModelsJson } from "@/lib/models-config-redaction";
+import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,12 @@ export async function GET() {
 }
 
 export async function PUT(req: Request) {
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   try {
     let body: Record<string, unknown>;
     try {

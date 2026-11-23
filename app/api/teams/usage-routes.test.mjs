@@ -98,7 +98,7 @@ test("T5 jsonl 守卫：reclaim 成功后 sessions 树文件集合与字节逐�
   const res = await lifecycleRoute.POST(
     new Request(`http://localhost/api/teams/${encodeURIComponent(DIR_NAME)}/lifecycle`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", Host: "localhost" },
       body: JSON.stringify({ action: "reclaim" }),
     }),
     { params: Promise.resolve({ team: DIR_NAME }) },

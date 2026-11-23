@@ -10,6 +10,7 @@ import {
   type DispatchAssignmentInput,
 } from "@/lib/agent-teams-assignments";
 import { readTeamConfigSnapshot, teamDirFor } from "@/lib/agent-teams-swimlane-store";
+import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +44,12 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ team: string }> },
 ) {
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   const { team } = await params;
   const teamDirName = decodeURIComponent(team);
 

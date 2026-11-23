@@ -14,6 +14,7 @@ import {
 } from "@/lib/worktree";
 import { allowFileRoot, isCwdAllowed } from "@/lib/file-access";
 import { projectIdentityKey } from "@/lib/project-identity";
+import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 
 /** Bad JSON must be a 400, not the handler's generic 500. */
 async function readJsonBody<T>(req: Request): Promise<T | null> {
@@ -88,6 +89,12 @@ export async function GET(req: Request) {
 
 // POST /api/worktrees  body: { cwd, branch }  →  { path, branch }
 export async function POST(req: Request) {
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   try {
     const body = await readJsonBody<{ cwd?: string; branch?: string }>(req);
     if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
@@ -115,6 +122,12 @@ export async function POST(req: Request) {
 // Checks out the branch in the cwd's own checkout (local branch, or a new
 // tracking branch when the name only exists on one remote).
 export async function PUT(req: Request) {
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   try {
     const body = await readJsonBody<{ cwd?: string; branch?: string }>(req);
     if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
@@ -140,6 +153,12 @@ export async function PUT(req: Request) {
 
 // DELETE /api/worktrees  body: { cwd, path, force? }
 export async function DELETE(req: Request) {
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   try {
     const body = await readJsonBody<{ cwd?: string; path?: string; force?: boolean }>(req);
     if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
