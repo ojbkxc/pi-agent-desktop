@@ -235,7 +235,12 @@ test("release workflow publishes Apple Silicon, Linux x64, and Windows x64 insta
 
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /max-parallel: 1/);
-  assert.match(workflow, /runner: macos-26/);
+  // 首选 macos-26（SDK 26 = 新交通灯几何）。macos-latest 只作为 macos-26 池子
+  // 供给故障时的重试兜底（2026-11-24 深夜连续 4 次 runner_id=0 取消）；它装的是
+  // SDK 15，SDK 检查步骤会红并说明原因——宁可失败也不出旧 UI 的包。
+  assert.match(workflow, /macos-26/);
+  assert.match(workflow, /macos-latest/);
+  assert.match(workflow, /github\.run_attempt > 1 && 'macos-latest' \|\| 'macos-26'/);
   // Linking an older SDK ships the legacy traffic lights (0.7.1).
   assert.match(workflow, /--show-sdk-version\)"\n\s+echo "macOS SDK \$sdk"\n\s+test "\$\{sdk%%\.\*\}" -ge 26/);
   assert.match(workflow, /target: aarch64-apple-darwin/);
