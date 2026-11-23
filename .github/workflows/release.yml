@@ -91,6 +91,9 @@ jobs:
       - name: Verify bundled component releases
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          # 同号覆盖重发（本次口径）：跳过「必须比最新 Release 新」的闸门，
+          # tauri-action 复用/移动已存在的 v0.8.7 tag。普通发版不要设它。
+          PI_OVERWRITE_RELEASE: "1"
         run: |
           npm run release:manifest
           npm run release:verify

@@ -104,6 +104,18 @@ test("the signed release workflow is manual-only", async () => {
   assert.doesNotMatch(release, /\bpush:/);
 });
 
+test("the same-version overwrite re-release is explicit, not a default", async () => {
+  // 0.8.7 的发版口径是同号覆盖重发：release.yml 必须显式设 PI_OVERWRITE_RELEASE=1，
+  // verify 脚本据此跳过「必须比最新 Release 新」。两处必须同时存在——只改一侧
+  // 要么发版必红（verify 拦下同号），要么闸门永久失效（没人记得它是重发口径）。
+  const release = await readText(join(root, ".github", "workflows", "release.yml"), "utf8");
+  assert.match(release, /PI_OVERWRITE_RELEASE: "1"/, "release.yml must set the overwrite flag for this fork's re-release flow");
+  const verify = await readText(join(root, "scripts", "verify-release-components.mjs"), "utf8");
+  assert.match(verify, /PI_OVERWRITE_RELEASE === "1"/, "verify must honor the flag");
+  // 默认路径不能松：未设开关时同号仍然报错（普通发版 tag 已存在，tauri-action 会 already_exists）。
+  assert.match(verify, /!overwriteRelease\s*\n\s*&& remote\["pi-agent-desktop"\]/);
+});
+
 test("the merge gate covers tests, types, lint and a real build", () => {
   assert.match(componentUpdates, /npm test/);
   assert.match(componentUpdates, /tsc --noEmit/);
