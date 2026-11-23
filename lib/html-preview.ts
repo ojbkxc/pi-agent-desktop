@@ -13,6 +13,44 @@
 export type HtmlPreviewKind = "html" | "svg" | "react";
 
 export const HTML_PREVIEW_SANDBOX = "allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox";
+
+/**
+ * A second line of defence inside the preview document (security 审计 P2).
+ *
+ * The sandbox attribute is the first line, and it is the load-bearing one: no
+ * `allow-same-origin` means an opaque origin, so page script cannot read the
+ * app's cookies or storage. This CSP exists for the day someone edits
+ * `HTML_PREVIEW_SANDBOX` — it keeps a same-origin preview from *loading*
+ * things the preview never needed: no frames, no plugins, no `<base>`
+ * retargeting, no forms posting anywhere, no script from an arbitrary origin.
+ *
+ * Deliberately permissive where the preview is legitimately busy: inline
+ * script (the bootstrap, the JSX runtime, data: URLs from
+ * `externalizeInlineScripts`), blob: modules, the esm.sh CDN for React
+ * package imports, and https/ws connects so a preview that fetches an API
+ * still works. `img`/`media`/`style` stay open for the same reason.
+ *
+ * `form-action` is limited to http(s) rather than `'none'`: the sandbox grants
+ * `allow-forms`, so a form that really submits must still be able to reach the
+ * web — but a `javascript:` or `data:` form target is exactly the retargeting
+ * this CSP is here to stop.
+ */
+export const HTML_PREVIEW_CSP = [
+  "default-src 'none'",
+  "script-src 'unsafe-inline' 'unsafe-eval' data: blob: https://esm.sh",
+  "style-src 'unsafe-inline' data: https:",
+  "img-src data: blob: https: http:",
+  "font-src data: https:",
+  "media-src data: blob: https: http:",
+  "connect-src https: http: ws: wss:",
+  "frame-src 'none'",
+  "object-src 'none'",
+  "form-action https: http:",
+  "base-uri 'none'",
+].join("; ");
+
+/** `<meta http-equiv>` for {@link HTML_PREVIEW_CSP}, safe inside an attribute. */
+const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${HTML_PREVIEW_CSP.replace(/"/g, "&quot;")}">`;
 export const HTML_PREVIEW_SIZE_MESSAGE = "pi-html-preview:size";
 export const HTML_PREVIEW_ERROR_MESSAGE = "pi-html-preview:error";
 export const HTML_PREVIEW_OPEN_MESSAGE = "pi-html-preview:open";
@@ -214,9 +252,9 @@ export function buildHtmlPreviewDocument(kind: HtmlPreviewKind, code: string, op
   const bootstrap = bootstrapScript(Boolean(options.routeLinksToParent), previewMessages(options));
   if (kind === "react") return buildReactDocument(code, bootstrap, options);
   if (kind === "svg") {
-    return `<!DOCTYPE html><html><head><meta charset="utf-8">${SVG_DOCUMENT_STYLE}${bootstrap}</head><body>${code}</body></html>`;
+    return `<!DOCTYPE html><html><head><meta charset="utf-8">${CSP_META}${SVG_DOCUMENT_STYLE}${bootstrap}</head><body>${code}</body></html>`;
   }
-  const head = (htmlPreviewFollowsTheme(kind, code) ? themeStyle(options.theme) : "") + bootstrap;
+  const head = CSP_META + (htmlPreviewFollowsTheme(kind, code) ? themeStyle(options.theme) : "") + bootstrap;
   code = externalizeInlineScripts(code);
   // Artifacts may carry a fragment; give it a document so it renders in standards mode.
   if (!FULL_HTML_RE.test(code.replace(/^\uFEFF/, "").trimStart())) {
@@ -308,9 +346,9 @@ function buildReactDocument(code: string, bootstrap: string, options: HtmlPrevie
   const { runtime } = options;
   if (!runtime) {
     // Callers wait for the runtime; this only shows if one does not.
-    return `<!DOCTYPE html><html><head><meta charset="utf-8">${bootstrap}</head><body><script>window.__piPreviewError(window.__piPreviewMessages.runtimeMissing)</script></body></html>`;
+    return `<!DOCTYPE html><html><head><meta charset="utf-8">${CSP_META}${bootstrap}</head><body><script>window.__piPreviewError(window.__piPreviewMessages.runtimeMissing)</script></body></html>`;
   }
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${bootstrap}${inlineScript(runtime.tailwind)}${inlineScript(runtime.react)}${inlineScript(runtime.sucrase)}<script type="importmap">${scriptJson({ imports: reactImportMap(code, runtime) })}</script></head><body><div id="root"><div style="display:flex;align-items:center;justify-content:center;min-height:96px;font:13px system-ui,sans-serif;color:#8a8a8e">${escapeHtml(loadingLabel)}</div></div><script type="module">
+  return `<!DOCTYPE html><html><head><meta charset="utf-8">${CSP_META}<meta name="viewport" content="width=device-width,initial-scale=1">${bootstrap}${inlineScript(runtime.tailwind)}${inlineScript(runtime.react)}${inlineScript(runtime.sucrase)}<script type="importmap">${scriptJson({ imports: reactImportMap(code, runtime) })}</script></head><body><div id="root"><div style="display:flex;align-items:center;justify-content:center;min-height:96px;font:13px system-ui,sans-serif;color:#8a8a8e">${escapeHtml(loadingLabel)}</div></div><script type="module">
 const report=(m)=>window.__piPreviewError?window.__piPreviewError(m):console.error(m);
 const M=window.__piPreviewMessages,F=window.__piPreviewFormat;
 const source=${scriptJson(code)};
