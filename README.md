@@ -2,7 +2,7 @@
 
 **English** | [简体中文](./README.zh-CN.md)
 
-`pi-agent-desktop` is a local AI agent desktop app for macOS and Windows. It packages the agent capabilities of [pi](https://github.com/earendil-works/pi) into a standalone, installable application.
+`pi-agent-desktop` is a local AI agent desktop app for macOS, Windows, and Linux. It packages the agent capabilities of [pi](https://github.com/earendil-works/pi) into a standalone, installable application.
 
 ## Features
 
@@ -13,6 +13,9 @@
 - Switch Git worktrees from the sidebar and browse project files.
 - Scheduled tasks: run a saved prompt in a new session on a schedule (hourly, daily, weekly, a custom cron expression, or once). They run while the app is open, even with its window hidden, default to read-only tools, catch up once after a sleep, and notify you when a run succeeds or fails.
 - Preview source code, diffs, Markdown, images, audio, PDF, and DOCX files.
+- Background commands: launch builds, test suites, and dev servers without blocking the conversation; output lands on disk, a live tok/s meter sits under the composer, and finished jobs report back into the session.
+- Agent teams: dispatch work to background workers, follow their swimlanes, and approve or stop the whole team from one plan card.
+- The Purge console: request-governance switches, a searchable built-in preset library, a live try-it preview, and read-only gate-attribution stats.
 - Dark mode, automatic session naming, a completion sound, and restored run state.
 - A weekly check of the latest stable `pi-agent-desktop` GitHub Release, with an in-app notice only when the installed app is older.
 - One upgrade button installs a complete, signed new build of Pi Agent and restarts automatically.
@@ -21,7 +24,7 @@
 
 ![Pi Agent dark mode](./docs/screenshots/pi-agent-dark.webp)
 
-**[⬇️ Download Pi Agent (macOS / Windows)](https://github.com/ojbkxc/pi-agent-desktop/releases)**
+**[⬇️ Download Pi Agent (macOS / Linux / Windows)](https://github.com/ojbkxc/pi-agent-desktop/releases)**
 
 Repository: [ojbkxc/pi-agent-desktop](https://github.com/ojbkxc/pi-agent-desktop) — fork of [abcwyc/pi-agent-desktop](https://github.com/abcwyc/pi-agent-desktop)
 
@@ -69,18 +72,14 @@ Model keys and session data stay on your machine. The file-browsing API only all
 
 ## Update Checks And Upgrades
 
-Pi Agent checks the latest stable release of `ojbkxc/pi-agent-desktop` at most once every seven days:
-
-- `ojbkxc/pi-agent-desktop`
-- `earendil-works/pi`
-- `agegr/pi-web`
+Pi Agent checks the latest stable release of `ojbkxc/pi-agent-desktop` at most once every seven days. The bundled `pi` and `pi-web` components are pinned inside each build, so their GitHub releases are not polled separately: a new desktop release is the single signal that the components moved.
 
 The versioning and upgrade rules are:
 
 1. The latest stable `pi-agent-desktop` release is the only source used for update reminders.
 2. The upgrade button in Settings becomes enabled only when the installed desktop app version is older.
-3. When several components need updating, the release automation syncs and verifies them in the order `pi → pi-web → pi-agent-desktop`.
-4. Nothing patches an individual JavaScript package inside an installed app. The app downloads one complete signed build containing all three components at their latest versions.
+3. When upstream components need updating, the release automation syncs and verifies them in the order `pi → pi-web → pi-agent-desktop`, then publishes one desktop release.
+4. Nothing patches an individual JavaScript package inside an installed app. The app downloads one complete signed build containing all three components at their pinned versions.
 5. The app restarts after installation, so all three components land in the same verified release state at once.
 
 This keeps the components in a desktop install consistent, and avoids the runtime incompatibilities that come from swapping `pi` or `pi-web` on their own.

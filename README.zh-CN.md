@@ -2,7 +2,7 @@
 
 [English](./README.md) | **简体中文**
 
-`pi-agent-desktop` 是一个面向 macOS 和 Windows 的本地 AI Agent 桌面应用。它将 [pi](https://github.com/earendil-works/pi) 的 Agent 能力封装成一个可独立安装的 App。
+`pi-agent-desktop` 是一个面向 macOS、Windows 和 Linux 的本地 AI Agent 桌面应用。它将 [pi](https://github.com/earendil-works/pi) 的 Agent 能力封装成一个可独立安装的 App。
 
 ## 主要功能
 
@@ -13,15 +13,18 @@
 - 在侧边栏切换 Git worktree，并浏览项目文件。
 - 定时任务：按计划（每小时、每天、每周、自定义 cron 或仅一次）在新会话里运行保存好的提示词。App 运行期间（窗口收起到托盘也算）就会执行，默认只读工具，睡眠错过的运行会补跑一次，成功或失败都会通知你。
 - 预览源码、Diff、Markdown、图片、音频、PDF 和 DOCX 等文件。
+- 后台命令：构建、测试套件、dev server 不再阻塞对话；输出落盘、输入框下方有实时 tok/s 速度条、任务完成后回报进会话。
+- 智能体团队：把工作派给后台 worker，泳道视图跟踪进展，一张计划卡审批或停止整个团队。
+- 破甲控制台：请求治理开关、可搜索的内置预设库、实时「试跑」预览，以及只读的闸门归属统计。
 - 支持深色模式、会话自动命名、完成提示音和运行状态恢复。
-- 每周检查三个组成项目的稳定 GitHub Release，并在发现更新时提醒用户。
+- 每周检查 `pi-agent-desktop` 自身的稳定 GitHub Release（内置的 pi 与 pi-web 组件随每个构建固定，不单独轮询其 GitHub Release），发现新版本时在应用内提醒。
 - 通过一个升级按钮安装完整、签名的 Pi Agent 新版本并自动重启。
 
 ![Pi Agent 浅色模式界面](./docs/screenshots/pi-agent-light.webp)
 
 ![Pi Agent 深色模式界面](./docs/screenshots/pi-agent-dark.webp)
 
-**[⬇️ 下载 Pi Agent（macOS / Windows）](https://github.com/ojbkxc/pi-agent-desktop/releases)**
+**[⬇️ 下载 Pi Agent（macOS / Linux / Windows）](https://github.com/ojbkxc/pi-agent-desktop/releases)**
 
 项目仓库：[ojbkxc/pi-agent-desktop](https://github.com/ojbkxc/pi-agent-desktop)
 
@@ -68,18 +71,14 @@ Pi Agent 默认读取 Pi 的本地数据目录：
 
 ## 版本检查与升级
 
-Pi Agent 最多每七天检查一次以下仓库的最新稳定 Release：
-
-- `ojbkxc/pi-agent-desktop`
-- `earendil-works/pi`
-- `agegr/pi-web`
+Pi Agent 最多每七天检查一次 `ojbkxc/pi-agent-desktop` 的最新稳定 Release。内置的 `pi` 与 `pi-web` 组件随每个构建固定，不单独轮询其 GitHub Release——桌面 Release 本身就是组件更新的唯一信号。
 
 版本与升级规则如下：
 
 1. `pi-agent-desktop` 一旦存在 Release，就以最新稳定 Release 作为可升级版本来源。
-2. 三个组件中任意一个版本落后，设置中的统一升级按钮都会启用。
-3. 如果多个组件需要更新，发布自动化按 `pi → pi-web → pi-agent-desktop` 的顺序同步和验证。
-4. 用户侧不会修改已安装 App 内的单个 JavaScript 包，而是下载一个同时包含三个最新版组件的完整签名 App。
+2. 已安装的桌面 App 版本落后时，设置中的统一升级按钮才会启用。
+3. 上游组件需要更新时，发布自动化按 `pi → pi-web → pi-agent-desktop` 的顺序同步和验证，然后发布一个桌面 Release。
+4. 用户侧不会修改已安装 App 内的单个 JavaScript 包，而是下载一个同时包含三个固定版本组件的完整签名 App。
 5. 安装完成后 App 自动重启，使三个组件一次性进入同一个经过验证的发布状态。
 
 这种方式可以保持桌面安装包的组件一致性，也能避免独立替换 `pi` 或 `pi-web` 导致运行时不兼容。
@@ -110,12 +109,13 @@ PI_WEB_HTTP_IDLE_TIMEOUT_MS=disabled npm run dev  # 不设空闲超时
 
 ### 环境要求
 
-- macOS 11+（Apple Silicon）或 Windows 10/11 x64
+- macOS 11+（Apple Silicon）、Windows 10/11 x64，或使用 WebKitGTK 4.1 与 GTK 3 的 Linux x64 发行版
 - Node.js 22（推荐）
 - npm
 - Rust 1.85+
 - macOS：Xcode Command Line Tools
 - Windows：Microsoft C++ Build Tools 与 WebView2
+- Linux：WebKitGTK 4.1 与 GTK 3 开发库（Debian/Ubuntu 为 `libwebkit2gtk-4.1-dev libgtk-3-dev`）
 
 ### 启动 Web 开发服务器
 
@@ -182,7 +182,7 @@ npm run desktop:build
 1. 在隔离目录中生成 Next.js standalone 服务。
 2. 打包当前架构的 Node.js runtime。
 3. 将服务和运行时作为 Tauri Resources 放入 App。
-4. 在 Apple Silicon Mac 上生成 `.app`、`.dmg` 和 updater 产物；在 Windows x64 上生成 NSIS `-setup.exe` 和 updater 产物。
+4. 在 Apple Silicon Mac 上生成 `.app`、`.dmg` 和 updater 产物；在 Windows x64 上生成 NSIS `-setup.exe` 和 updater 产物；在 Linux x64 上生成 `.deb` 和 updater 产物。
 
 本地构建默认不注册生产 updater，不能接受正式更新。正式 Release 必须通过 GitHub Actions 注入 updater 公钥，并使用对应私钥签名。
 
@@ -193,7 +193,7 @@ npm run desktop:build
 - [`component-updates.yml`](./.github/workflows/component-updates.yml)：每天检查 `pi` 和 `pi-web` 的稳定 Release。发现新版后，**先**把上游改动集与 [`scripts/fork-ownership.json`](./scripts/fork-ownership.json) 记录的「本仓库改过的上游文件」求交集，再合并 Tag、更新依赖和组件清单，并运行完整门禁（`npm test`、`tsc`、`lint`、真实 standalone 构建）。
   - 交集为空 → 直接提交 `main` 并触发发布；
   - 命中高/中风险文件 → 推送 `sync/pi-web-<tag>` 分支并开 PR，附上边界报告，**不**触发发布。合并该 PR 才会发版。
-- [`release.yml`](./.github/workflows/release.yml)：收到组件同步工作流的显式触发后，串行构建 Apple Silicon (`aarch64`) DMG 和 Windows x64 NSIS `-setup.exe`，不构建 Intel Mac 版本。Release 在两个平台的 updater 签名文件、`latest.json` 和组件清单全部上传完成前保持草稿状态 —— `manifest` job 依赖**整个**构建矩阵，任一平台失败就不会转正。构建失败会创建/更新 `release-failure` Issue。
+- [`release.yml`](./.github/workflows/release.yml)：收到组件同步工作流的显式触发后，串行构建 Apple Silicon (`aarch64`) DMG、Windows x64 NSIS `-setup.exe` 和 Linux x64 `.deb`，不构建 Intel Mac 版本。Release 在所有平台的 updater 签名文件、`latest.json` 和组件清单全部上传完成前保持草稿状态 —— `manifest` job 依赖**整个**构建矩阵，任一平台失败就不会转正。构建失败会创建/更新 `release-failure` Issue。
 
 上游同步使用 Git 合并，因此本仓库维护的 Pi Agent 品牌、设置入口和升级逻辑会作为本地修改保留。合并冲突会让工作流停止——这是安全的失败方式。真正危险的是**无冲突但语义错误**的合并：上游改了本仓库也改过的区域，Git 干净地合上了，测试也全绿。上面的边界求交就是为此设置的，规则见 [维护边界说明](./docs/ownership-boundaries.md)。
 
