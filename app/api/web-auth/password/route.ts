@@ -96,7 +96,9 @@ export async function PUT(request: NextRequest) {
 
   const record = readWebPasswordRecord();
   if (record) {
-    const retryAfterMs = getAuthRetryAfterMs();
+    // 改密码只在 Settings 页发起（isLocalRequest 已在该路由前置校验过），
+    // 所以这里按本机口径查询与计数。
+    const retryAfterMs = getAuthRetryAfterMs("local", "local");
     if (retryAfterMs > 0) {
       return jsonError(
         { error: "Too many failed attempts", retryAfterMs },
@@ -107,7 +109,7 @@ export async function PUT(request: NextRequest) {
 
     const currentPassword = body.currentPassword;
     if (typeof currentPassword !== "string" || !verifyWebPasswordHash(currentPassword, record)) {
-      const delayMs = recordAuthFailure();
+      const delayMs = recordAuthFailure("local");
       console.warn(`[web-auth] Password change refused: the current password did not verify; next attempt blocked for ${delayMs}ms`);
       return jsonError(
         { error: "Invalid current password", retryAfterMs: delayMs, code: "invalid-current" },

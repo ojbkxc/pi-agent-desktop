@@ -9,6 +9,7 @@ import {
   isApiRequestHostAllowed,
 } from "@/lib/request-security";
 import {
+  isLocalRequest,
   isRemoteAccessHost,
   isTailscaleFunnelRequest,
   isRemoteAccessRequestAuthorized,
@@ -122,13 +123,17 @@ export function proxy(request: NextRequest) {
     // Every Basic header is a password guess, so it shares the login form's
     // throttle; otherwise any API path (or GET /api/web-auth) answers guesses
     // at full speed. While blocked even the right password is refused, or the
-    // answer would leak. A success does not reset the counter: Basic clients
-    // authenticate on every request, and each reset would hand an interleaved
-    // guesser a fresh short block.
-    const retryAfterMs = getAuthRetryAfterMs();
+    // answer would leak. The buckets are split local/shared (auth-throttle):
+    // a tunnel visitor's failures never lock the operator out on their own
+    // machine, but a local lock still gates remote guesses.
+    const basicLocal = isLocalRequest(request);
+    const retryAfterMs = getAuthRetryAfterMs(
+      basicLocal ? "local" : "shared",
+      basicLocal ? "local" : "remote",
+    );
     if (retryAfterMs > 0) return tooManyAttempts(retryAfterMs);
     authenticated = isValidBasicAuthorization(authorization);
-    if (!authenticated) recordAuthFailure();
+    if (!authenticated) recordAuthFailure(basicLocal ? "local" : "shared");
   }
   if (request.nextUrl.pathname === "/login") {
     return authenticated

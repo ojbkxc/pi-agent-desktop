@@ -6,6 +6,7 @@ import {
   retryAfterSeconds,
 } from "@/lib/auth-throttle";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { isLocalRequest } from "@/lib/remote-access";
 import { parseJsonWithinLimit, RequestBodyTooLargeError } from "@/lib/bounded-form-data";
 import {
   createWebSessionToken,
@@ -65,7 +66,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Password authentication is disabled" }, { status: 404 });
   }
 
-  const retryAfterMs = getAuthRetryAfterMs();
+  const isLocal = isLocalRequest(request);
+  const retryAfterMs = getAuthRetryAfterMs(isLocal ? "local" : "shared", isLocal ? "local" : "remote");
   if (retryAfterMs > 0) {
     return tooManyAttempts(retryAfterMs);
   }
@@ -80,7 +82,7 @@ export async function POST(request: NextRequest) {
     body = null;
   }
   if (!body || typeof body.password !== "string" || !isValidWebPassword(body.password)) {
-    const delayMs = recordAuthFailure();
+    const delayMs = recordAuthFailure(isLocal ? "local" : "shared");
     console.warn(`[web-auth] Password authentication failed; next attempt blocked for ${delayMs}ms`);
     return NextResponse.json(
       { error: "Invalid password", retryAfterMs: delayMs },
