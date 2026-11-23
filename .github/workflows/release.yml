@@ -116,15 +116,22 @@ jobs:
           releaseBody: |
             ## Pi Agent Desktop 0.8.7 (fork)
 
-            **2026-11-23 · 覆盖式重发（第十次）**
+            **2026-11-23 · 覆盖式重发（第十一次）**
 
             > 版本号保持 0.8.7 不变，本次构建替换上一版的全部安装包。升级方式与普通更新相同，直接覆盖安装即可；配置、会话与任务记录都在 `~/.pi/agent/`，不受影响。
 
             本 fork 基于上游 pi-agent-desktop 0.8.2 / pi-web 0.10 构建，已并入上游 pi-web **v0.10 → v0.17** 的全部安全、稳定性与性能修复，并在此之上维护本 fork 的桌面功能线。
 
-            本次在 P1「项目战役」的基础上做了一轮全仓缺陷巡查，修复 10 个已证实的问题（3 个高优先）。
+            本次是第十一次覆盖重发，修复 6 个已证实缺陷（1 个 P1、3 个 P2），全部带回归测试。
 
             ### 本次重发新增：缺陷修复 / Fixes in this re-release
+
+            - **后台命令 / background-jobs (P1).** Windows 上没有 Git Bash 的机器（Git 装在 D 盘、只装了 MSYS2、干净装机）此前**每一条后台任务都直接失败**（`No bash shell found`）；现在三级兜底（SDK 探测 → 仓库终端探测 → PowerShell），降级只提示一次不静默，旧版 WSL bash 的 stdin 传输路径一并补上。
+            - **破甲 / purge (P2).** 「降低思考档位」此前只压不还，一轮跑完会话被永久留在低档位、关掉开关也不回升（「关闭=纯转发」失效）；现改为运行结束自动还原，操作者中途手动改过档位则尊重手动选择。「写入技能文件」此前把预设标题写进 frontmatter `name`，而 53 条预设里 33 条标题不是合法技能名；现改为写规范 id（标题保留在 description），落盘改原子写。
+            - **API 健壮性 / API hardening (P2).** autopilot、lean-mode、network-proxy、pinned-sessions、relay、terminal、skills、open-in-explorer 八条写路由此前把非法 JSON 报成 500 并回显解析器原文；现在统一返回 400 与通用文案，open-in-explorer 顺带补上缺失的 Content-Type 闸门。
+            - **已知未修 / known gaps.** dsh-purge 适配缺口四项（boost 强化段、refusal-retry、技能归档导入、上游 agent 预设正文提炼）维持现状，判定与证据见 `docs/agents/purge-adaptation-audit.md`。
+
+            ### 第十次重发内容 / Fixes in the previous re-release
 
             - **安全 / security.** models-config 的模型发现与测试不再把本机存储的 API 凭据发往请求指定的新 Base URL；未保存的私网/环回目标（含 IPv4 与 IPv6-mapped）一律拒绝，已保存的本地 provider（Ollama 等）仍然放行。远端读取网络代理配置时遮蔽 `user:pass@`。
             - **团队 / teams.** 「暂停」按钮现在真正调用服务端 pause（此前只 abort lead）；lifecycle 请求加 15s 超时，挂起后按钮不再永久禁用。
