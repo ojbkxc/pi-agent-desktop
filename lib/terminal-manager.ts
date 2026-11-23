@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { homedir } from "os";
 import type { IPty } from "node-pty";
 import { samePath } from "./paths";
+import { sanitizeProjectCommandEnvironment } from "./project-command-env";
 import { resolveTerminalShell } from "./terminal-settings";
 
 export type TerminalEvent =
@@ -44,11 +45,15 @@ function registry(): Map<string, TerminalRecord> {
 }
 
 function shellEnvironment(): Record<string, string> {
+  // 与 project-command-env.ts 共用同一份剥离清单（PI_WEB_PASSWORD、
+  // PI_DESKTOP_API_TOKEN、PI_DESKTOP_INSTANCE_ID、PORT、NODE_ENV、NEXT_*）。
+  // 以前这里只剥 PI_WEB_PASSWORD：终端里一个 `env` 就能把 desktop token 打到
+  // SSE 回放缓冲里读回浏览器，而那个 token 正是 /api/desktop/save 任意路径写的
+  // 唯一凭据。三处子进程（PTY / 后台任务 / git）现在同一口径。
+  const sanitized = sanitizeProjectCommandEnvironment(process.env);
   const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    // The browser login password guards this server, not the shells it starts.
-    const comparableKey = process.platform === "win32" ? key.toUpperCase() : key;
-    if (value !== undefined && comparableKey !== "PI_WEB_PASSWORD") env[key] = value;
+  for (const [key, value] of Object.entries(sanitized)) {
+    if (value !== undefined) env[key] = value;
   }
   env.TERM = "xterm-256color";
   env.COLORTERM = "truecolor";

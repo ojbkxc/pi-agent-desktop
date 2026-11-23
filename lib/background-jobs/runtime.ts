@@ -15,6 +15,7 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { childProcessEnvironment } from "../project-command-env";
 import { resolveJobShell } from "./shell";
 import {
   appendOutput,
@@ -153,6 +154,12 @@ export function startBackgroundJob(request: StartJobRequest): StartJobResult {
       // `commandTransport: "stdin"`），忽略它会让这类环境里的 job 起来就空等。
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      // 剥离宿主运行时变量（PI_WEB_PASSWORD / PI_DESKTOP_API_TOKEN / NEXT_* 等，
+      // 清单在 project-command-env.ts 的 isHostRuntimeVariable）：job 的输出会落盘
+      // 并可被会话与浏览器读回，desktop token 任何一个 `env` 就等于把
+      // `/api/desktop/save` 的任意路径写权交出去。与 worktree / file-index / export
+      // 三处子进程同一口径。
+      env: childProcessEnvironment(),
     });
   } catch (error) {
     // 输出文件已经建好，删掉它，别留孤儿文件。只清内存计数是不够的：这条路径上

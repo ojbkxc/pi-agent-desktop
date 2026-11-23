@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { promisify } from "util";
 import { TEXT_PREVIEW_MAX_BYTES } from "./file-types";
+import { childProcessEnvironment } from "./project-command-env";
 import type {
   GitFileDiffResponse,
   GitFileStatus,
@@ -22,7 +23,10 @@ async function git(cwd: string, args: string[], maxBuffer = GIT_STATUS_MAX_BUFFE
   const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
     timeout: GIT_TIMEOUT_MS,
     maxBuffer,
-    env: { ...process.env, LC_ALL: "C" },
+    // 与 file-index / worktree / session export 三处一致：剥掉宿主运行时变量。
+    // `{ ...process.env }` 会让克隆来的 repo 用 core.pager / alias / filter 执行
+    // 命令时读到 PI_DESKTOP_API_TOKEN（那个 token 是任意路径写的唯一凭据）。
+    env: childProcessEnvironment({ LC_ALL: "C" }),
   });
   return stdout;
 }
