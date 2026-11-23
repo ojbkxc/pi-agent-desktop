@@ -51,6 +51,27 @@ function thinkingRank(level: unknown): number | undefined {
   return typeof level === "string" ? THINKING_RANK[level.trim().toLowerCase()] : undefined;
 }
 
+/**
+ * 一轮跑完把被压下去的思考档位还原。
+ *
+ * 只在「现档位仍是我们压下去的那个」时才还：用户在这轮里手动改过档位，那才是他要的，
+ * 不能用一次副作用去覆盖。还原失败只吞掉——档位比会话本身次要。
+ */
+function restoreThinkingLevel(pi: ExtensionAPI, state: ClampState): void {
+  const previous = state.previous;
+  const applied = state.applied;
+  state.previous = undefined;
+  state.applied = undefined;
+  if (previous === undefined) return;
+  const current = typeof pi.getThinkingLevel === "function" ? pi.getThinkingLevel() : undefined;
+  if (applied !== undefined && current !== undefined && current !== applied) return;
+  try {
+    pi.setThinkingLevel(previous);
+  } catch {
+    // 还不了档位不该让这一轮的收尾失败。
+  }
+}
+
 export interface PurgeExtensionOptions {
   /** Defaults to reading the `purge` block of Pi Web's settings file on every event. */
   readSettings?: () => PurgeSettings;
@@ -121,6 +142,25 @@ function findLastUserText(messages: readonly ContextMessage[]): LastUserText | u
 }
 
 /**
+ * `reduce_reasoning` 需要的一次性状态。
+ *
+ * `pi.setThinkingLevel()` 是**会话级**接口：压档位就是把会话的思考档位改小。不还原，
+ * 控制台关掉之后会话仍然停在 floor 上，等于「关掉=纯转发」是假的。
+ */
+/**
+ * 思考档位的类型直接跟着宿主走：`ThinkingLevel` 不在 SDK 的根导出里，但每一个
+ * `setThinkingLevel` 的参数就是它，取参数类型比复制一份枚举更抗漂移。
+ */
+type ThinkingLevelArg = Parameters<ExtensionAPI["setThinkingLevel"]>[0];
+
+export interface ClampState {
+  /** 压之前的档位；同一轮里多次 `before_agent_start` 只记第一次。 */
+  previous?: ThinkingLevelArg;
+  /** 自己压下去的那个档位：只有现档位还是它，才说明没人动过，可以还。 */
+  applied?: ThinkingLevelArg;
+}
+
+/**
  * The `before_agent_start` half: govern the system prompt, apply the preset the
  * current model is written for (when that switch is on) and, when asked, clamp an
  * explicit high reasoning level down to `reasoning_floor`.
@@ -141,6 +181,7 @@ function handleBeforeAgentStart(
   event: { systemPrompt?: unknown },
   readSettings: () => PurgeSettings,
   readModel: (() => string | undefined) | undefined,
+  clampState: ClampState,
 ): { systemPrompt: string } | undefined {
   try {
     const settings = readSettings();
@@ -167,7 +208,14 @@ function handleBeforeAgentStart(
       const floorRank = thinkingRank(settings.reasoning_floor);
       // Only ever down-clamp: never raise a request the user made cheaper, never invent a level.
       if (currentRank !== undefined && floorRank !== undefined && currentRank > floorRank) {
-        pi.setThinkingLevel(settings.reasoning_floor);
+        const floor = settings.reasoning_floor as ThinkingLevelArg;
+        pi.setThinkingLevel(floor);
+        // `setThinkingLevel` 改的是**会话状态**，不是这一次请求：只压不还，跑完这一轮之后
+        // 会话就被永久留在 floor 上，控制台关掉也不会自己回去（「关掉=纯转发」当场失效）。
+        // 记下压之前的档位，`agent_end` 里还原；只在档位仍是自己压下去的那个时才还，
+        // 用户中途手动改过就尊重用户的选择。
+        clampState.previous ??= current;
+        clampState.applied = floor;
         clamps = 1;
       }
     }
@@ -236,8 +284,11 @@ export function createPurgeExtension(options: PurgeExtensionOptions = {}): Inlin
     name: PURGE_EXTENSION_NAME,
     hidden: true,
     factory: (pi) => {
-      pi.on("before_agent_start", (event) => handleBeforeAgentStart(pi, event, readSettings, readModel));
+      // 每次 factory 调用 = 一个会话，压档位的还原记录跟着会话走。
+      const clampState: ClampState = {};
+      pi.on("before_agent_start", (event) => handleBeforeAgentStart(pi, event, readSettings, readModel, clampState));
       pi.on("context", (event) => handleContext(event, readSettings));
+      pi.on("agent_end", () => restoreThinkingLevel(pi, clampState));
     },
   };
 }

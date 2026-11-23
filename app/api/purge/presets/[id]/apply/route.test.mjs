@@ -175,8 +175,11 @@ test("POST skill_file writes the SKILL.md and reports its path", async () => {
   const content = readFileSync(body.result.path, "utf8");
   assert.ok(content.startsWith("---\n"), "the skill file needs YAML frontmatter");
   const frontmatter = content.slice(4, content.indexOf("\n---", 4));
-  assert.match(frontmatter, new RegExp(`^name:.*${PRESET.title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "m"));
-  assert.match(frontmatter, /^description:/m);
+  // `name` 必须是规范里的 slug（就是目录名），标题只能出现在 description 里：
+  // 53 条预设里 33 条标题带空格/括号/大写，写进 name 会让 SDK 的 validateName 报警。
+  assert.match(frontmatter, new RegExp(`^name: ${PRESET.id}$`, "m"));
+  const description = /^description: (.*)$/m.exec(frontmatter)?.[1] ?? "";
+  assert.ok(description.includes(PRESET.title), "the human title survives in the description");
   assert.match(frontmatter, /^keywords:/m);
   assert.ok(content.includes(PRESET.body), "the prompt body is the skill body");
 

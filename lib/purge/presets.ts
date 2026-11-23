@@ -12,8 +12,9 @@
  * `auto_preset` switch, and it lives in `auto-apply.ts`, never here.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { writePrivateFileAtomicSync } from "../atomic-file";
 import { expandHome } from "./governance";
 import { BUILTIN_PRESETS, type BuiltinPreset } from "./preset-catalog";
 import { presetMatchForModel, type PresetMatch } from "./preset-match";
@@ -229,13 +230,24 @@ export function getPreset(id: string): PresetDetail | undefined {
   return getPresetDetail(BUILTIN_PRESETS, id);
 }
 
-/** The SKILL.md a `skill_file` apply writes. */
+/**
+ * The SKILL.md a `skill_file` apply writes.
+ *
+ * `name` is the preset **id**, never the title. The Agent Skills spec (and the
+ * SDK's `validateName`) only accepts `[a-z0-9-]`, ≤64 chars, no leading/trailing
+ * or doubled hyphen — and 33 of the 53 catalog titles are things like
+ * `mistral-small-4 (duck.ai)` or `Qwen-4-max`. Writing the title there produced a
+ * skill the scanner warned about and that nobody could invoke as `/skill:<name>`.
+ * The id is already whitelisted by `isSafeSegment` and is also the directory name,
+ * so frontmatter and folder agree. The human title stays in the description.
+ */
 function renderSkillFile(preset: BuiltinPreset): string {
-  const description = (preset.tags.length > 0 ? `预设标签：${preset.tags.join("、")}` : "破甲预设")
+  const label = preset.title.trim() || preset.id;
+  const description = (preset.tags.length > 0 ? `${label}｜预设标签：${preset.tags.join("、")}` : label)
     .replace(/\r?\n/g, " ");
   return [
     "---",
-    `name: ${preset.title}`,
+    `name: ${preset.id}`,
     `description: ${description}`,
     `keywords: ${preset.tags.join(", ")}`,
     "---",
@@ -303,7 +315,8 @@ export function applyPresetTo(
   const path = join(dir, "SKILL.md");
   const content = renderSkillFile(preset);
   const previous = readTextOrUndefined(path);
-  writeFileSync(path, content, "utf8");
+  // 原子写：写到一半被中断留下的半截 SKILL.md，会被下一次技能扫描当成真技能读进去。
+  writePrivateFileAtomicSync(path, content);
   return { target, changed: previous !== content, path };
 }
 
