@@ -38,6 +38,16 @@ import {
 import { isDesktopApiRequestAllowed } from "@/lib/desktop-api-auth";
 import { filePathFromApiSegments, isWindowsAbsolutePath, samePath } from "@/lib/paths";
 import { hasParentDirectorySegment } from "@/lib/path-security";
+import { realpathSync } from "fs";
+
+/** realpath 失败（race between stat and now）时退回原路径；调用方只做黑名单比对。 */
+function resolveRealTargetOrSelf(target: string): string {
+  try {
+    return realpathSync(target);
+  } catch {
+    return target;
+  }
+}
 
 const IGNORED_NAMES = new Set([
   "node_modules", ".git", ".next", "dist", "build", "__pycache__",
@@ -673,6 +683,22 @@ export async function GET(
     // Even a session cwd of ~ or a transcript that mentions the file does not open a key store.
     if (isCredentialPath(filePath)) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
+    }
+    // Session-reference bypass hardening: that path authorizes lexically only
+    // (the transcript holds the literal path the agent touched), while the
+    // filesystem follows symlinks/junctions. A link checked into the repo
+    // pointing outside the roots previously read through here as soon as the
+    // agent had touched it once. The realpath check the non-referenced path
+    // answers with must hold on this side too — but only for targets that
+    // exist: the whole point of the reference is allowing 404s for deleted
+    // files without scanning the parent.
+    if (allowedBySessionReference && stat) {
+      if (
+        !isExistingFilePathAllowed(filePath, allowedRoots)
+        && isCredentialPath(resolveRealTargetOrSelf(filePath))
+      ) {
+        return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      }
     }
 
     if (type === "read") {
