@@ -1,7 +1,7 @@
 import { isAbsolute } from "node:path";
 import { NextResponse } from "next/server";
 import { writeFavorite, type FavoriteTarget } from "@/lib/artifact-favorites";
-import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +30,9 @@ export async function PUT(request: Request) {
     return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415, headers });
   }
   try {
-    const body = await request.json() as Record<string, unknown> | null;
+    const read = await readJsonBody(request);
+    if (!read.ok) return read.response;
+    const body = read.body as Record<string, unknown> | null;
     const target = body && typeof body === "object" ? parseTarget(body) : null;
     if (!target || typeof body?.favorite !== "boolean") {
       return NextResponse.json({ error: "Expected a file path or artifact id and a boolean favorite" }, { status: 400, headers });

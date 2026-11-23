@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 import {
   normalizeFastModePatch,
   readFastModeConfig,
@@ -21,7 +21,9 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
   }
   try {
-    const next = normalizeFastModePatch(await req.json(), readFastModeConfig());
+    const read = await readJsonBody(req);
+    if (!read.ok) return read.response;
+    const next = normalizeFastModePatch(read.body, readFastModeConfig());
     const stored = writeFastModeConfig(next);
     return NextResponse.json({ preset: stored.preset, switches: stored.switches });
   } catch (error) {

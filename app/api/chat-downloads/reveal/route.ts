@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { chatDownloadsDir, isNetworkExposedServer } from "@/lib/chat-file-access";
 import { isFileManagerSupported, launchFileManager } from "@/lib/open-in-file-manager";
 import { isLocalRequest } from "@/lib/remote-access";
-import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -27,7 +27,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "unsupported-platform" }, { status: 403 });
   }
   try {
-    const body = await request.json() as { path?: unknown };
+    const read = await readJsonBody(request);
+    if (!read.ok) return read.response;
+    const body = read.body as { path?: unknown };
     if (typeof body.path !== "string" || !body.path.trim()) {
       return NextResponse.json({ error: "path-required" }, { status: 400 });
     }

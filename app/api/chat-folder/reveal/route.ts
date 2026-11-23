@@ -4,7 +4,7 @@ import { isChatFolderPath } from "@/lib/chat-workspace";
 import { isNetworkExposedServer } from "@/lib/chat-file-access";
 import { isFileManagerSupported, launchFileManager } from "@/lib/open-in-file-manager";
 import { isLocalRequest } from "@/lib/remote-access";
-import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 import { getRpcSession } from "@/lib/rpc-manager";
 import { readSessionHeader, resolveSessionPath } from "@/lib/session-reader";
 
@@ -29,7 +29,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "unsupported-platform" }, { status: 403 });
   }
   try {
-    const body = await request.json() as { sessionId?: unknown };
+    const read = await readJsonBody(request);
+    if (!read.ok) return read.response;
+    const body = read.body as { sessionId?: unknown };
     if (typeof body.sessionId !== "string" || !body.sessionId.trim()) {
       return NextResponse.json({ error: "sessionId-required" }, { status: 400 });
     }

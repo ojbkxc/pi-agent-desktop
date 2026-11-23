@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isLocalRequest } from "@/lib/remote-access";
-import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 import {
   clearManualNeeds,
   isUnattendedDisabledByEnv,
@@ -52,7 +52,9 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
   }
   try {
-    const parsed = parseUnattendedConfigUpdate(await req.json(), readUnattendedFile().config);
+    const read = await readJsonBody(req);
+    if (!read.ok) return read.response;
+    const parsed = parseUnattendedConfigUpdate(read.body, readUnattendedFile().config);
     if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
     writeUnattendedConfig(parsed.config);
     return NextResponse.json(readView(), { headers: { "Cache-Control": "no-store" } });

@@ -5,7 +5,7 @@ import {
   readRemoteAccessConfig,
   writeRemoteAccessConfig,
 } from "@/lib/remote-access";
-import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 import { readTailscaleStatus } from "@/lib/tailscale-status";
 
 export const dynamic = "force-dynamic";
@@ -34,7 +34,9 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
   }
   try {
-    const parsed = parseRemoteAccessUpdate(await req.json());
+    const read = await readJsonBody(req);
+    if (!read.ok) return read.response;
+    const parsed = parseRemoteAccessUpdate(read.body);
     if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
     return NextResponse.json({ config: writeRemoteAccessConfig(parsed.config) });
   } catch (error) {

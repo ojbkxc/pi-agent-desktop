@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isLocalRequest } from "@/lib/remote-access";
-import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 import { isServerPort, readConfiguredServerPort, writeConfiguredServerPort } from "@/lib/server-port";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +36,9 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
   }
   try {
-    const parsed: unknown = await req.json();
+    const read = await readJsonBody(req);
+    if (!read.ok) return read.response;
+    const parsed: unknown = read.body;
     // A `null` body is legal JSON: `parsed.serverPort` used to throw a TypeError
     // that the catch below reported as 500, when the payload is simply invalid.
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {

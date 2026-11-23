@@ -10,7 +10,7 @@ import {
   type ResolvedResource,
 } from "@earendil-works/pi-coding-agent";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
-import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 import { getProjectTrustStatus } from "@/lib/project-trust";
 import { isPluginSourceCheckable } from "@/lib/plugin-updates";
 import { invalidateModelRuntimeWithExtensions } from "@/lib/model-runtime";
@@ -431,7 +431,9 @@ export async function POST(req: Request) {
   }
 
   try {
-    const body = await req.json() as {
+    const read = await readJsonBody(req);
+    if (!read.ok) return read.response;
+    const body = read.body as {
       action?: PluginAction;
       source?: string;
       scope?: PluginScope;

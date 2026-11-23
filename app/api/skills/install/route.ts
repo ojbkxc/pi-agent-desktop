@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { runNpx } from "@/lib/npx";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
-import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 import { getProjectTrustStatus } from "@/lib/project-trust";
 import { isVerboseLogging } from "@/bin/pi-web-options.js";
 
@@ -20,7 +20,9 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { package: rawPkg, scope, cwd } = await req.json() as { package?: unknown; scope?: string; cwd?: string };
+    const read = await readJsonBody(req);
+    if (!read.ok) return read.response;
+    const { package: rawPkg, scope, cwd } = read.body as { package?: unknown; scope?: string; cwd?: string };
     const pkg = typeof rawPkg === "string" ? rawPkg.trim() : "";
     if (!pkg) return NextResponse.json({ error: "package required" }, { status: 400 });
     // Passed as argv (never through a shell), but a leading "-" would still be

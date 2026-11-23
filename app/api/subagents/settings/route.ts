@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 import {
   readSubagentSettings,
   MAX_SUBAGENT_MAX_CONCURRENT,
@@ -30,7 +30,9 @@ export async function PUT(req: Request) {
   }
 
   try {
-    const body = await req.json() as { enabled?: unknown; maxConcurrent?: unknown };
+    const read = await readJsonBody(req);
+    if (!read.ok) return read.response;
+    const body = read.body as { enabled?: unknown; maxConcurrent?: unknown };
     if (body.enabled === undefined && body.maxConcurrent === undefined) {
       return NextResponse.json({ error: "enabled or maxConcurrent is required" }, { status: 400 });
     }

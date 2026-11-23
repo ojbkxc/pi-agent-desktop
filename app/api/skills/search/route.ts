@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { runNpx } from "@/lib/npx";
 import type { SkillSearchResult } from "@/lib/api-types";
-import { isApiRequestAllowed } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 
@@ -98,8 +98,13 @@ export async function POST(req: Request) {
   if (!isApiRequestAllowed(req)) {
     return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
   }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   try {
-    const parsed: unknown = await req.json();
+    const read = await readJsonBody(req);
+    if (!read.ok) return read.response;
+    const parsed: unknown = read.body;
     // 解构 `null` 会抛 TypeError，而这里的 catch 是「API 搜索失败 → 退回 npx」的
     // 兜底分支：它会把内部 TypeError 原文当成 500 的 error 回给前端，状态码也错。
     // 形状不对本身就是 400。

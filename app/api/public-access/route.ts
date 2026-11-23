@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isLocalRequest } from "@/lib/remote-access";
-import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 import { isWebPasswordEnabled } from "@/lib/web-auth";
 import { resolveCloudflaredBinary } from "@/lib/public-access/binary";
 import { installCloudflared } from "@/lib/public-access/install";
@@ -39,7 +39,9 @@ export async function PUT(req: Request) {
   let manager;
   try {
     manager = ensurePublicAccessManager();
-    const parsed = parsePublicAccessUpdate(await req.json(), readPublicAccessConfig());
+    const read = await readJsonBody(req);
+    if (!read.ok) return read.response;
+    const parsed = parsePublicAccessUpdate(read.body, readPublicAccessConfig());
     if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
     if (parsed.config.enabled && !isWebPasswordEnabled()) {
       return NextResponse.json(

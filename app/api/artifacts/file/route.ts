@@ -2,7 +2,7 @@ import { isAbsolute } from "node:path";
 import { NextResponse } from "next/server";
 import { getFileOutput, getWrittenContent } from "@/lib/artifact-index";
 import { writeFileRoleOverride } from "@/lib/artifact-file-roles";
-import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 import { listAllSessions } from "@/lib/session-reader";
 
 export const dynamic = "force-dynamic";
@@ -47,7 +47,9 @@ export async function PUT(request: Request) {
     return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415, headers });
   }
   try {
-    const body = await request.json() as { path?: unknown; role?: unknown };
+    const read = await readJsonBody(request);
+    if (!read.ok) return read.response;
+    const body = read.body as { path?: unknown; role?: unknown };
     const { path, role } = body ?? {};
     if (typeof path !== "string" || !isAbsolute(path) || path.length > 4096) {
       return NextResponse.json({ error: "path must be an absolute path" }, { status: 400, headers });
