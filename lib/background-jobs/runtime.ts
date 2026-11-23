@@ -15,7 +15,7 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
-import { getShellConfig } from "@earendil-works/pi-coding-agent";
+import { resolveJobShell } from "./shell";
 import {
   appendOutput,
   createOutputFile,
@@ -88,6 +88,20 @@ export class BackgroundJobError extends Error {
   }
 }
 
+/**
+ * 降级提示只打一次：每启动一个 job 就刷一行 warn，会把真正的报错淹掉。
+ * 用 globalThis 记住，热重载重建模块作用域后也不会重来。
+ */
+declare global {
+  var __piBackgroundJobShellWarned: boolean | undefined;
+}
+
+function warnShellFallbackOnce(reason: string): void {
+  if (globalThis.__piBackgroundJobShellWarned) return;
+  globalThis.__piBackgroundJobShellWarned = true;
+  console.warn(`[pi-web] 后台任务没有找到 bash，已退回平台默认 shell：${reason}`);
+}
+
 /** 杀整个进程树。Unix 杀进程组；Windows 用 taskkill /T。忽略「已退出」的错误。 */
 export function killProcessTree(pid: number): void {
   if (process.platform === "win32") {
@@ -124,7 +138,10 @@ export function startBackgroundJob(request: StartJobRequest): StartJobResult {
   const id = newJobId();
   const outputPath = createOutputFile(id);
   const startedAt = new Date().toISOString();
-  const shell = getShellConfig();
+  // 解析失败不在这里抛：拿不到 bash 的机器（干净的 Windows）要退到 PowerShell 才走得下去，
+  // 否则后台任务这一整块功能在本机就是死的。降级会打一行 warn，不静默。
+  const shell = resolveJobShell();
+  if (shell.degraded) warnShellFallbackOnce(shell.reason ?? "no bash shell");
 
   let child: ChildProcess;
   try {
@@ -132,7 +149,9 @@ export function startBackgroundJob(request: StartJobRequest): StartJobResult {
       cwd: request.cwd,
       // 进程组：stop 时能连子孙一起杀（与 SDK 前台 bash 同策略）。
       detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
+      // stdin 保留管道：旧版 WSL 的 bash.exe 用 `-s` 从标准输入读脚本（SDK 的
+      // `commandTransport: "stdin"`），忽略它会让这类环境里的 job 起来就空等。
+      stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
   } catch (error) {
@@ -181,6 +200,12 @@ export function startBackgroundJob(request: StartJobRequest): StartJobResult {
   };
   child.stdout?.on("data", onData);
   child.stderr?.on("data", onData);
+  if (shell.commandTransport === "stdin" && child.stdin) {
+    // `-s` 的 shell 从标准输入读脚本；写不进去（EPIPE）说明进程已经退了，
+    // 终态交给 'exit'/'error' 结算，这里再抛一次只会变成 unhandled 'error'。
+    child.stdin.on("error", () => { /* 忽略：由 exit 结算 */ });
+    child.stdin.end(`${command}\n`);
+  }
 
   if (timeoutSec > 0) {
     entry.timer = setTimeout(() => {
