@@ -116,13 +116,23 @@ jobs:
           releaseBody: |
             ## Pi Agent Desktop 0.8.7 (fork)
 
-            **2026-11-22 · 覆盖式重发（第七次）**
+            **2026-11-23 · 覆盖式重发（第十次）**
 
             > 版本号保持 0.8.7 不变，本次构建替换上一版的全部安装包。升级方式与普通更新相同，直接覆盖安装即可；配置、会话与任务记录都在 `~/.pi/agent/`，不受影响。
 
             本 fork 基于上游 pi-agent-desktop 0.8.2 / pi-web 0.10 构建，已并入上游 pi-web **v0.10 → v0.17** 的全部安全、稳定性与性能修复，并在此之上维护本 fork 的桌面功能线。
 
-            本次构建的主线是**长时自主「项目战役」（P1）**；同时收口了命令审批档位、破甲控制台性能与后台命令的可见性。
+            本次在 P1「项目战役」的基础上做了一轮全仓缺陷巡查，修复 10 个已证实的问题（3 个高优先）。
+
+            ### 本次重发新增：缺陷修复 / Fixes in this re-release
+
+            - **安全 / security.** models-config 的模型发现与测试不再把本机存储的 API 凭据发往请求指定的新 Base URL；未保存的私网/环回目标（含 IPv4 与 IPv6-mapped）一律拒绝，已保存的本地 provider（Ollama 等）仍然放行。远端读取网络代理配置时遮蔽 `user:pass@`。
+            - **团队 / teams.** 「暂停」按钮现在真正调用服务端 pause（此前只 abort lead）；lifecycle 请求加 15s 超时，挂起后按钮不再永久禁用。
+            - **无人值守 / unattended.** campaign 会话的阻塞对话框纳入 120s 安全默认（不扩大团队计划自动批准的范围）。
+            - **对话 / chat.** `/name` 后正确提升新建会话（草稿 rekey 与 AppShell 通知恢复）。
+            - **API 健壮性 / API hardening.** scheduled-tasks、memory、autofix 的非法 JSON 返回 400 而非 500；pinned-sessions 与 background-jobs 写路由补来源校验。
+            - **界面 / UI.** Autofix/Campaign 的工作目录清空后不再被默认值回填；cron 预览失败显示错误并可重试（保存仍要求校验通过）。
+            - **已知未修 / known gaps.** chatWorkspace 并发启动的双 wrapper 竞态（需并行请求才可达）；campaign 运行中成本累计与跨天间隔（P2/P3 设计占位）。
 
             ### 一、本次新增 / What's new
 
