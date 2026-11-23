@@ -15,7 +15,7 @@ const context = { params: Promise.resolve({ id }) };
 function request(body) {
   return new Request(`http://localhost/api/subagents/${id}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Host: "localhost" },
     body: JSON.stringify(body),
   });
 }

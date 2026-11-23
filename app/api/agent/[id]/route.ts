@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { resolveSessionPath } from "@/lib/session-reader";
 import { startRpcSession, getRpcSession, setRpcSessionTools } from "@/lib/rpc-manager";
 import { getComposerQueueVersion, getPendingComposerMessages } from "@/lib/composer-queue";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 
 // POST /api/agent/[id] - Send a command to an existing session
 export async function POST(
@@ -12,8 +13,16 @@ export async function POST(
   let commandType: string | undefined;
   let promptAccepted = false;
 
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   try {
-    const body = await req.json() as { type: string; [key: string]: unknown };
+    const read = await readJsonBody(req);
+    if (!read.ok) return read.response;
+    const body = read.body as { type: string; [key: string]: unknown };
     commandType = typeof body.type === "string" ? body.type : undefined;
     const requestedToolNames = body.toolNames;
     if (

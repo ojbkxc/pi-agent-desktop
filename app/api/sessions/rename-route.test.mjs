@@ -43,7 +43,11 @@ function register(manager) {
 }
 
 const rename = (id, name) => PATCH(
-  new Request(`http://localhost/api/sessions/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+  new Request(`http://localhost/api/sessions/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Host: "localhost" },
+    body: JSON.stringify({ name }),
+  }),
   { params: Promise.resolve({ id }) },
 );
 const detailName = async (id) => {

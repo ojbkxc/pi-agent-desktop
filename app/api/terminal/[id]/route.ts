@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getTerminalCwd, killTerminal, resizeTerminal, writeTerminal } from "@/lib/terminal-manager";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -18,7 +19,15 @@ export async function POST(
 ) {
   try {
     const { id } = await params;
-    const body = await req.json() as { type?: unknown; data?: unknown; cols?: unknown; rows?: unknown };
+    if (!isApiRequestAllowed(req)) {
+      return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+    }
+    if (!hasJsonContentType(req)) {
+      return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+    }
+    const read = await readJsonBody(req);
+    if (!read.ok) return read.response;
+    const body = read.body as { type?: unknown; data?: unknown; cols?: unknown; rows?: unknown };
     if (body.type === "input" && typeof body.data === "string" && body.data.length <= 64 * 1024) {
       return writeTerminal(id, body.data)
         ? NextResponse.json({ success: true })

@@ -59,7 +59,11 @@ test("list versions expose idle session creation, rename and deletion to other w
 
   const context = { params: Promise.resolve({ id: sessionId }) };
   const url = `http://localhost/api/sessions/${sessionId}`;
-  const renamed = await renameSession(new Request(url, { method: "PATCH", body: JSON.stringify({ name: "Renamed elsewhere" }) }), context);
+  const renamed = await renameSession(new Request(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Host: "localhost" },
+    body: JSON.stringify({ name: "Renamed elsewhere" }),
+  }), context);
   assert.equal(renamed.status, 200);
   const poll = await (await getRunningSessions()).json();
   assert.deepEqual(poll.runningSessionIds, []);

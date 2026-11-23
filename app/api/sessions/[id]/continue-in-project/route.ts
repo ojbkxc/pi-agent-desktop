@@ -12,6 +12,7 @@ import {
   resolveSessionPath,
 } from "@/lib/session-reader";
 import { appendClearedSessionToolSelection } from "@/lib/session-tool-selection";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 
 export const runtime = "nodejs";
 
@@ -25,8 +26,16 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   try {
-    const body = await req.json() as { cwd?: unknown };
+    const read = await readJsonBody(req);
+    if (!read.ok) return read.response;
+    const body = read.body as { cwd?: unknown };
     if (typeof body.cwd !== "string" || !body.cwd.trim()) {
       return NextResponse.json({ error: "cwd is required" }, { status: 400 });
     }

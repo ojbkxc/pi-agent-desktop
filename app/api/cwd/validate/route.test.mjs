@@ -19,7 +19,7 @@ test("validated cwd responses include server-resolved project identity", async (
 
   const response = await POST(new Request("http://localhost/api/cwd/validate", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Host: "localhost" },
     body: JSON.stringify({ cwd }),
   }));
 

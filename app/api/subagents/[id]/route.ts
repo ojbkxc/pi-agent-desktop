@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { abortSubagent, getSubagentRun, steerSubagent } from "@/lib/rpc-manager";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 
@@ -22,8 +23,16 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   try {
-    const body = await req.json() as { action?: unknown; message?: unknown };
+    const read = await readJsonBody(req);
+    if (!read.ok) return read.response;
+    const body = read.body as { action?: unknown; message?: unknown };
     if (body.action === "steer") {
       if (typeof body.message !== "string" || !body.message.trim()) {
         return NextResponse.json({ error: "message required" }, { status: 400 });

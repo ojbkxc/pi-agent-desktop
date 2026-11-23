@@ -85,7 +85,7 @@ test("commands for an unknown terminal answer 404, malformed ones 400", async ()
   const params = Promise.resolve({ id: "f".repeat(32) });
   const send = (body) => terminalById.POST(new Request("http://localhost/api/terminal/x", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Host: "localhost" },
     body: JSON.stringify(body),
   }), { params });
 

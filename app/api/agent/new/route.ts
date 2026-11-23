@@ -6,6 +6,7 @@ import { allowFileRoot } from "@/lib/file-access";
 import { invalidateSessionListCache } from "@/lib/session-reader";
 import { startRpcSession } from "@/lib/rpc-manager";
 import { ensureChatWorkspace, isChatWorkspacePath } from "@/lib/chat-workspace";
+import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
 
 const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -23,8 +24,16 @@ function parseThinkingLevel(value: unknown): ThinkingLevel | undefined {
 export async function POST(req: Request) {
   let commandType: string | undefined;
   let promptAccepted = false;
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
   try {
-    const body = await req.json() as { cwd?: string; [key: string]: unknown };
+    const read = await readJsonBody(req);
+    if (!read.ok) return read.response;
+    const body = read.body as { cwd?: string; [key: string]: unknown };
     const { cwd, ...command } = body;
     const chatWorkspace = typeof cwd === "string" && isChatWorkspacePath(cwd);
     commandType = typeof command.type === "string" ? command.type : undefined;
