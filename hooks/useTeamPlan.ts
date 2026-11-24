@@ -475,7 +475,11 @@ export function useTeamPlan(teamName: string | null, refreshKey: number = 0): Us
     if (!current) return { ok: false, reason: "no plan" };
     if (mutationRef.current) {
       // 上一笔写还没回来（连点）：不重复投递，避免 lead 收到两条批准指令、重复 spawn。
-      return { ok: false, reason: "上一次批准还在进行中，请稍候" };
+      // 但**不能静默**：调用方 `void` 掉返回值，用户看到的只是「点了没反应」（团队计数审计
+      // P3-3）。把原因写到 approveError 上，界面就有话可说了。
+      const reason = "上一次批准还在进行中，请稍候";
+      if (mountedRef.current) setApproveError(reason);
+      return { ok: false, reason };
     }
     mutationRef.current = "approve";
     try {
@@ -504,7 +508,12 @@ export function useTeamPlan(teamName: string | null, refreshKey: number = 0): Us
     async (edits: PlanEdits | null): Promise<{ ok: boolean; reason?: string }> => {
       const current = planRef.current;
       if (!current) return { ok: false, reason: "no plan" };
-      if (mutationRef.current) return { ok: false, reason: "上一次保存/批准还在进行中，请稍候" };
+      if (mutationRef.current) {
+        // 同上：连点「批准」时不能只返回一个没人看的 reason。
+        const reason = "上一次保存/批准还在进行中，请稍候";
+        if (mountedRef.current) setApproveError(reason);
+        return { ok: false, reason };
+      }
       const hasEdits = Boolean(edits && (edits.members.length > 0 || edits.tasks.length > 0));
       if (!hasEdits) return approve();
 
