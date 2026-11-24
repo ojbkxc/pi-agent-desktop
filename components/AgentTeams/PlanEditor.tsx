@@ -252,6 +252,14 @@ export function PlanEditor({ plan, cwd = null, defaultModelRef = "", editable, s
   const [agents, setAgents] = useState<string[]>([]);
   const [agentsError, setAgentsError] = useState<string | null>(null);
 
+  /** 草稿里模型仍为空（没计划值、也没主模型可预填）的成员——批准后它们必然 spawn 失败。 */
+  const missingModelMembers = useMemo(
+    () => plan.members
+      .filter((member) => !isUsableModelRef(draft.members[member.id]?.modelRef ?? ""))
+      .map((member) => member.name),
+    [plan.members, draft.members],
+  );
+
   // 服务端 plan 变了（保存成功 / 另一个窗口改了）：重设基线，避免草稿越改越旧。
   // **但有未保存改动时不重置** —— 否则别人（或另一个窗口）一动计划，用户正在输入的内容就
   // 静默消失。保留草稿、让保存按字段合并（写路径只覆盖列出的字段），明显好于丢输入。
@@ -404,6 +412,17 @@ export function PlanEditor({ plan, cwd = null, defaultModelRef = "", editable, s
   return (
     <div data-testid="team-plan-editor" className="team-plan-editor" style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
       <p style={S.hint}>{t("teams.plan.editorHint")}</p>
+      {/*
+        成员模型仍是「未设置」时必须说出来（团队计数审计 P2-1）：批准照常放行，而 launch
+        会拿 `unknown/unknown` 去 spawn，那个成员必然起不来。只提示、不拦批准——真实机器上
+        队长 runtime 恒为 unknown，硬拦会把最常见的正常流程挡死。
+        有主模型预填后这种情况已经少见，但「本机没配模型」时仍会出现。
+      */}
+      {missingModelMembers.length > 0 ? (
+        <p role="alert" data-testid="team-plan-missing-model" style={S.alert}>
+          {t("teams.plan.missingModel", { names: missingModelMembers.join("、") })}
+        </p>
+      ) : null}
       {conflict ? (
         <div role="alert" data-testid="team-plan-conflict" style={S.alert}>
           {t("teams.plan.conflict")}
