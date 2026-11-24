@@ -3546,6 +3546,33 @@ export async function startRpcSession(
     return waiting;
   }
 
+  // Claim the slot **before the first await**. `createChatFolder()` / `ensureChatCwd()`
+  // below suspend, and until this point the only thing standing between two concurrent
+  // starts was the `locks.get` check above — which both passed, both built a wrapper for
+  // the same id, and the later `registerRpcWrapper` overwrote the first (its `onDestroy`
+  // replaced with a no-op), leaving an unreachable session holding this JSONL file's last
+  // write slot until its own idle timer fired (rpc-manager 审计 D4).
+  let settleLock: ((value: { session: AgentSessionWrapper; realSessionId: string }) => void) | undefined;
+  let failLock: ((error: unknown) => void) | undefined;
+  const lockTicket = new Promise<{ session: AgentSessionWrapper; realSessionId: string }>((resolve, reject) => {
+    settleLock = resolve;
+    failLock = reject;
+  });
+  locks.set(sessionId, lockTicket);
+  /** Only the owner of the current slot may clear it (a later start can have replaced it). */
+  const releaseLock = () => {
+    if (locks.get(sessionId) === lockTicket) locks.delete(sessionId);
+  };
+
+  try {
+    return await startOwned();
+  } catch (error) {
+    failLock?.(error);
+    releaseLock();
+    throw error;
+  }
+
+  async function startOwned(): Promise<{ session: AgentSessionWrapper; realSessionId: string }> {
   let sessionManager: SessionManager;
   if (sessionFile) {
     sessionManager = SessionManager.open(sessionFile, undefined);
@@ -3603,7 +3630,7 @@ export async function startRpcSession(
   // 普通会话、chat workspace、非 lean 的成员恢复（subagentResources）都装配。
   const compactionEnabled = !chatOnly && !lean && !leanMember;
   const finishStartingSession = trackStartingSession(sessionCwd);
-  const starting = (async () => {
+  try {
     // Some extensions access the SDK's global theme even outside the terminal UI.
     if (!chatOnly) initTheme();
     const agentDir = getAgentDir();
@@ -3931,12 +3958,14 @@ export async function startRpcSession(
     const realSessionId = inner.sessionId as string;
     registerRpcWrapper(wrapper);
 
+    // Release before settling: from here the registry is the authority, and a stale
+    // resolved ticket left in `locks` would hand a *dead* wrapper to the next start
+    // (the `locks.get` fast path runs after the liveness check).
+    releaseLock();
+    settleLock?.({ session: wrapper, realSessionId });
     return { session: wrapper, realSessionId };
-  })().finally(() => {
-    locks.delete(sessionId);
+  } finally {
     finishStartingSession();
-  });
-
-  locks.set(sessionId, starting);
-  return starting;
+  }
+  }
 }
