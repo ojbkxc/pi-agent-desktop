@@ -33,7 +33,7 @@ test("the rate line module exports the component", async () => {
   const source = readFileSync(new URL("../components/StreamingRateLine.tsx", import.meta.url), "utf8");
   // jiti 对这个 .tsx 的 JSX 转译不稳（ParseError），这里按仓库里其它组件测试的
   // 做法做源级契约：组件必须叫 StreamingRateLine、接 store、用 500ms 采样。
-  assert.match(source, /export function StreamingRateLine\(\{ store \}/);
+  assert.match(source, /export function StreamingRateLine\(\{ store, variant = "line" \}/);
   assert.match(source, /setTimeout\(tick, 500\)/);
   assert.match(source, /tok\/s/);
   assert.match(source, /chat\.streamRate/);

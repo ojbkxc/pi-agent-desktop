@@ -76,6 +76,7 @@ import { createArtifactGuideExtension } from "./artifact-guide-extension";
 import { createAgentGuideExtension } from "./agent-guide-extension";
 import { createFastModeExtension } from "./fast-mode/extension";
 import { createPurgeExtension } from "./purge/extension";
+import { autoAllowAnswer, extensionUiAutoAllowForAgentDir } from "./extension-ui-settings";
 // v0.8.2 压缩策略：会话级阈值包装（SettingsManager Proxy）与 session_before_compact 执行扩展。
 // 两处必须与 lib/subagent-runtime.ts 的成员新建路径装配同一套，见 lib/compaction-wiring.test.mjs。
 import { createCompactionSettingsManager } from "./compaction-policy";
@@ -2723,6 +2724,25 @@ export class AgentSessionWrapper {
     if (!this._alive) return Promise.reject(closedSessionUiError());
     const stopSignal = this.extensionUiAbortController.signal;
     if (stopSignal.aborted) return Promise.reject(stopSignal.reason);
+
+    // 「别再弹了，默认永久允许」：能确定「允许」语义的请求直接作答，**不 emit**
+    // 前端请求——不弹窗、不占 pendingUiRequests，于是那些「有对话框在等人」的阻塞
+    // 判据也不会把会话误判成在等用户。判据在 lib/extension-ui-settings.ts：
+    // confirm 答 true；select 只在选项文本明确是「允许」时才自动选；input / editor /
+    // custom 不代答（空串不是允许，自绘面板没有可编程答案）。
+    if (extensionUiAutoAllowForAgentDir(getAgentDir())) {
+      const allow = autoAllowAnswer(request as { method?: unknown; title?: unknown; options?: unknown });
+      if (allow) {
+        const titleValue = (request as { title?: unknown }).title;
+        const title = typeof titleValue === "string" ? titleValue : "";
+        console.info(
+          `[pi-web] extension UI auto-allowed (${allow.kind}${allow.kind === "select" ? `: ${allow.label}` : ""}): ${title.slice(0, 120)}`,
+        );
+        if (allow.kind === "confirm") return Promise.resolve(parseResponse({ confirmed: true } as ExtensionUiResponse));
+        return Promise.resolve(parseResponse({ value: allow.label } as ExtensionUiResponse));
+      }
+    }
+
     const abortSignal = signal ? AbortSignal.any([signal, stopSignal]) : stopSignal;
 
     const id = randomUUID();

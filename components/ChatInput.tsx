@@ -27,8 +27,9 @@ import {
 } from "@/lib/file-fuzzy";
 import { resolveSessionReferences } from "@/lib/session-reference";
 import type { RoutedModelInfo } from "@/lib/types";
-import { getMarkdownListContinuation } from "@/lib/markdown-list-continuation";
-import { quoteSeparator } from "@/lib/quoted-selection";
+import type { StreamingStore } from "@/lib/streaming-message";
+import { StreamingRateLine } from "./StreamingRateLine";
+import { getMarkdownListContinuation } from "@/lib/markdown-list-continuation";import { quoteSeparator } from "@/lib/quoted-selection";
 import { isBareMcpCommand, isBuiltinMcpCommand } from "@/lib/mcp-command";
 import { FolderIcon, getFileIcon } from "./FileIcons";
 import { ImagePreview } from "./ImagePreview";
@@ -117,6 +118,12 @@ interface Props {
   onCompact?: () => void;
   onAbortCompaction?: () => void;
   isCompacting?: boolean;
+  /**
+   * The streaming store, passed as a **stable reference** so the tok/s readout in this
+   * footer can subscribe on its own. A per-render rate value would defeat the memo and
+   * re-render the whole composer twice a second while a reply streams.
+   */
+  streamingStore?: StreamingStore;
   compactError?: string | null;
   /** A compact the SDK declined with nothing to do — informational, not a failure. */
   compactNotice?: string | null;
@@ -907,6 +914,10 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   onClearDraft, onSend, onAttachFiles, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, workspaceUnavailable, onRecheckWorkspace, modelScopeWarnings, onDismissModelScopeWarnings, onOpenModelsConfig, onModelChange, modelSwitching,
   defaultModel, onSetDefaultModel,
   onCompact, onAbortCompaction, isCompacting, compactError, compactNotice, compactResult, summarizationRetry, toolPreset, onToolPresetChange,
+  // A stable store reference (never a per-render value): the composer is memoized and
+  // its props are meant to hold still while a reply streams. The rate readout
+  // subscribes on its own and re-renders only itself.
+  streamingStore,
   thinkingLevel, isAutoThinkingSelection = false, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   savedDefaultThinkingLevel, onSetDefaultThinkingLevel,
   retryInfo, onAbortRetry, routedModel, branchSummaryPending = false, onAbortBranchSummary, automation, onSetAutomation, queuedMessages, onQueuedMessageAction, inputHistory = [], onRecallQueue,
@@ -3409,6 +3420,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 }
                 : null}
             />
+            {/* tok/s 就在上下文用量环（也就是「自动压缩」那一块）旁边：操作者看速度
+                时眼睛本来就在这行，不再单独占输入框下面一行。 */}
+            {streamingStore && <StreamingRateLine store={streamingStore} variant="inline" />}
           </div>
 
           {/* spacer */}

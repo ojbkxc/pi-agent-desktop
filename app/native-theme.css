@@ -9306,6 +9306,20 @@ html.native-desktop :is(
   /* 流式心跳：dot 常亮只是又一个装饰；闪一下表示「正在流」。 */
   animation: composer-rate-pulse 1.6s var(--ease-native) infinite;
 }
+/* 底栏内联变体：跟上下文用量环 / 「自动压缩」同一行，不占第二行高度。
+   与 .composer-rate-line 共用 value/unit/dot 的配色，只去掉居中与内边距。 */
+.composer-rate-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 2px;
+  font-size: var(--fs-micro);
+  line-height: 1.2;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  white-space: nowrap;
+}
 .composer-rate-value {
   font-weight: 600;
   color: var(--text);

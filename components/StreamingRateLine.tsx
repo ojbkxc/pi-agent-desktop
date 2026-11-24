@@ -5,7 +5,12 @@ import { useI18n } from "@/hooks/useI18n";
 import type { StreamingStore } from "@/lib/streaming-message";
 
 /**
- * 输入框下方的实时 tok/s 速度条。
+ * 实时 tok/s 速度指示。
+ *
+ * 两个变体：
+ * - `line`（默认）：输入框下方的独立一行（早期位置）。
+ * - `inline`：塞进输入框底栏、紧跟上下文用量环 / 「自动压缩」旁边的那一小块——
+ *   这是操作者实际要看的位置（和 pi 的 TUI footer 一致），不再单独占一行。
  *
  * 数据源是 StreamingStore 的 `streamingMs`（`start` 归零、每个 delta 推进）与累计
  * 流字符数（文本 + 思考 + 工具调用原始输入）。tok/s 用「累计字符 ÷ 4 ÷ 流式秒数」
@@ -14,12 +19,16 @@ import type { StreamingStore } from "@/lib/streaming-message";
  *
  * 渲染纪律（与 StreamingReply 同一条）：
  * - 每 500ms 采样一次，chunk 本身不触发本组件渲染；
- * - 非流式（`isStreaming=false`）整行不渲染，不占布局；
+ * - 非流式（`isStreaming=false`）整块不渲染，不占布局；
  * - 速度 < 1 tok/s 显示 `&lt; 1`，避免「0 tok/s」的假象；
  * - 时间基线取 `start` 的墙钟（`sinceRef`），速度 = 累计字符 / 4 / 已流式秒数，
  *   而不是「采样间隔内的字符」，后者在工具执行暂停时会乱跳。
+ *
+ * 为什么由它自己订阅 store 而不是让父组件先算好值：`ChatInput` 是 `memo` 的，注释
+ * 明写「props 在流式期间保持不变」；父组件每 500ms 把速率写进 prop 会让整个输入框
+ * 每半秒重渲染一次。这里传的是**稳定的 store 引用**，只有这一个小块会重渲染。
  */
-export function StreamingRateLine({ store }: { store: StreamingStore }) {
+export function StreamingRateLine({ store, variant = "line" }: { store: StreamingStore; variant?: "line" | "inline" }) {
   const { t } = useI18n();
   const [sample, setSample] = useState(() => measure(store));
 
@@ -52,7 +61,7 @@ export function StreamingRateLine({ store }: { store: StreamingStore }) {
   const label = rate < 1 ? "< 1" : String(Math.round(rate));
   return (
     <div
-      className="composer-rate-line"
+      className={variant === "inline" ? "composer-rate-inline" : "composer-rate-line"}
       role="status"
       aria-label={t("chat.streamRate", { value: label })}
       title={t("chat.streamRateHint")}

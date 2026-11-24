@@ -1312,6 +1312,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
       onFollowUp={agentRunning ? handleFollowUp : undefined}
       onPromptWithStreamingBehavior={agentRunning ? handlePromptWithStreamingBehavior : undefined}
       isStreaming={sessionBusy}
+      streamingStore={streamingStore}
       model={displayModelValue}
       isAutoModelSelection={isAutoModelSelection}
       modelNames={modelNames}
@@ -2018,7 +2019,6 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
           </div>
         )}
         {chatInputElement}
-        <StreamingRateLine store={streamingStore} />
         {(belowEditorWidgets.length > 0 || hasExtensionStatus) && (
           <div className={`extension-status-shelf${belowEditorWidgets.length > 0 ? " has-widgets" : ""}${hasExtensionStatus ? " has-status" : ""}`}>
             {belowEditorWidgets.length > 0 && <ExtensionWidgets widgets={belowEditorWidgets} />}
