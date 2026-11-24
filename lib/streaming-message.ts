@@ -23,6 +23,17 @@ export interface StreamingState {
    * 之前的内容而分母从零起算，首采样会显示一个几乎全是虚高的数。
    */
   baselineChars?: number;
+  /**
+   * The **finished** turn's output speed, in tokens per second.
+   *
+   * While text streams the readout can only estimate (characters ÷ 4 ÷ seconds)
+   * because no chunk carries a token count. The turn's real number is available the
+   * moment it ends — `usage.output` on the assistant message — so the same readout
+   * switches to it and keeps showing it briefly, the way DeepSeek Harness prints
+   * `{tps} tok/s` under the composer. Computed from real tokens × real stream time,
+   * so it is the honest figure for "how fast did this model write".
+   */
+  finalRate?: { tps: number; at: number };
 }
 
 export type StreamAction =
@@ -37,6 +48,28 @@ export const INITIAL_STREAMING_STATE: StreamingState = {
   streamingMessage: null,
   streamingMs: 0,
 };
+
+/** How long the finished turn's real TPS stays on screen after the stream ends. */
+export const FINAL_RATE_TTL_MS = 8_000;
+
+/**
+ * The finished turn's real output speed, or undefined when the message carries no
+ * usage (a cancelled turn, a provider that reports none).
+ *
+ * `usage.output` is the token count the provider actually billed, and `streamingMs` is
+ * the wall clock the stream took — dividing them gives the same number DeepSeek Harness
+ * prints as `{tps} tok/s`. Only produced when both are usable: a zero/absurd duration
+ * would otherwise turn into an infinite rate.
+ */
+function finishedTurnRate(state: StreamingState): { tps: number; at: number } | undefined {
+  const usage = state.streamingMessage?.usage;
+  const output = typeof usage?.output === "number" ? usage.output : 0;
+  const seconds = state.streamingMs / 1000;
+  if (output <= 0 || !Number.isFinite(seconds) || seconds < 0.2) return undefined;
+  const tps = output / seconds;
+  if (!Number.isFinite(tps) || tps <= 0) return undefined;
+  return { tps, at: Date.now() };
+}
 
 function updateContentBlock(
   state: StreamingState,
@@ -176,8 +209,12 @@ export function streamReducer(
     }
     case "delta":
       return applyDelta(state, action.event);
-    case "end":
-      return INITIAL_STREAMING_STATE;
+    case "end": {
+      // Prefer the turn's real output tokens over the running estimate, so the
+      // readout ends on the model's actual TPS rather than on a characters ÷ 4 guess.
+      const finished = finishedTurnRate(state);
+      return finished ? { ...INITIAL_STREAMING_STATE, finalRate: finished } : INITIAL_STREAMING_STATE;
+    }
     default:
       return state;
   }

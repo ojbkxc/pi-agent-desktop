@@ -28,6 +28,14 @@ export interface UseGoalStateResult {
   error: string | null;
   /** 主动补拉一次。 */
   refresh(): void;
+  /**
+   * 暂停 / 恢复（写 `PATCH /api/goals/<session>`），成功后立刻用返回的目标覆盖快照。
+   *
+   * 为什么放这里而不是组件里自己 fetch：轮询循环已经在管理「谁持有当前目标」，让按钮
+   * 自己写另一份状态会出现「按钮说已暂停、轮询又把它读回 active」的抖动。写成功后
+   * 同一次调用里把快照换成服务端返回的值，接着按新 status 决定是否继续轮询。
+   */
+  setStatus(status: "active" | "paused"): Promise<{ ok: boolean; error?: string }>;
 }
 
 export function useGoalState(sessionId: string | null, refreshKey: number = 0): UseGoalStateResult {
@@ -97,5 +105,26 @@ export function useGoalState(sessionId: string | null, refreshKey: number = 0): 
 
   const refresh = useCallback(() => setTick((value) => value + 1), []);
 
-  return { goal, error, refresh };
+  const setStatus = useCallback(async (status: "active" | "paused") => {
+    if (!sessionId) return { ok: false as const, error: "no session" };
+    try {
+      const response = await fetch(`/api/goals/${encodeURIComponent(sessionId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      const data = (await response.json().catch(() => ({}))) as { goal?: GoalState | null; error?: string };
+      if (!response.ok) return { ok: false as const, error: data.error ?? `HTTP ${response.status}` };
+      // Adopt the server's value, then re-arm the poll loop for the new status: resuming
+      // must start following progress again, pausing must stop asking for it.
+      if (data.goal !== undefined) setGoal(data.goal);
+      setError(null);
+      setTick((value) => value + 1);
+      return { ok: true as const };
+    } catch (err) {
+      return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
+    }
+  }, [sessionId]);
+
+  return { goal, error, refresh, setStatus };
 }

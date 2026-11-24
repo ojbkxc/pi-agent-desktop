@@ -3,26 +3,30 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { StreamingStore } from "@/lib/streaming-message";
+import { FINAL_RATE_TTL_MS } from "@/lib/streaming-message";
 
 /**
- * 实时 tok/s 速度指示。
+ * 实时**输出**速度（TPS / tok/s）。
  *
  * 两个变体：
  * - `line`（默认）：输入框下方的独立一行（早期位置）。
  * - `inline`：塞进输入框底栏、紧跟上下文用量环 / 「自动压缩」旁边的那一小块——
  *   这是操作者实际要看的位置（和 pi 的 TUI footer 一致），不再单独占一行。
  *
- * 数据源是 StreamingStore 的 `streamingMs`（`start` 归零、每个 delta 推进）与累计
- * 流字符数（文本 + 思考 + 工具调用原始输入）。tok/s 用「累计字符 ÷ 4 ÷ 流式秒数」
- * 的口径：pi 的 usage 只在回合结束才可靠可得，流中没有每 chunk 的 token 数，
- * 字符 ÷ 4 是 BPE 在英文与 CJK 混合文本上的通行近似——把它当**量级**而不是账单。
+ * **统计的是输出侧，不是输入侧**：分子是模型正在吐出来的东西——正文 + 思考 +
+ * 工具调用的参数文本——的累计字符数；分母是本轮流式已走过的秒数。用户输入、系统
+ * 提示词、工具返回结果一概不计（它们在流开始前就存在，或不是模型在生成）。
+ *
+ * tok/s 用「累计字符 ÷ 4 ÷ 流式秒数」的口径：pi 的 usage 只在回合结束才可靠可得，
+ * 流中没有每 chunk 的 token 数，字符 ÷ 4 是 BPE 在英文与 CJK 混合文本上的通行近似
+ * ——把它当**量级**而不是账单。
  *
  * 渲染纪律（与 StreamingReply 同一条）：
  * - 每 500ms 采样一次，chunk 本身不触发本组件渲染；
  * - 非流式（`isStreaming=false`）整块不渲染，不占布局；
  * - 速度 < 1 tok/s 显示 `&lt; 1`，避免「0 tok/s」的假象；
- * - 时间基线取 `start` 的墙钟（`sinceRef`），速度 = 累计字符 / 4 / 已流式秒数，
- *   而不是「采样间隔内的字符」，后者在工具执行暂停时会乱跳。
+ * - 速度 = 累计字符 / 4 / 已流式秒数，而不是「采样间隔内的字符」，后者在工具执行
+ *   暂停时会乱跳。
  *
  * 为什么由它自己订阅 store 而不是让父组件先算好值：`ChatInput` 是 `memo` 的，注释
  * 明写「props 在流式期间保持不变」；父组件每 500ms 把速率写进 prop 会让整个输入框
@@ -57,7 +61,7 @@ export function StreamingRateLine({ store, variant = "line" }: { store: Streamin
   if (!sample.streaming) return null;
   const seconds = Math.max(sample.streamingMs / 1000, 0.5);
   const tokens = sample.chars / 4;
-  const rate = tokens / seconds;
+  const rate = sample.finalTps ?? tokens / seconds;
   const label = rate < 1 ? "< 1" : String(Math.round(rate));
   return (
     <div
@@ -78,12 +82,21 @@ interface RateSample {
   chars: number;
   /** 本轮流式累计毫秒（store 维护，不受 React 渲染时机影响）。 */
   streamingMs: number;
+  /** 已结束回合的真实 TPS（来自 usage.output）；有值时直接显示它。 */
+  finalTps?: number;
 }
 
 /** 累计流字符数（扣除重连基线）：与真正到达的增量一致。 */
 function measure(store: StreamingStore): RateSample {
   const state = store.getState();
   if (!state.isStreaming || !state.streamingMessage) {
+    // Stream over: show the finished turn's **real** output TPS for a while (that is
+    // the number DeepSeek Harness prints), then disappear. Falls back to nothing when
+    // the provider reported no usage.
+    const final = state.finalRate;
+    if (final && Date.now() - final.at < FINAL_RATE_TTL_MS) {
+      return { streaming: true, chars: 1, streamingMs: 1000, finalTps: final.tps };
+    }
     return { streaming: false, chars: 0, streamingMs: 0 };
   }
   let chars = 0;

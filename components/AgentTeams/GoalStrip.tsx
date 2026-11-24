@@ -30,6 +30,17 @@ interface Props {
    * 传了就完全以它为准（含 `null` = 「还不知道现在几点」），便于静态渲染断言倒计时。
    */
   now?: number | null;
+  /**
+   * 暂停 / 恢复。传了就在条尾出现一个按钮（界面上终于能按，不必去聊天框敲
+   * `/goal pause`）；不传则条只读——保持本组件「纯展示」的默认形态。
+   *
+   * 只对 `active` / `paused` 生效：`completed` / `cleared` 是终态，服务端也会 409。
+   */
+  onSetStatus?: (status: "active" | "paused") => void;
+  /** 该次切换是否在途（按钮禁用 + aria-busy，避免连点写出两个状态）。 */
+  statusPending?: boolean;
+  /** 切换失败的原因；有值时显示在按钮旁，不静默吞掉。 */
+  statusError?: string | null;
 }
 
 /** 状态 → 状态点颜色（主题 token）。completed 正常不会渲染，保留以防万一。 */
@@ -76,9 +87,20 @@ const S: Record<string, CSSProperties> = {
   objective: { minWidth: 0, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: "var(--fw-medium)", color: "var(--text)" },
   meta: { flexShrink: 0, display: "flex", alignItems: "center", gap: 6, color: "var(--text-dim)", fontSize: "var(--fs-micro)" },
   metaItem: { maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  control: { flexShrink: 0, display: "flex", alignItems: "center", gap: 6 },
+  controlButton: {
+    flexShrink: 0,
+    padding: "1px 8px",
+    borderRadius: "var(--radius-xs)",
+    border: "var(--hairline) solid var(--border)",
+    background: "var(--surface)",
+    color: "var(--text)",
+    font: "inherit",
+    cursor: "pointer",
+  },
 };
 
-export function GoalStrip({ goal, isRunning = false, compact = false, now: injectedNow }: Props) {
+export function GoalStrip({ goal, isRunning = false, compact = false, now: injectedNow, onSetStatus, statusPending = false, statusError = null }: Props) {
   const { t } = useI18n();
 
   // 渲染期不许调 Date.now（React 纯度规则，eslint 会判红），所以时间来自 effect 采样。
@@ -157,6 +179,32 @@ export function GoalStrip({ goal, isRunning = false, compact = false, now: injec
           {meta.map((item) => (
             <span key={item} style={S.metaItem}>{item}</span>
           ))}
+        </span>
+      ) : null}
+
+      {/* 暂停 / 恢复：一直只有 `/goal pause` 能改这个状态，界面上没有入口。这里补一个，
+          写的就是同一份 GoalState（`shouldContinueGoal` 第一条判据是 status !== active）。 */}
+      {onSetStatus ? (
+        <span style={S.control}>
+          {statusError ? (
+            <span data-active-goal-status-error style={{ color: "var(--danger)" }} role="alert">{statusError}</span>
+          ) : null}
+          <button
+            type="button"
+            data-active-goal-toggle
+            data-goal-status={goal.status}
+            style={S.controlButton}
+            disabled={statusPending}
+            aria-busy={statusPending || undefined}
+            title={goal.status === "paused"
+              ? tOr(t, "chat.activeGoal.resumeHint", "Resume this goal")
+              : tOr(t, "chat.activeGoal.pauseHint", "Pause this goal")}
+            onClick={() => onSetStatus(goal.status === "paused" ? "active" : "paused")}
+          >
+            {goal.status === "paused"
+              ? tOr(t, "chat.activeGoal.resume", "Resume")
+              : tOr(t, "chat.activeGoal.pause", "Pause")}
+          </button>
         </span>
       ) : null}
     </div>
