@@ -65,6 +65,7 @@ import {
   type EnabledModelsController,
 } from "./EnabledModelsSection";
 import { NonChatModelsDetail } from "./NonChatModelsDetail";
+import { ProviderRetryPolicySelect } from "./ProviderRetryPolicySelect";
 import { providerBadgeLabel } from "./enabled-models-helpers";
 import { OAuthPastePanel } from "./OAuthPastePanel";
 import { ProviderIcon } from "./ProviderIcon";
@@ -469,6 +470,10 @@ function ProviderDetail({ name, editingName, fallbackLabel, provider, onChange, 
       <Field label={t("models.fieldApi")}>
         <Select label={t("models.fieldApi")} value={provider.api ?? "openai-completions"} onChange={(v) => set("api", v)} options={API_OPTIONS} required />
       </Field>
+
+      {/* Per-provider retry policy: the user asked to pick a strategy per model API,
+          including "all errors keep retrying until success or the turn is stopped". */}
+      <ProviderRetryPolicySelect providerId={name} />
 
       <Field label={t("models.fieldHeaders")}>
         <HeaderListEditor

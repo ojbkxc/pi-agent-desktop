@@ -60,6 +60,13 @@ import {
 } from "./store";
 import { classifyOutageError } from "./classify";
 import { initialOutageBudget } from "./backoff";
+import {
+  ALL_POLICY_MAX_ATTEMPTS,
+  applyModelRetryPolicy,
+  policyMaxWaitHours,
+  type ModelRetryPolicy,
+} from "./retry-policy";
+import { effectiveModelRetryPolicyForAgentDir, readModelRetryPolicySettings } from "./retry-policy-store";
 import { buildOutageResumeNote, outageReasonText } from "./resume";
 import {
   readSessionTailFacts,
@@ -155,15 +162,29 @@ async function handleSettled(input: AgentRunSettledInput): Promise<AgentRunSettl
 
   const errorText = input.outcome.error ?? "";
   const classification = classifyOutageError({ errorText });
-  if (!classification.suspend || !isOutageSuspendKind(classification.kind)) {
+  // 按 provider 的重试策略：`all` 档把 terminal/transient 一并升级成可挂起的
+  // `outage`（用户选的就是「所有错误都持续重试，直到成功或本轮被停止」）。
+  // 判定只用 `input.model?.provider`——它在参数里，不必等下面的会话事实。
+  const providerPolicy = effectiveModelRetryPolicyForAgentDir(input.model?.provider, agentDir);
+  const policyKind = applyModelRetryPolicy(classification.kind, providerPolicy);
+  const policySuspends = classification.suspend || providerPolicy === "all";
+  if (!policySuspends || !isOutageSuspendKind(policyKind)) {
     // 无挂起记录时，任何非 suspend 类失败按原样上报（terminal/transient 都不挂起）。
     return { suspended: false, kind: classification.kind };
   }
-  const kind: OutageSuspendKind = classification.kind;
+  const kind: OutageSuspendKind = policyKind;
   if (!isOutageSuspendedEnabled(kind, settings)) return { suspended: false, kind };
 
   const maxWaitMs = outageMaxWaitMs(kind, settings);
   if (maxWaitMs <= 0) return { suspended: false, kind };
+  // `all` 档的等待上限与尝试上限都另有一套（见 lib/outage/retry-policy.ts）：
+  // 用户选了「一直重试」，就不该被默认的 6 小时 / 40 次先掐掉。
+  const policyHours = policyMaxWaitHours(
+    providerPolicy,
+    readModelRetryPolicySettings(outageSettingsPath(agentDir)).allMaxWaitHours,
+  );
+  const effectiveMaxWaitMs = policyHours === undefined ? maxWaitMs : policyHours * 3_600_000;
+  const maxAttempts = providerPolicy === "all" ? ALL_POLICY_MAX_ATTEMPTS : OUTAGE_DEFAULT_MAX_ATTEMPTS;
 
   // 会话事实：显式入参优先，其余从尾部读（拿不到就传 null，不阻塞挂起）。
   const facts: SessionTailFacts | null = input.sessionFile !== undefined && input.sessionFile !== null
@@ -194,8 +215,8 @@ async function handleSettled(input: AgentRunSettledInput): Promise<AgentRunSettl
     budget: initialOutageBudget({
       kind,
       now,
-      maxWaitMs,
-      maxAttempts: OUTAGE_DEFAULT_MAX_ATTEMPTS,
+      maxWaitMs: effectiveMaxWaitMs,
+      maxAttempts,
     }),
     guard: {
       lastUserMessageId,
@@ -228,8 +249,13 @@ function recordPostResumeFailure(
   agentDir: string | undefined,
 ): AgentRunSettledResult {
   const classification = classifyOutageError({ errorText: input.outcome.error ?? "" });
-  if (classification.suspend && isOutageSuspendKind(classification.kind)) {
-    const nextKind: OutageSuspendKind = classification.kind === "quota" ? "quota" : record.kind;
+  // 续跑之后的失败也要按同一套策略判定：用户选了 `all` 时，一趟续跑里撞到
+  // terminal 不应该就此收摊——那正是「持续重试直到成功或被停止」要覆盖的情形。
+  const policy: ModelRetryPolicy = effectiveModelRetryPolicyForAgentDir(input.model?.provider, agentDir);
+  const policyKind = applyModelRetryPolicy(classification.kind, policy);
+  const suspends = classification.suspend || policy === "all";
+  if (suspends && isOutageSuspendKind(policyKind)) {
+    const nextKind: OutageSuspendKind = policyKind === "quota" ? "quota" : record.kind;
     updateOutageRecord(record.sessionId, (current) => ({
       ...current,
       kind: nextKind,
@@ -242,7 +268,7 @@ function recordPostResumeFailure(
   }
 
   const failures = (record.postResumeFailures ?? 0) + 1;
-  if (classification.kind === "terminal" || failures >= OUTAGE_MAX_POST_RESUME_FAILURES) {
+  if (policyKind === "terminal" || failures >= OUTAGE_MAX_POST_RESUME_FAILURES) {
     finishOutageRecord(record.sessionId, "failed", now, {
       lastError: outageReasonText(input.outcome.error ?? ""),
     }, agentDir);
