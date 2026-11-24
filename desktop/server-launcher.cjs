@@ -154,9 +154,27 @@ const expectedParentPid = Number.parseInt(process.env.PI_WEB_PARENT_PID ?? "", 1
 // A normal App quit is handled by the Rust shell. This small watchdog also
 // prevents the local server from becoming orphaned if the GUI process crashes
 // or is force-terminated by macOS.
+//
+// 三条判据，缺一条都会漏（2026-11-24 实测踩到）：
+// 1. `process.ppid === 1`：类 Unix 的孤儿判据（父死后被 init 收养）。
+// 2. `kill(expectedParentPid, 0)` 抛错：父确实没了。
+// 3. **`process.ppid !== expectedParentPid`**：父已不是当初那个。
+//    Windows 上父进程死掉后 ppid **不会变成 1**，而 `kill(pid, 0)` 在 PID 被系统
+//    复用时会对一个完全无关的进程返回成功——于是 1、2 都放行，server 就留在那里占着
+//    端口与内存，直到用户手动清。实测：App 被 Stop-Process 强杀后留下一个旧 server，
+//    新实例又起了第二个，两个同时监听不同端口。
 const parentWatchdog = setInterval(() => {
   if (!Number.isInteger(expectedParentPid) || process.ppid === 1) {
     console.error("[Pi Agent] desktop shell is gone (orphaned); server exiting");
+    process.exit(0);
+  }
+
+  // ppid 变了 = 我们已经被挂到别的进程下（或原本那个已消失）。这一条在 Windows 上
+  // 是唯一可靠的「父已换人」信号，必须排在 kill 之前判——PID 复用会让 kill 假阳。
+  if (process.ppid !== expectedParentPid) {
+    console.error(
+      `[Pi Agent] desktop shell (pid ${expectedParentPid}) is gone; reparented to ${process.ppid}; server exiting`,
+    );
     process.exit(0);
   }
 
