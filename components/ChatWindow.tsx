@@ -1300,6 +1300,12 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
   // G2 目标进度条数据源：只在 status=active 时 2s 轮询；用 messages.length 作 refreshKey，
   // 让会话推进（新消息）时把随后新建/变化的目标补拉回来。
   const goalState = useGoalState(session?.id ?? null, messages.length);
+  // 团队计划卡的「默认模型」= 当前会话主模型。计划里的成员 runtime 在真实机器上通常是
+  // `unknown/unknown`（pi-team 读 PI_PROVIDER_ID/PI_MODEL_ID，本服务从不设置），归一后是
+  // 空串；不给它一个默认值，用户在弹框里看到的就是空下拉，只能从头挑。
+  const teamCardDefaultModelRef = displayModelValue
+    ? `${displayModelValue.provider}/${displayModelValue.modelId}`
+    : "";
   // Pause / resume from the strip. Kept next to the hook so both the button state and
   // the poll loop read one source; a failure is surfaced on the strip, never swallowed.
   const [goalStatusPending, setGoalStatusPending] = useState(false);
@@ -2023,6 +2029,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
               <AgentTeamPlanCard
                 plan={teamPlan.plan}
                 cwd={session?.cwd ?? null}
+                defaultModelRef={teamCardDefaultModelRef}
                 busy={teamPlan.busy}
                 saving={teamPlan.saving}
                 saveError={teamPlan.saveError}

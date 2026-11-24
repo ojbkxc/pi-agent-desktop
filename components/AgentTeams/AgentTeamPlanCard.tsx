@@ -49,6 +49,11 @@ interface Props {
   plan: TeamPlanView | null;
   /** 读 agent 预设用的项目目录（会话 cwd）；缺省时成员详情只显示当前 agentType。 */
   cwd?: string | null;
+  /**
+   * 当前会话的主模型（`provider/modelId`）。计划里成员 runtime 是 `unknown/unknown` 占位时
+   * 用它预填模型栏——用户看到的就是「默认主模型」，想改再改，而不是一个空下拉。
+   */
+  defaultModelRef?: string;
   /** approve 请求进行中。 */
   busy?: boolean;
   /** 保存编辑进行中。 */
@@ -227,6 +232,7 @@ export function planModalView(
     onApprove?: () => void;
     onClose?: () => void;
     cwd?: string | null;
+    defaultModelRef?: string;
     saving?: boolean;
     saveError?: string | null;
     conflict?: boolean;
@@ -319,6 +325,7 @@ export function planModalView(
           <PlanEditor
             plan={plan}
             cwd={options.cwd ?? null}
+          defaultModelRef={options.defaultModelRef ?? ""}
             editable={editable}
             saving={options.saving ?? false}
             saveError={options.saveError ?? null}
@@ -431,6 +438,7 @@ export function planModalView(
 export function AgentTeamPlanCard({
   plan,
   cwd = null,
+  defaultModelRef = "",
   busy = false,
   saving = false,
   saveError = null,
@@ -617,6 +625,7 @@ export function AgentTeamPlanCard({
               panelRef,
               editor: true,
               cwd,
+              defaultModelRef,
               saving,
               saveError,
               conflict,

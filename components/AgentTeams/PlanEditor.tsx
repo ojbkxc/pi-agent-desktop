@@ -95,11 +95,17 @@ export function baselineMemberDraft(plan: TeamPlanView, id: string): PlanMemberD
  * 否则写路径按「未给出 = 清空」处理，会静默丢掉计划里原本设好的级别（用户看不到这一项，
  * 也就无从察觉）。
  */
-export function diffPlanEdits(plan: TeamPlanView, draft: PlanDraft): {
+export function diffPlanEdits(plan: TeamPlanView, draft: PlanDraft, fallbackModelRef = ""): {
   members: PlanMemberEditDraft[];
   tasks: PlanTaskEditDraft[];
 } {
   const members: PlanMemberEditDraft[] = [];
+  // 预填的「主模型」必须与草稿基线同口径，否则一打开弹框就被判成「有未保存更改」：
+  // `draftFromPlan` 用 fallback 填了模型栏，这里若拿 `unknown/unknown` 去比，`modelChanged`
+  // 恒为 true —— 用户什么都没动，卡片却提示改过，`dirty` 还会拦住草稿基线随轮询更新
+  // （`if (!dirtyRef.current)` 那条），于是一路停在旧 revision 上。
+  const fallback = isUsableModelRef(fallbackModelRef) ? fallbackModelRef : "";
+  const fallbackRuntime = fallback ? splitModelRef(fallback) : null;
   for (const member of plan.members) {
     const edited = draft.members[member.id];
     if (!edited) continue;
@@ -114,8 +120,13 @@ export function diffPlanEdits(plan: TeamPlanView, draft: PlanDraft): {
     // 等于给成员装一个必然 spawn 失败的模型（旧实现照抄占位值）。
     if (runtime && isUsableRuntime(runtime)) {
       const effort = edited.effortLevel ?? "";
-      const modelChanged =
-        runtime.providerId !== member.runtime.providerId || runtime.modelId !== member.runtime.modelId;
+      // 基线：计划里有可用 runtime 就用它；否则用预填的主模型（与草稿同源）。
+      const base = isUsableRuntime(member.runtime)
+        ? { providerId: member.runtime.providerId, modelId: member.runtime.modelId }
+        : fallbackRuntime;
+      const modelChanged = !base
+        || runtime.providerId !== base.providerId
+        || runtime.modelId !== base.modelId;
       const effortChanged = effort !== (member.runtime.effortLevel ?? "");
       if (modelChanged || effortChanged) {
         next.runtime = { ...runtime, ...(effort ? { effortLevel: effort } : {}) };
@@ -134,13 +145,25 @@ export function diffPlanEdits(plan: TeamPlanView, draft: PlanDraft): {
 }
 
 /** 从 plan 生成编辑草稿（保存成功后用它重置基线）。 */
-export function draftFromPlan(plan: TeamPlanView): PlanDraft {
+/**
+ * 从计划里取出编辑草稿的基线。
+ *
+ * `fallbackModelRef` 是**当前会话的主模型**：计划里成员的 runtime 在真实机器上常常是
+ * `unknown/unknown`（pi-team 读 `PI_PROVIDER_ID`/`PI_MODEL_ID`，本服务从不设置它们），
+ * 归一后就成了空串，模型栏显示「未设置」——用户看到的是一个空下拉，只能自己从头挑，
+ * 而他要的是「默认就是主模型，想改再改」。
+ *
+ * 所以：计划里没有可用模型时，用主模型预填。这是**真值**而不是 placeholder——用户不动它
+ * 就按主模型批准（`diffPlanEdits` 会因为「草稿 ≠ 计划基线」把它写进 PATCH），动了就按他选的。
+ */
+export function draftFromPlan(plan: TeamPlanView, fallbackModelRef = ""): PlanDraft {
   const members: Record<string, PlanMemberDraft> = {};
+  const fallback = isUsableModelRef(fallbackModelRef) ? fallbackModelRef : "";
   for (const member of plan.members) {
     members[member.id] = {
       agentType: member.agentType,
-      // unknown 占位 → 空串：下拉显示「未设置」，diff 也据此判定「没动过」。
-      modelRef: planMemberModelRef(member.runtime),
+      // unknown 占位 → 主模型；连主模型都没有才留空（那时「未设置」才是实情）。
+      modelRef: planMemberModelRef(member.runtime) || fallback,
       effortLevel: member.runtime.effortLevel ?? "",
     };
   }
@@ -150,8 +173,8 @@ export function draftFromPlan(plan: TeamPlanView): PlanDraft {
 }
 
 /** 草稿是否与服务端一致（「有未保存的更改」提示与保存按钮的 enabled 口径）。 */
-export function isDraftDirty(plan: TeamPlanView, draft: PlanDraft): boolean {
-  const edits = diffPlanEdits(plan, draft);
+export function isDraftDirty(plan: TeamPlanView, draft: PlanDraft, fallbackModelRef = ""): boolean {
+  const edits = diffPlanEdits(plan, draft, fallbackModelRef);
   return edits.members.length > 0 || edits.tasks.length > 0;
 }
 
@@ -162,6 +185,12 @@ interface Props {
    * 成员详情只显示当前 agentType、不允许改它（模型与任务仍可编辑）。
    */
   cwd?: string | null;
+  /**
+   * 当前会话的主模型（`provider/modelId`）。计划里成员的 runtime 是 `unknown/unknown`
+   * 时用它预填模型栏——「默认就是主模型，想改再改」，而不是让用户面对一个空下拉。
+   * 缺省或不可用时留空（那时「未设置」是实情）。
+   */
+  defaultModelRef?: string;
   /** 是否允许编辑（draft / review_pending）。 */
   editable: boolean;
   /** 保存进行中（批准前自动保存时由上层置位）。 */
@@ -210,13 +239,13 @@ const S = {
   hint: { fontSize: "var(--fs-micro)", color: "var(--text-dim)", margin: "4px 0 0" },
 } as const;
 
-export function PlanEditor({ plan, cwd = null, editable, saving = false, saveError = null, onDraftChange, conflict = false, onReload, onDirtyChange }: Props) {
+export function PlanEditor({ plan, cwd = null, defaultModelRef = "", editable, saving = false, saveError = null, onDraftChange, conflict = false, onReload, onDirtyChange }: Props) {
   const { t } = useI18n();
   // cwd 必须传下去：不带 cwd 时 `/api/models` 退回**进程** cwd（打包版是
   // `resources/server`，不在文件白名单里）→ 400 → 目录为空，「已选 N 名」旁边的
   // 模型下拉一个选项都没有。
   const catalog = useModelCatalog(cwd);
-  const [draft, setDraft] = useState(() => draftFromPlan(plan));
+  const [draft, setDraft] = useState(() => draftFromPlan(plan, defaultModelRef));
   const [activeMemberId, setActiveMemberId] = useState<string | null>(plan.members[0]?.id ?? null);
   const [selected, setSelected] = useState<string[]>([]);
   const [batchRef, setBatchRef] = useState("");
@@ -230,7 +259,7 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
   const planKey = `${plan.planId}:${plan.incarnationId}:${plan.revision}`;
   useEffect(() => {
     if (!dirtyRef.current) {
-      setDraft(draftFromPlan(plan));
+      setDraft(draftFromPlan(plan, defaultModelRef));
       setSelected([]);
     }
     setActiveMemberId((current) => (plan.members.some((member) => member.id === current) ? current : plan.members[0]?.id ?? null));
@@ -260,7 +289,7 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
     return () => { cancelled = true; };
   }, [cwd]);
 
-  const dirty = useMemo(() => isDraftDirty(plan, draft), [plan, draft]);
+  const dirty = useMemo(() => isDraftDirty(plan, draft, defaultModelRef), [plan, draft, defaultModelRef]);
   const activeMember = plan.members.find((member) => member.id === activeMemberId) ?? null;
   // 给上面的「重置草稿」effect 读最新值（effect 声明在前面，用 ref 避免顺序与闭包问题）。
   const dirtyRef = useRef(false);
@@ -285,7 +314,7 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
 
   // 同时把「批准时要一并保存的 diff」上报给卡片；无改动时上报 null。
   useEffect(() => {
-    onDraftChange?.(dirty ? diffPlanEdits(plan, draft) : null);
+    onDraftChange?.(dirty ? diffPlanEdits(plan, draft, defaultModelRef) : null);
   }, [dirty, plan, draft, onDraftChange]);
 
   const setMember = useCallback((id: string, patch: Partial<PlanMemberDraft>) => {
