@@ -609,7 +609,7 @@ export const TEAM_QUOTA_DEFAULTS = {
   globalLimit: 64,
 } as const;
 
-/** 上限的合法区间（设置面校验用；超区间一律拒，不静默夹取）。 */
+/** 上限的合法区间（设置面校验用；超区间一律拒，不静默夹取）。`0` = 不限，另行放行。 */
 export const TEAM_QUOTA_RANGES = {
   perTeamLimit: { min: 1, max: 128 },
   globalLimit: { min: 1, max: 512 },
@@ -638,16 +638,22 @@ export interface TeamQuotaSettings {
 /** 校验单个上限：必须是区间内的整数，否则 undefined（调用方回落下一层）。 */
 export function parseTeamQuotaLimit(value: unknown, key: keyof TeamQuotaLimits): number | undefined {
   if (typeof value !== "number" || !Number.isInteger(value)) return undefined;
+  // 0 = **不限**。操作者要的是「我说派多少就派多少」，把上限当成必须存在的护栏只会
+  // 让一条本来能跑的派发卡在「活跃 34 已超上限 32」上。判据里必须配 `limit > 0` 才拒
+  // （见 agent-teams-members 的 per-team 复核与 tryReserveTeamWorkerSlot）。
+  if (value === 0) return 0;
   const range = TEAM_QUOTA_RANGES[key];
   if (value < range.min || value > range.max) return undefined;
   return value;
 }
 
-/** env 值 → 上限（非数字/非正/非整数一律 undefined，回落下一层而不是硬套默认）。 */
+/** env 值 → 上限（非数字/非整数一律 undefined；**0 与负数表示不限**，与设置项同义）。 */
 function envQuotaLimit(raw: string | undefined): number | undefined {
   if (raw === undefined || raw.trim() === "") return undefined;
   const value = Number(raw);
-  if (!Number.isFinite(value) || value <= 0) return undefined;
+  if (!Number.isFinite(value)) return undefined;
+  if (value === 0) return 0;
+  if (value < 0) return 0;
   return Math.floor(value);
 }
 
@@ -737,7 +743,9 @@ export function readTeamQuotaLimits(
 /** 批量派成员时同时在起的宿主进程数（默认 4；clamp 到 1..globalLimit 之外不管，只防 0）。 */
 export function readTeamSpawnConcurrency(env: NodeJS.ProcessEnv = process.env): number {
   const value = envQuotaLimit(env.PI_TEAM_MAX_SPAWN_CONCURRENCY);
-  if (value === undefined) return 4;
+  // 这里 0 不表示「不限」：并发度不是配额，0 个并发就是「一个都不起」，静默死锁比回落
+  // 默认更糟。所以非正值一律回落默认 4，只有上限夹到 1..16。
+  if (value === undefined || value <= 0) return 4;
   return Math.min(Math.max(value, 1), 16);
 }
 
@@ -806,7 +814,9 @@ export async function tryReserveTeamWorkerSlot(options: {
   return withLock(async () => {
     const used = await options.readTotal();
     const inflight = quotaInflightCount();
-    if (used + inflight >= options.globalLimit) {
+    // `globalLimit <= 0` 表示不限（操作者要「别拦我」）。判据必须显式写 `> 0`：
+    // 少了它，0 会让 `used + inflight >= 0` 恒真，把每一次派发都拒掉。
+    if (options.globalLimit > 0 && used + inflight >= options.globalLimit) {
       return { granted: false, used, inflight, limit: options.globalLimit };
     }
     const reservationId = randomUUID();

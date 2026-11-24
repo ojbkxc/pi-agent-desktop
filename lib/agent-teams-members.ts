@@ -357,7 +357,9 @@ async function addTeamMemberCore(deps: MembersDeps, input: AddMemberInput): Prom
       // lead 排除走可靠链（lead 退回②）：不再只按固定名字——改名 lead 不虚占配额。
       const leadNames = deps.leadNamesOf(members.filter(isMemberObject));
       const workers = members.filter((item) => isMemberObject(item) && !leadNames.has(memberName(item))).length;
-      if (workers >= deps.quotaPerTeamLimit) {
+      // `quotaPerTeamLimit <= 0` = 不限（操作者明确要求不设上限）。显式判 `> 0`：
+      // 少了它，0 会让每次 add 都撞这条闸。
+      if (deps.quotaPerTeamLimit > 0 && workers >= deps.quotaPerTeamLimit) {
         throw new MemberConflictError(perTeamLimitMessage(deps.rawTeamName, workers, deps.quotaPerTeamLimit));
       }
       const agentId = `${name}-${deps.now()}-${deps.uuid().slice(0, 8)}`;
