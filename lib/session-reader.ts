@@ -2,7 +2,7 @@ import {
   SessionManager,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import { closeSync, type Dirent, fstatSync, openSync, readSync, statSync } from "fs";
+import { closeSync, existsSync, type Dirent, fstatSync, openSync, readSync, statSync } from "fs";
 import { readdir } from "fs/promises";
 import { isAbsolute, join, normalize as normalizePath, relative, resolve as resolvePath, sep } from "path";
 import type { AgentMessage, ImageContent, SessionEntry, SessionHeader, SessionInfo, SessionContext } from "./types";
@@ -658,6 +658,13 @@ export function openSessionManager(
 }
 
 export async function resolveSessionPath(sessionId: string): Promise<string | null> {
+  // Deliberately no existence check on a cache hit: a session that has not been
+  // flushed yet (created this session, DELETE must still shut its runtime down) is
+  // registered here with a path that does not exist on disk yet. The ghost-session
+  // problem — an externally deleted file still resolving, and `open()` then
+  // manufacturing an empty session under a different id (persistence 审计 P1-1) —
+  // is answered one level up, where a *read* can tell the two apart: see
+  // `assertLiveSessionFile` in app/api/sessions/[id]/route.ts.
   const cached = getPathCache().get(sessionId);
   if (cached) return cached;
 

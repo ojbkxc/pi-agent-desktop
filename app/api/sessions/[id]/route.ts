@@ -63,6 +63,16 @@ export async function GET(
     if (!liveRpc && !resolvedPath) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
+    // A cached path can outlive the file it names: a session deleted in a terminal,
+    // by another window, or by a cleanup script still resolves, and the SDK's
+    // `open()` then *manufactures* a fresh session at that path — a GET answered 200
+    // with an empty session whose id differs from the one asked for (persistence
+    // 审计 P1-1). Reads answer 404 here; DELETE still uses the path to shut down a
+    // runtime for a session that has not been flushed yet, which is why this check
+    // lives on the read path and not inside `resolveSessionPath`.
+    if (resolvedPath && !existsSync(resolvedPath)) {
+      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    }
 
     const sm = liveRpc?.inner.sessionManager ?? openSessionManager(resolvedPath!);
     perf?.span("open");
