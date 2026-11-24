@@ -131,15 +131,28 @@ jobs:
           releaseBody: |
             ## Pi Agent Desktop 0.8.7 (fork)
 
-            **2026-11-24 · 覆盖式重发（第十六次）**
+            **2026-11-24 · 覆盖式重发（第十七次）**
 
             > 版本号保持 0.8.7 不变，本次构建替换上一版的全部安装包。升级方式与普通更新相同，直接覆盖安装即可；配置、会话与任务记录都在 `~/.pi/agent/`，不受影响。
 
             本 fork 基于上游 pi-agent-desktop 0.8.2 / pi-web 0.10 构建，已并入上游 pi-web **v0.10 → v0.17** 的全部安全、稳定性与性能修复，并在此之上维护本 fork 的桌面功能线。
 
-            本次是第十六次覆盖重发：**审批弹框「点几次才好」的根因修掉了**（模型目录缓存），加上把强杀 App 后残留的 server 孤儿一并清掉。
+            本次是第十七次覆盖重发：团队计划审批这条链上的十项审计缺陷全部收口——**模型默认就是主模型**、配额与 pi-team 同源、删成员真的降配额、连点不再静默。
 
             ### 本次重发新增 / Fixes in this re-release
+
+            - **审批弹框的模型默认是主模型 / default model.** 计划里成员的 runtime 在真实机器上通常是 `unknown/unknown`（pi-team 读 `PI_PROVIDER_ID`/`PI_MODEL_ID`，本服务从不设置），归一后是空串，模型栏显示「未设置」——用户面对一个空下拉，只能从头挑。现在用当前会话主模型预填，**想改再改**；预填与改动判定同源（同一个 fallback 当基线），所以打开弹框不会显示「有未保存更改」，而真换了模型照样写进 PATCH。
+            - **配额与 pi-team 同源 / quota parity.** 上游 `checkSpawnLimits` 现读 `PI_TEAM_MAX_GLOBAL_WORKERS`（缺省 32），桌面那套用设置项（默认 64/16，`0` = 不限）——两条闸各算各的，于是「面板说还有余量 → 点派发 → `LIMIT_EXCEEDED (32)`」。现在派发前把桌面配额写进 env；桌面 `0`（不限）会被换成一个大数，因为上游只接受正整数、`0` 会被它当成非法值回落到 32。
+            - **删成员真的降配额 / removal.** 配额口径是 `config ∪ plan`，而删除只 splice 了 `config`：删了成员数字不动，对 launch 派发出来的成员更是直接「成员不在名册中」。现在同步摘 `plan.json` 的同名条目（同一把锁、同一原子写），**连 `approvedSnapshot.members` 一起摘**（漏了它，launch 会把已删成员又派出去）。
+            - **未派发的计划不再占名额 / roster counting.** `readPlanRosterMembers` 不看 `plan.state`，`draft` / `review_pending` / `cancelled` 的成员照样被算成「活跃」，叠加「停掉的名册条目永久保留」，数字只涨不降。只排除明确列举的这三种，其余（含字段缺失、上游新增状态）照旧计入——少算一个真在跑的成员会让配额超卖。
+            - **本队余量与全局余量同源 / workload parity.** `rosterWorkers` 只数 `config.members`，`globalWorkers` 数的是 `config ∪ plan`，同一面板两个数字基于不同名册。现在两边同源、都排 lead。
+            - **成员模型为空时明确告警 / missing model.** 批准照常放行，而 launch 会拿 `unknown/unknown` 去 spawn，那个成员必然起不来，界面全程没一句话。现在编辑器顶部列出**哪些成员还没有模型**；只提示、不拦批准（真实机器上队长 runtime 恒为 unknown，硬拦会挡死最常见的流程）。
+            - **连点「批准」不再静默 / approve guard.** 单飞守卫只返回一个没人看的 reason（调用方 `void` 掉返回值），用户连点第二下时既不报错也不动。现在守卫命中时同时把原因写到 `approveError` 上。
+            - **成员行不再假装可点 / click affordance.** 整行挂着 `cursor: pointer`，但点击处理在内部按钮上，左右内边距是纯死区。指针语义收回到按钮。
+            - **思考强度禁用时说原因 / disabled explanation.** 思考强度属于 runtime，没有模型就发不出去，禁用是对的；但界面只把下拉变灰。现在补 `title` + 一行可见提示。
+
+            ### 第十六次重发内容 / Fixes in the previous re-release
+
 
             - **审批弹框「点几次才好」/ model catalog cache.** 打开「Review configuration」后立刻点成员的模型下拉——完全没反应，等一两秒再点才行，重开弹框又得重来。根因：下拉是 `disabled={!editable || catalog.loading}`，而 `useModelCatalog` 的 `loading` 初值恒为 `true`；`AppSelect` 把 `disabled` 传给原生 `<button disabled>`，浏览器**根本不派发 click**，第一下被整个吞掉。现在按 cwd 键控的模块级缓存（60 秒，`refresh()` 绕过）让**第二次及以后的挂载**直接以 `loading=false` 起渲染，且 effect 首轮在命中缓存时不再把 `loading` 拨回 true——两层缺一都不成。顺带把批量下拉的两个禁用原因（没勾成员 / 目录加载中）用 `title` 分清楚，不再长得一模一样。
             - **强杀 App 后残留的 server 孤儿 / orphaned sidecar.** 观测到 App 被强杀后留下一个旧 server，新实例又起一个，两个同时监听不同端口。看门狗本来就在（日志里有多次正常触发），漏的是判据：**Windows 上父进程死后 `process.ppid` 不会变成 1**，而 `kill(pid, 0)` 在 PID 被复用时会对无关进程返回成功——两条判据同时放行。补第三条 `process.ppid !== expectedParentPid`（父已换人），并排在 `kill()` 之前判。
