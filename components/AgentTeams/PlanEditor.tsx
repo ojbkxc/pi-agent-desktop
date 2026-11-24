@@ -220,9 +220,12 @@ interface Props {
  */
 const S = {
   roster: { display: "flex", flexDirection: "column", gap: 4, minWidth: 0 },
+  // 行容器只做布局：`cursor: pointer` 挂在这里会骗人——整行看着可点，但点击处理在内部
+  // 那个 `<button>` 上，左右各 8px 的内边距是纯死区（团队计数审计 P3-1）。指针语义交给
+  // 按钮自己（它本来就带 cursor: pointer）。
   row: (active: boolean) => ({
     display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 8,
-    background: active ? "var(--bg-selected)" : "transparent", cursor: "pointer",
+    background: active ? "var(--bg-selected)" : "transparent",
   }),
   rowMeta: { display: "flex", flexDirection: "column", gap: 1, minWidth: 0, flex: 1 },
   name: { fontSize: "var(--fs-body)", fontWeight: "var(--fw-semibold)", color: "var(--text)", overflowWrap: "anywhere" },
@@ -586,8 +589,16 @@ export function PlanEditor({ plan, cwd = null, defaultModelRef = "", editable, s
                     value={activeEffort}
                     onValueChange={(value) => setMember(activeMember.id, { effortLevel: value })}
                     options={effortOptions}
+                    // 思考强度是 runtime 的一部分：没有模型就发不出去。禁用是对的，但不说清楚
+                    // 用户只看到灰掉的下拉、不知道要先选模型（团队计数审计 P3-2）。
+                    title={!activeModelUsable && editable ? t("teams.plan.effortNeedsModel") : undefined}
                     disabled={!editable || !activeModelUsable}
                   />
+                  {!activeModelUsable && editable ? (
+                    <span style={S.hint} data-testid="team-plan-effort-needs-model">
+                      {t("teams.plan.effortNeedsModel")}
+                    </span>
+                  ) : null}
                 </div>
               </div>
               <p style={S.hint}>{t("teams.plan.costHint")}</p>
