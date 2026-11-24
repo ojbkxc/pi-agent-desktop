@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { AppSelect } from "@/components/AppSelect";
 import { ConfigField } from "@/components/SettingsUi";
 import { useI18n } from "@/hooks/useI18n";
 import { MODEL_RETRY_POLICIES, type ModelRetryPolicy } from "@/lib/outage/retry-policy";
@@ -51,8 +52,7 @@ export function ProviderRetryPolicySelect({ providerId }: { providerId: string }
   }, [providerId]);
 
   const change = useCallback(
-    async (event: React.ChangeEvent<HTMLSelectElement>) => {
-      const value = event.target.value as ModelRetryPolicy;
+    async (value: ModelRetryPolicy) => {
       const previous = policy;
       setPolicy(value);
       setSaving(true);
@@ -82,16 +82,13 @@ export function ProviderRetryPolicySelect({ providerId }: { providerId: string }
 
   return (
     <ConfigField label={t("models.fieldRetryPolicy")}>
-      <select
+      <AppSelect
         value={policy}
-        onChange={change}
+        onValueChange={(value) => change(value as ModelRetryPolicy)}
         disabled={!loaded || saving}
-        style={{ font: "var(--fs-sm)", padding: "6px 10px", border: "var(--border)", borderRadius: "var(--radius-sm)", background: "var(--surface)", color: "var(--text)", width: "100%" }}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>{option.label}</option>
-        ))}
-      </select>
+        aria-label={t("models.fieldRetryPolicy")}
+        options={options}
+      />
       <span style={{ fontSize: "var(--fs-micro)", color: "var(--text-dim)", marginTop: 2 }}>
         {policy === "all" ? t("models.retryPolicyAllHint") : t("models.retryPolicyHint")}
       </span>

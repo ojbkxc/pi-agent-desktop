@@ -10,7 +10,10 @@ import test from "node:test";
 const source = await readFile(new URL("./ProviderRetryPolicySelect.tsx", import.meta.url), "utf8");
 const modelsConfig = await readFile(new URL("./ModelsConfig.tsx", import.meta.url), "utf8");
 
-test("the control reads and writes the retry policy through its own endpoint", () => {
+test("the control uses the shared app selector and reads/writes its own endpoint", () => {
+  // 仓库的菜单一致性守卫禁止原生 <select>：应用内的选择器必须走 AppSelect。
+  assert.match(source, /import \{ AppSelect \} from "@\/components\/AppSelect"/);
+  assert.doesNotMatch(source, /<select[\s>]/, "a native <select> is forbidden by the app-menu guard");
   assert.match(source, /fetch\(`\/api\/model-retry-policy\?provider=\$\{encodeURIComponent\(providerId\)\}`\)/, "reads per provider");
   assert.match(source, /method: "PUT"/, "saves with PUT");
   assert.match(source, /body: JSON\.stringify\(\{ provider: providerId, policy: value \}\)/, "the body names the provider and the policy");
