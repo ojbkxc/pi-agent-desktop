@@ -1264,10 +1264,27 @@ export class AgentSessionWrapper {
     this.forcedIdleTimerArmed = timeoutMs !== 0 && this.forceShutdownOnIdle;
     if (timeoutMs === 0) return;
     this.idleTimer = setTimeout(() => {
-      if (!this.forceShutdownOnIdle && (this.isRunning() || hasActiveSessionLivenessProvider({
-        sessionId: this.sessionId,
-        sessionFile: this.sessionFile || undefined,
-      }))) {
+      // Same "still in use" judgement as `idleCapCandidate()`, deliberately: the
+      // timer used to look only at `isRunning()` and a liveness provider, so a
+      // session an SSE client was streaming, an extension dialog was waiting on,
+      // or the composer had queued messages for could be torn down mid-use
+      // (rpc-manager 审计 D5 — the two eviction paths disagreed about what
+      // "in use" means). A watched session stays alive; the client's lease and
+      // `onEvent` keep it honest.
+      if (
+        !this.forceShutdownOnIdle
+        && (
+          this.isRunning()
+          || this.listeners.size > 0
+          || this.pendingUiRequests.size > 0
+          || this.activeCustomUis.size > 0
+          || this.composerQueue.snapshot().length > 0
+          || hasActiveSessionLivenessProvider({
+            sessionId: this.sessionId,
+            sessionFile: this.sessionFile || undefined,
+          })
+        )
+      ) {
         this.resetIdleTimer();
         return;
       }
@@ -1300,6 +1317,10 @@ export class AgentSessionWrapper {
   onEvent(listener: EventListener): () => void {
     this.listeners.add(listener);
     this.lastUsedAt = Date.now();
+    // A subscriber means the session is in use *now*: re-arm the idle deadline so
+    // a stream that just attached is not immediately reaped by a timer armed
+    // before it arrived (rpc-manager 审计 D5).
+    this.resetIdleTimer();
     for (const event of this.pendingUiRequests.values()) listener(event);
     for (const event of this.activeToolEvents.values()) listener(event);
     return () => {
@@ -1731,7 +1752,12 @@ export class AgentSessionWrapper {
           // renders the prompt from the current options. The getter alone would drop those
           // per-run changes again once the run ends.
           systemPrompt: this.exactSystemPrompt?.() ?? (this.inner.agent.state?.systemPrompt || this.inner.systemPrompt || ""),
-          thinkingLevel: this.inner.agent.state?.thinkingLevel ?? "off",
+          // `null` when the SDK has not reported one yet, never a made-up `off`:
+        // the two mean different things to the composer (unknown vs. thinking
+        // disabled), and showing "off" invited the UI to overwrite the level the
+        // session file had restored (rpc-manager 审计 D6). Context usage next to
+        // this already reports `undefined` honestly.
+        thinkingLevel: this.inner.agent.state?.thinkingLevel ?? null,
           extensionStatuses: this.getExtensionStatuses(),
           extensionWidgets: this.getExtensionWidgets(),
           routedModel: this.getRoutedModel(),
