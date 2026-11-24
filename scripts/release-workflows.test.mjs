@@ -235,12 +235,12 @@ test("release workflow publishes Apple Silicon, Linux x64, and Windows x64 insta
 
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /max-parallel: 1/);
-  // 首选 macos-26（SDK 26 = 新交通灯几何）。macos-latest 只作为 macos-26 池子
-  // 供给故障时的重试兜底（2026-11-24 深夜连续 4 次 runner_id=0 取消）；它装的是
-  // SDK 15，SDK 检查步骤会红并说明原因——宁可失败也不出旧 UI 的包。
-  assert.match(workflow, /macos-26/);
-  assert.match(workflow, /macos-latest/);
-  assert.match(workflow, /github\.run_attempt > 1 && 'macos-latest' \|\| 'macos-26'/);
+  // macos-26 是硬要求（SDK 26 = 新交通灯几何）。曾试过「重试时退回 macos-latest」的
+  // 兜底，实测无意义：池子故障时 job 是 runner_id=0 被取消，重跑就该再要 macos-26；
+  // 落到 macos-latest 必被 SDK 检查打红（它只装 SDK 15）。
+  assert.match(workflow, /runner: macos-26/);
+  // 只查 `runner:` 行——注释里提到 macos-latest（解释为什么不能用它）是正常的。
+  assert.doesNotMatch(workflow, /^\s*runner:.*macos-latest/m, "no fallback runner: it can only fail the SDK check");
   // Linking an older SDK ships the legacy traffic lights (0.7.1).
   assert.match(workflow, /--show-sdk-version\)"\n\s+echo "macOS SDK \$sdk"\n\s+test "\$\{sdk%%\.\*\}" -ge 26/);
   assert.match(workflow, /target: aarch64-apple-darwin/);

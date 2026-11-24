@@ -17,14 +17,14 @@ jobs:
       max-parallel: 1
       matrix:
         include:
-          # macos-26 是硬要求（SDK 26 才有新交通灯几何，见下方 "Require the
-          # macOS 26 SDK" 步骤）；macos-latest 只装 SDK 15。2026-11-24 深夜
-          # macos-26 池子连续 4 次 "queued → cancelled, runner_id=0"（排队后
-          # 未分配 runner 即取消，同日早间同 job 成功——池子供给故障，GitHub
-          # status 页却显示正常）。macos-latest 作为兜底：SDK 检查步骤会直接
-          # 失败并说明原因，不会悄悄出一个旧 UI 的包，等 macos-26 恢复后删掉
-          # 这行即可。
-          - runner: ${{ github.run_attempt > 1 && 'macos-latest' || 'macos-26' }}
+          # macos-26 是硬要求（只有 SDK 26 才有新交通灯几何，见下面的 "Require the
+          # macOS 26 SDK" 步骤）；macos-latest 只装 SDK 15。
+          #
+          # 2026-11-24 曾加过一条「重试时退回 macos-latest」的兜底，实测证明它没有意义：
+          # macos-26 池子供给故障时 job 是 `runner_id=0`、steps 为空地被取消，重跑就该再
+          # 要一次 macos-26；而落到 macos-latest 一定被 SDK 检查打红——那条兜底只会把
+          # 「等池子恢复」变成「等 40 分钟然后确定失败」。已撤掉，改回固定 macos-26。
+          - runner: macos-26
             target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
             apple_signing_identity: "-"
