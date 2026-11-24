@@ -712,6 +712,15 @@ export function PurgeConsoleSection() {
           {t("purge.disabledHint")}
         </p>
       )}
+      {/* 总闸开着、但所有「会真正改动文本」的开关都没开 = 纯转发。
+          实测：出厂默认正是这个状态（enabled: true，三个改写开关全 false），
+          而界面上写的是「已启用」——人只会以为破甲坏了。这里如实说明，并点名
+          哪几个开关能让它真正做事，不去替用户改默认值。 */}
+      {draft.enabled && !draft.system_normalize && !draft.dead_zone_rewrite && !draft.synonym_enabled && (
+        <p className="settings-general-description settings-purge-off" role="status">
+          {t("purge.passthroughHint")}
+        </p>
+      )}
 
       <section className="settings-general-section">
         <h3 className="settings-general-heading">{t("purge.togglesHeading")}</h3>

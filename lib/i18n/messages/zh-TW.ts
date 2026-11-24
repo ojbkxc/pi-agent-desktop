@@ -1461,6 +1461,7 @@ export const zhTWLocale: LocalePlugin = {
     "purge.presetsAllVendors": "全部",
     "purge.presetsCurrentModel": "預設模型",
     "purge.disabledHint": "破甲控制台目前關閉，請求原樣送出、不會被改寫。",
+    "purge.passthroughHint": "總開關開著，但改寫開關一個都沒開——請求仍然原樣送出、不會被改寫。打開「系統提示正規化」「死區改寫」或「同義詞替換」任一項才會真正生效。",
     "purge.presetsFilterAria": "依廠商過濾",
     "purge.presetsLoading": "正在載入預設…",
     "purge.presetsEmpty": "沒有符合的預設。",

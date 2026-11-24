@@ -1461,6 +1461,7 @@ export const enLocale: LocalePlugin = {
     "purge.presetsAllVendors": "All",
     "purge.presetsCurrentModel": "Default model",
     "purge.disabledHint": "The purge console is off, so requests pass through unchanged.",
+    "purge.passthroughHint": "The console is on, but every rewriting switch is off — requests still pass through unchanged. Turn on text normalization, dead-zone rewriting, or synonyms to make it act.",
     "purge.presetsFilterAria": "Filter by vendor",
     "purge.presetsLoading": "Loading presets…",
     "purge.presetsEmpty": "No preset matches the filter.",

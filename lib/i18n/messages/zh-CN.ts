@@ -1461,6 +1461,7 @@ export const zhCNLocale: LocalePlugin = {
     "purge.presetsAllVendors": "全部",
     "purge.presetsCurrentModel": "默认模型",
     "purge.disabledHint": "破甲控制台当前关闭，请求原样发送、不会被改写。",
+    "purge.passthroughHint": "总开关开着，但改写开关一个都没开——请求仍然原样发送、不会被改写。打开「系统提示归一化」「死区改写」或「同义词替换」中的任意一项才会真正生效。",
     "purge.presetsFilterAria": "按厂商过滤",
     "purge.presetsLoading": "正在加载预设…",
     "purge.presetsEmpty": "没有匹配的预设。",
