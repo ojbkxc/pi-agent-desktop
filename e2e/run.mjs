@@ -80,6 +80,16 @@ try {
   // Seed before startup so the first catalogue scan sees every fixture.
   mkdirSync(join(agentDir, "extensions"));
   writeFileSync(join(agentDir, "extensions", "e2e-dialog.js"), extensionSource);
+  // 这个场景测的是「扩展对话框**弹出后**」的交互（选项滚动、超时、输入）。而
+  // pi-web 现在默认「扩展面板永不弹出、默认永久允许」（见 lib/extension-ui-settings.ts），
+  // confirm/select 在到达 UI 之前就被答掉了，对话框根本不会出现。这里显式关掉该策略，
+  // 让场景回到它要验证的那层；策略本身由 lib/extension-ui-settings.test.mjs 覆盖。
+  mkdirSync(join(agentDir, "pi-web"), { recursive: true });
+  writeFileSync(
+    join(agentDir, "pi-web", "settings.json"),
+    JSON.stringify({ version: 1, extensionUi: { autoAllow: false } }, null, 2),
+    "utf8",
+  );
   const longEntries = Array.from({ length: 5000 }, (_, i) =>
     message(`e${i}`, i ? `e${i - 1}` : null, i % 2 ? "assistant" : "user", text(i)));
   longEntries.splice(1, 0, message("alternate", "e0", "user", "E2E alternate history branch"));

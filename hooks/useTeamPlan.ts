@@ -63,6 +63,8 @@ export interface UseTeamPlanResult {
    */
   saveAndApprove(edits: PlanEdits | null): Promise<{ ok: boolean; reason?: string }>;
   /** 保存编辑（PATCH）。成功后就地回填 plan（revision 已 +1）。 */
+  /** 批准指令是否已送达 lead（弹框据此立刻收起，见 `delivered` 的注释）。 */
+  delivered: { planId: string; revision: number } | null;
   save(edits: PlanEdits): Promise<{ ok: boolean; reason?: string; plan?: TeamPlanView }>;
 }
 
@@ -140,6 +142,18 @@ export function useTeamPlan(teamName: string | null, refreshKey: number = 0): Us
   const [conflict, setConflict] = useState(false);
   // 轮询外触发的一次性补拉计数。
   const [tick, setTick] = useState(0);
+  /**
+   * 批准指令**已送达 lead** 的信号。
+   *
+   * 为什么需要它（审批弹框「批准后很久才关」的根因）：弹框的自动关闭只看
+   * `isPlanCardVisible(plan)`，而 `plan` 来自 2 秒轮询；`state` 从 `review_pending`
+   * 走到 `launching` 只能由 **lead 自己被唤醒后调 `team_plan approve`** 写入。
+   * 也就是说「点批准 → 弹框关」中间隔着一整个模型回合（几十秒）。
+   *
+   * 送达即发这个信号，界面就能立刻收起弹框（用户意图已交付），后台继续用轮询确认真实
+   * 流转；失败仍然通过 `approveError` 可见（卡片会重新出现）。
+   */
+  const [delivered, setDelivered] = useState<{ planId: string; revision: number } | null>(null);
 
   /**
    * 异步分支只读 ref、不读 state/参数：真实 React 里这只关乎闭包新鲜度，但在 hooks 测试替身
@@ -357,7 +371,14 @@ export function useTeamPlan(teamName: string | null, refreshKey: number = 0): Us
           }
           return { ok: false, reason };
         }
-        if (mountedRef.current) setConflict(false);
+        if (mountedRef.current) {
+          setConflict(false);
+          // 送达即发信号：弹框立刻收起，不必等 lead 跑完一轮 + 下一拍轮询。
+          setDelivered({ planId: base.planId, revision: base.revision });
+          // 服务端顺带回了投递后读到的快照：直接用，省掉「等下一轮 2s 轮询」那一拍。
+          const after = (data as { plan?: TeamPlanView | null }).plan;
+          if (after) acceptFromServer(after);
+        }
         return { ok: true };
       } catch (err) {
         // 超时也要落到可见错误上：投递可能已经到达 lead，刷新后以计划状态为准。
@@ -514,5 +535,5 @@ export function useTeamPlan(teamName: string | null, refreshKey: number = 0): Us
     [approve, persistEdits, sendApproval],
   );
 
-  return { plan, error, busy, approveError, saving, saveError, conflict, refresh, approve, save, saveAndApprove };
+  return { plan, error, busy, approveError, saving, saveError, conflict, refresh, approve, save, saveAndApprove, delivered };
 }

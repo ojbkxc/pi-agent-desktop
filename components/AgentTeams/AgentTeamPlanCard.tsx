@@ -61,6 +61,11 @@ interface Props {
   error?: string | null;
   /** 批准失败的原因（投递失败 / 409），由 useTeamPlan 记录。 */
   approveError?: string | null;
+  /**
+   * 批准指令已送达 lead。到达即收起弹框——否则要等 lead 跑完一整轮、再等一拍轮询，
+   * 用户看到的就是「点了批准，好久才关」。
+   */
+  delivered?: { planId: string; revision: number } | null;
   /** 点「停止」；停 lead 会话生成（由调用方接 abort，cc-haha stopGeneration 同款）。 */
   onStop?: () => void;
   /** 点「批准」；携带编辑器里待保存的改动（无改动为 null），由上层先保存再投递。 */
@@ -247,6 +252,8 @@ export function planModalView(
     panelRef?: Ref<HTMLDivElement>;
     /** 批准失败的原因（投递失败 / 409 等），由 useTeamPlan 记录。 */
     approveError?: string | null;
+    /** 批准指令已送达 lead 的信号（`useTeamPlan` 的 `delivered`）：到达即收起弹框。 */
+    delivered?: { planId: string; revision: number } | null;
     /** 点「停止」（停 lead 会话生成）；缺省时停止按钮不出现。 */
     onStop?: () => void;
     /** 正在执行停止（按钮禁用并显示「正在停止…」）。 */
@@ -430,6 +437,7 @@ export function AgentTeamPlanCard({
   conflict = false,
   error = null,
   approveError = null,
+  delivered = null,
   onStop,
   onApprove,
   onReload,
@@ -454,6 +462,25 @@ export function AgentTeamPlanCard({
   useEffect(() => {
     if (!isPlanCardVisible(plan)) { setOpen(false); setDiscardPrompt(false); }
   }, [plan]);
+
+  /**
+   * 批准指令**已送达 lead** ⇒ 立刻收起弹框。
+   *
+   * 为什么需要这条（用户报「都审批了好久了，才关闭」）：唯一的自动关闭路径在上面——
+   * 它等的是 `plan` 从 `review_pending` 走到 `launching`，而状态只能由**被唤醒后的 lead**
+   * 调 `team_plan approve` 写入。也就是「点批准 → 弹框关」中间隔着一整个模型回合，
+   * 轮询还得再等一拍（2s）。
+   *
+   * 送达就收起：用户表达的意图已经交付，不必盯着弹框等模型跑完。真实流转仍由轮询在后台
+   * 确认；**失败一定可见**——`approveError` 非空时卡片会重新出现（见下面的可见性判据），
+   * 收缩态也会把这句话显示出来。
+   */
+  useEffect(() => {
+    if (!delivered) return;
+    if (plan && delivered.planId !== plan.planId) return;
+    setOpen(false);
+    setDiscardPrompt(false);
+  }, [delivered, plan]);
 
   // 计划换了一条、或状态真的流转了 → 上次那次「停止」已经落地，复位进行态。
   // 依赖 planId/state 而不是 plan 对象：轮询每 2s 重新解析一份 JSON，对象身份不稳定。
@@ -563,6 +590,13 @@ export function AgentTeamPlanCard({
         // title 保留完整文本，方便鼠标悬停看全。
         <p style={{ ...S.alert, margin: "6px 0 0", minWidth: 0 }} role="alert" title={error}>
           {error}
+        </p>
+      ) : null}
+      {approveError ? (
+        // 批准已经「送达即收弹框」（乐观关闭），失败的可见性必须搬到这里：弹框一关，
+        // 里面那条 approveError 就没人看得到了。收缩态带上它，用户才不会以为已批准。
+        <p style={{ ...S.alert, margin: "6px 0 0", minWidth: 0 }} role="alert" data-testid="team-plan-approve-error-bar" title={approveError}>
+          {approveError}
         </p>
       ) : null}
       {open && typeof document !== "undefined"

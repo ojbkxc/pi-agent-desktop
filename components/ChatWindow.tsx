@@ -1300,6 +1300,17 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
   // G2 目标进度条数据源：只在 status=active 时 2s 轮询；用 messages.length 作 refreshKey，
   // 让会话推进（新消息）时把随后新建/变化的目标补拉回来。
   const goalState = useGoalState(session?.id ?? null, messages.length);
+  // Pause / resume from the strip. Kept next to the hook so both the button state and
+  // the poll loop read one source; a failure is surfaced on the strip, never swallowed.
+  const [goalStatusPending, setGoalStatusPending] = useState(false);
+  const [goalStatusError, setGoalStatusError] = useState<string | null>(null);
+  const handleGoalStatus = useCallback(async (next: "active" | "paused") => {
+    setGoalStatusPending(true);
+    setGoalStatusError(null);
+    const result = await goalState.setStatus(next);
+    if (!result.ok) setGoalStatusError(result.error ?? t("chat.activeGoal.pauseFailed"));
+    setGoalStatusPending(false);
+  }, [goalState, t]);
 
   const chatInputElement = (
     <ChatInput
@@ -1517,7 +1528,14 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
         <div style={{ flexShrink: 0, padding: `0 ${CHAT_COLUMN_PADDING}px`, display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ width: "100%", maxWidth: "var(--chat-content-max-width, 820px)", margin: "0 auto" }}>
             <SessionTitleStrip session={session} compact={isMobile} onRenamed={onSessionRenamed} />
-            <GoalStrip goal={goalState.goal} isRunning={sessionRunning} compact={isMobile} />
+            <GoalStrip
+              goal={goalState.goal}
+              isRunning={sessionRunning}
+              compact={isMobile}
+              onSetStatus={(next) => void handleGoalStatus(next)}
+              statusPending={goalStatusPending}
+              statusError={goalStatusError}
+            />
             {teamStrip}
             <OutageBanner sessionId={session?.id ?? null} />
           </div>
@@ -2011,6 +2029,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
                 conflict={teamPlan.conflict}
                 error={teamPlan.error}
                 approveError={teamPlan.approveError}
+              delivered={teamPlan.delivered}
                 onApprove={(edits) => void teamPlan.saveAndApprove(edits)}
                 onReload={teamPlan.refresh}
                 onStop={() => void handleAbort()}
