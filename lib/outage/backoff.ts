@@ -75,7 +75,9 @@ export function advanceOutageBudget(
   options: BackoffOptions = {},
 ): AdvanceResult {
   const attempts = record.budget.attempts + 1;
-  const exhausted = attempts >= record.budget.maxAttempts || now >= record.budget.deadlineAt;
+  // `deadlineAt: 0` = 不限（见 isOutageExpired 的说明），所以判据要显式 `> 0`。
+  const deadlineReached = record.budget.deadlineAt > 0 && now >= record.budget.deadlineAt;
+  const exhausted = attempts >= record.budget.maxAttempts || deadlineReached;
   const delayMs = exhausted ? 0 : backoffDelayMs(attempts, record.kind, options);
   const nextAt = exhausted ? now : now + delayMs;
   const advanced: OutageRecord = {
@@ -114,7 +116,9 @@ export function initialOutageBudget(input: {
     attempts: 0,
     maxAttempts: input.maxAttempts,
     startedAt: input.now,
-    deadlineAt: input.now + input.maxWaitMs,
+    // `maxWaitMs === 0` 是「不限」：落盘成 0 哨兵，`isOutageExpired` 显式判 `> 0`。
+    // 写成 `now + 0` 会得到一个立刻过期的 deadline，语义正好相反。
+    deadlineAt: input.maxWaitMs === 0 ? 0 : input.now + input.maxWaitMs,
     // 立刻可以尝试：SDK 已经重试过 3 次（约 14s），再等 30s 只会拖慢恢复。
     nextAttemptAt: input.now,
   };

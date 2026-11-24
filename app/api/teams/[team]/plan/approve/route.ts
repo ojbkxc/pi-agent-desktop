@@ -122,5 +122,8 @@ export async function POST(
       { status: 502 },
     );
   }
-  return NextResponse.json({ ok: true, requestId });
+  // 回一份投递后立刻读到的计划视图：客户端据此省掉「等下一轮 2s 轮询才发现状态变了」。
+  // 读失败不影响投递本身——批准已经送达，这里只是让界面早一点知道。
+  const after = await readTeamPlanView(team).catch(() => null);
+  return NextResponse.json({ ok: true, requestId, plan: after ?? undefined });
 }

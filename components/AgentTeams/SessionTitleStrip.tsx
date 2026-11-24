@@ -143,10 +143,13 @@ export function SessionTitleStrip({ session, compact = false, onRenamed }: Props
 
   const startEdit = useCallback(() => {
     if (!onRenamed || saving) return;
-    setDraft(storedName);
+    // 预填**当前显示的那个标题**，不是只有 `name`：会话从未重命名过时 `name` 是空的，
+    // 输入框于是开出来就是空白，想改名得从零敲（用户报的就是这个）。显示值是
+    // `name`，没有就退回首条消息——重命名时先看到它，再在上面改。
+    setDraft(title);
     setError(null);
     setEditing(true);
-  }, [onRenamed, saving, storedName]);
+  }, [onRenamed, saving, title]);
 
   const cancelEdit = useCallback(() => {
     cancelRef.current = true;
@@ -162,6 +165,12 @@ export function SessionTitleStrip({ session, compact = false, onRenamed }: Props
     }
     const next = draft.trim();
     if (next === storedName.trim()) {
+      setEditing(false);
+      return;
+    }
+    // 预填的是显示标题；用户没动它就提交，等于把「首条消息」固化成正式名。那种情况按
+    // 「没改名」处理，直接退出编辑，不写盘——否则一次误点就把 fallback 变成 name。
+    if (!storedName.trim() && next === title.trim()) {
       setEditing(false);
       return;
     }
@@ -184,7 +193,7 @@ export function SessionTitleStrip({ session, compact = false, onRenamed }: Props
     } finally {
       setSaving(false);
     }
-  }, [draft, onRenamed, saving, session?.id, storedName]);
+  }, [draft, onRenamed, saving, session?.id, storedName, title]);
 
   if (!session?.id) return null;
 

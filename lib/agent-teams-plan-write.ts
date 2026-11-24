@@ -21,7 +21,7 @@
  *   计划打回草稿，否则用户又要重新提交一次）。
  */
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as lockfile from "proper-lockfile";
@@ -287,5 +287,82 @@ export async function readRawPlan(teamName: string): Promise<Record<string, unkn
     return JSON.parse(await readFile(join(teamDirFor(teamName), "plan.json"), "utf8")) as Record<string, unknown>;
   } catch {
     return null;
+  }
+}
+
+/**
+ * 从 plan.json 的名册里摘掉一个成员（移除成员时用；团队计数审计 P0-1）。
+ *
+ * 为什么需要它：配额的合并口径是 `config.members ∪ plan.members`，而删除成员的写路径
+ * 只 splice 了 `config`。于是「删了成员 → 全局数字一点没降」，对 launch 派发出来的
+ * 成员更是直接 `成员不在团队名册中`（它本来就不在 config 里）。删了不降，用户就只能
+ * 靠「重启进程」腾名额。
+ *
+ * 三条纪律：
+ * - 复用同一把 `plan.json.lock` 与同一个原子写：与 lead 的 team_plan、编辑器的 PATCH
+ *   串行，不覆盖别人的改动。
+ * - **同步摘 `approvedSnapshot.members`**：漏了它，launch 认领时会把已删成员又派出去。
+ * - 名字不在计划里（或没有 plan.json）算成功：这个函数的目标是「这个名字不该再占名额」。
+ */
+export async function prunePlanRosterMember(
+  teamName: string,
+  name: string,
+  teamDir: string = teamDirFor(teamName),
+): Promise<{ ok: boolean; error?: string; removed: boolean }> {
+  const dir = teamDir;
+  const target = join(dir, "plan.json");
+  // 目录/计划文件都不存在 ⇒ 没有条目可摘，算成功：调用方要的是「这个名字不再占名额」，
+  // 而不是「必须删掉一行」。也让 remove 在「团队从未提交计划」时照常工作。
+  if (!existsSync(target)) return { ok: true, removed: false };
+  let release: () => Promise<void>;
+  try {
+    release = await lockfile.lock(target, {
+      lockfilePath: `${target}.lock`,
+      realpath: false,
+      retries: { ...PLAN_LOCK_RETRIES },
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      removed: false,
+      error: `计划文件正被另一个写入者占用：${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  try {
+    let plan: Record<string, unknown> | null;
+    try {
+      plan = readPlanSync(dir, teamName);
+    } catch (error) {
+      return { ok: false, removed: false, error: error instanceof Error ? error.message : String(error) };
+    }
+    if (!plan) return { ok: true, removed: false };
+
+    const drop = (list: unknown): { next: unknown[]; changed: boolean } => {
+      if (!Array.isArray(list)) return { next: [], changed: false };
+      const kept = list.filter((item) => !(item && typeof item === "object" && (item as { name?: unknown }).name === name));
+      return { next: kept, changed: kept.length !== list.length };
+    };
+
+    const members = drop(plan.members);
+    const snapshot = plan.approvedSnapshot && typeof plan.approvedSnapshot === "object"
+      ? plan.approvedSnapshot as Record<string, unknown>
+      : null;
+    const snapshotMembers = drop(snapshot?.members);
+    if (!members.changed && !snapshotMembers.changed) return { ok: true, removed: false };
+
+    const next: Record<string, unknown> = { ...plan };
+    if (members.changed) next.members = members.next;
+    if (snapshot && snapshotMembers.changed) {
+      next.approvedSnapshot = { ...snapshot, members: snapshotMembers.next };
+    }
+    // bump revision：任何写入都要让界面/轮询知道计划变了（与 applyEdits 同一口径）。
+    next.revision = typeof plan.revision === "number" ? plan.revision + 1 : 1;
+    next.updatedAt = Date.now();
+    await writePlanWithRetry(dir, next);
+    return { ok: true, removed: true };
+  } catch (error) {
+    return { ok: false, removed: false, error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    await release().catch(() => undefined);
   }
 }

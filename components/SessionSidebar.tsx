@@ -2758,26 +2758,9 @@ function SessionFamilyItem({
           subtitle={subtitle}
         />
       </div>
-      {hasChildren && !collapsed && (
-        <div>
-          {node.children.map((child) => (
-            <SessionFamilyItem
-              key={child.session.id}
-              node={child}
-              depth={depth + 1}
-              selectedSessionId={selectedSessionId}
-              runningSessionIds={runningSessionIds}
-              awaitingInputSessionIds={awaitingInputSessionIds}
-              unreadSessionIds={unreadSessionIds}
-              teamRunningSessionIds={teamRunningSessionIds}
-              onSelectSession={onSelectSession}
-              onRenamed={onRenamed}
-              onSessionDeleted={onSessionDeleted}
-              subtitle={subtitle}
-            />
-          ))}
-        </div>
-      )}
+      {/* 不再展开子项（用户的明确要求：成员进度不想看、也不用看）。扩展弹框已经默认
+          允许，不需要靠「展开子会话」去盯成员。每个会话只显示自己那一行。
+          数据层仍保留 `node.children`（选中/运行态聚合要用），只是不渲染。 */}
     </div>
   );
 }
@@ -2994,9 +2977,11 @@ function SessionItem({
 
   const startRename = useCallback(() => {
     if (session.transient) return;
-    setRenameValue(session.name ?? "");
+    // 预填**当前显示的那个标题**，不是只有 `name`：从未重命名过的会话 `name` 是空的，
+    // 输入框开出来就是空白（用户报的「直接是空的」）。显示值 = name → 首条消息 → id 前缀。
+    setRenameValue(title);
     setRenaming(true);
-  }, [session.name, session.transient]);
+  }, [session.transient, title]);
 
   const beginDeleteConfirmation = useCallback(() => {
     if (session.transient) return;
@@ -3112,14 +3097,20 @@ function SessionItem({
       e.stopPropagation();
       return;
     }
-    // Replace the webview's own context menu (Reload / Inspect) with the row's actions.
-    if (isTauriDesktop() && !session.transient) {
-      // Suppresses the webview menu (Reload / Inspect); the row actions open
-      // natively only while native popups are on, otherwise via the "…" button.
-      e.preventDefault();
-      e.stopPropagation();
-      void showNativeSessionMenu({ x: e.clientX, y: e.clientY });
-    }
+    if (session.transient) return;
+    // 右键 = 同一份行操作，一个不能少。以前只有桌面壳会弹原生菜单，Web 里右键只会
+    // 冒出浏览器自己的 Reload / Inspect —— 「右键应该也要有很多操作」说的就是这个。
+    e.preventDefault();
+    e.stopPropagation();
+    void (async () => {
+      // 桌面壳优先走原生菜单（外观一致）；Web / 原生菜单不可用时退回 DOM 菜单，
+      // 位置就在光标处，而不是「…」按钮下方。
+      if (isTauriDesktop() && await showNativeSessionMenu({ x: e.clientX, y: e.clientY })) return;
+      const left = Math.max(8, Math.min(e.clientX, window.innerWidth - MENU_WIDTH - 8));
+      setMenuPos({ top: e.clientY + 2, left });
+      setMenuAnchor({ top: e.clientY, bottom: e.clientY, right: left + MENU_WIDTH });
+      setMenuOpen(true);
+    })();
   }, [onRenamed, session.cwd, session.id, session.name, session.path, session.transient, showNativeSessionMenu]);
 
   const toggleMenu = useCallback((e: React.MouseEvent) => {
@@ -3316,25 +3307,8 @@ function SessionItem({
             </span>
           )}
 
-          {/* Collapse toggle — always visible when has children */}
-          {hasChildren && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onToggleCollapse?.(); }}
-              title={t(collapsed ? "sidebar.expandSubagents" : "sidebar.collapseSubagents")}
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "center",
-                width: 20, height: 20, padding: 0, flexShrink: 0,
-                background: "none", border: "none",
-                color: "var(--text-dim)", cursor: "pointer",
-                transform: collapsed ? "rotate(-90deg)" : "none",
-                transition: "transform var(--dur-base) var(--ease-native)",
-              }}
-            >
-              <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="2 3.5 5 6.5 8 3.5" />
-              </svg>
-            </button>
-          )}
+          {/* 子项不再渲染，所以折叠箭头也不该出现——留一个点了没反应的按钮比没有更糟。
+              `hasChildren` 仍由上层用于选中/运行态聚合，只是不再驱动这里。 */}
 
           {/* Trailing slot: the row's last-activity time at rest, swapped in
               place for the "…" action button on hover (always the button on

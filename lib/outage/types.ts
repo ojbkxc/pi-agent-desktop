@@ -264,7 +264,11 @@ export function classifyOutageRecord(
 
 /** 记录是否已过期（死线或尝试次数），与 store 的 expire 判定一致。 */
 export function isOutageExpired(record: Pick<OutageRecord, "budget">, now: number): boolean {
-  return now >= record.budget.deadlineAt || record.budget.attempts >= record.budget.maxAttempts;
+  // `deadlineAt: 0` 是**不限**的哨兵（「所有错误持续重试」档要能几天几夜一直请求）。
+  // 用 0 而不是 Infinity：记录要落盘成 JSON，Infinity 会被序列化成 null，重启后读回来
+  // 就成了「立刻过期」。判据里必须显式判 `> 0`，否则 0 会让 `now >= 0` 恒真。
+  const deadlineReached = record.budget.deadlineAt > 0 && now >= record.budget.deadlineAt;
+  return deadlineReached || record.budget.attempts >= record.budget.maxAttempts;
 }
 
 /** 收窄一份未知形状的落盘记录；关键字段缺失返回 null（坏 JSON 降级用）。 */

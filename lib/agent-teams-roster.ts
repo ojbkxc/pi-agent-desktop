@@ -79,11 +79,32 @@ async function readJson<T>(path: string): Promise<T | null> {
   }
 }
 
+/**
+ * plan.json 里**确定还没派发**的状态：这些成员不占全局名额。
+ *
+ * 为什么要有这条（团队计数审计 P0-2）：`readPlanRosterMembers` 原本不看 `state`，于是一份
+ * 还没批准、甚至已经取消的计划里的成员照样被算成「活跃」，再叠加「停掉的名册条目永久
+ * 保留」（`release(tombstone:false)` 刻意如此），全局数字只涨不降——用户看到的
+ * 「活跃成员 34 / 上限 32」就是这么来的。
+ *
+ * 只排除**明确列举**的三种，其余一律照旧计入：字段缺失、老格式、上游新增状态都不猜——
+ * 少算一个真在跑的成员会让配额超卖（这正是要防的），多算一个未派发的只是回到旧行为。
+ */
+const UNDISPATCHED_PLAN_STATES: ReadonlySet<string> = new Set([
+  "draft",
+  "review_pending",
+  "cancelled",
+]);
+
 /** 读 plan.json 的成员（容错：缺失/损坏/无成员 ⇒ 空表；口径见文件头注释）。 */
 export async function readPlanRosterMembers(teamDir: string): Promise<PlanRosterMember[]> {
-  const plan = await readJson<{ members?: unknown }>(join(teamDir, "plan.json"));
+  const plan = await readJson<{ members?: unknown; state?: unknown; approvedSnapshot?: unknown }>(join(teamDir, "plan.json"));
   const raw = plan?.members;
   if (!Array.isArray(raw)) return [];
+  // 已批准的计划即使 state 还没流转（`approvedSnapshot` 已落盘）也要算：
+  // lead 随时会开始 spawn，把它们排除就是在给超卖开门。
+  const state = typeof plan?.state === "string" ? plan.state : "";
+  if (!plan?.approvedSnapshot && UNDISPATCHED_PLAN_STATES.has(state)) return [];
   const members: PlanRosterMember[] = [];
   for (const item of raw) {
     if (!item || typeof item !== "object") continue;

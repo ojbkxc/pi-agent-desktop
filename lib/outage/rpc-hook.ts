@@ -183,7 +183,13 @@ async function handleSettled(input: AgentRunSettledInput): Promise<AgentRunSettl
     providerPolicy,
     readModelRetryPolicySettings(outageSettingsPath(agentDir)).allMaxWaitHours,
   );
-  const effectiveMaxWaitMs = policyHours === undefined ? maxWaitMs : policyHours * 3_600_000;
+  // `policyHours === 0` 是「不限」：把 deadline 落成 0 哨兵（`isOutageExpired` 判 `> 0`）。
+  // `initialOutageBudget` 的 `now + 0` 会得到 now 本身（= 立刻过期），所以这里显式分流。
+  const effectiveMaxWaitMs = policyHours === undefined
+    ? maxWaitMs
+    : policyHours === 0
+      ? 0
+      : policyHours * 3_600_000;
   const maxAttempts = providerPolicy === "all" ? ALL_POLICY_MAX_ATTEMPTS : OUTAGE_DEFAULT_MAX_ATTEMPTS;
 
   // 会话事实：显式入参优先，其余从尾部读（拿不到就传 null，不阻塞挂起）。

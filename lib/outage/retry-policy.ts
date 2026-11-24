@@ -25,13 +25,23 @@ export const MODEL_RETRY_POLICIES: readonly ModelRetryPolicy[] = ["default", "tr
 export const DEFAULT_MODEL_RETRY_POLICY: ModelRetryPolicy = "default";
 
 /**
- * `all` 档的等待上限档位（小时）。比默认 6 小时宽，但仍是有界的：一个挂了几天的
- * 会话会一直占着调度器与磁盘记录，而真正的故障多半几小时内就能判断出来。
+ * `all` 档的等待上限档位（小时）。`0` = **不限**：操作者要的是「几天几夜都还在请求」，
+ * 而原来的 24 小时上限会把一个跨夜的模型故障当成放弃点。
+ *
+ * 仍然保留了 `ALL_POLICY_MAX_WAIT_HOURS_OPTIONS` 这个有限档位表供设置面选用——想设
+ * 上限的人照样能设，只是默认改成不限。
  */
-export const ALL_POLICY_MAX_WAIT_HOURS_OPTIONS: readonly number[] = [6, 24, 72, 168];
-export const DEFAULT_ALL_POLICY_MAX_WAIT_HOURS = 24;
-/** `all` 档的尝试次数上限：退避封顶 30 分钟，168 小时约 336 次，取整到 400。 */
-export const ALL_POLICY_MAX_ATTEMPTS = 400;
+export const ALL_POLICY_MAX_WAIT_HOURS_OPTIONS: readonly number[] = [0, 6, 24, 72, 168];
+export const DEFAULT_ALL_POLICY_MAX_WAIT_HOURS = 0;
+/**
+ * `all` 档的尝试次数上限：**不设**。
+ *
+ * 为什么不再填 400：退避已封顶 30 分钟，400 次大约就是 8 天——但那个数字会让「挂了
+ * 一周后模型恢复」的会话在恢复前一刻被判定 expired，与用户要的语义相反。判据里
+ * `attempts >= maxAttempts` 只有在 maxAttempts 为有限值时才可能成立，所以这里用
+ * `Number.POSITIVE_INFINITY` 的落盘安全替身（见下）之外的一个足够大的有限值并明确注释。
+ */
+export const ALL_POLICY_MAX_ATTEMPTS = Number.MAX_SAFE_INTEGER;
 
 export function isModelRetryPolicy(value: unknown): value is ModelRetryPolicy {
   return typeof value === "string" && (MODEL_RETRY_POLICIES as readonly string[]).includes(value);
@@ -85,12 +95,19 @@ export function applyModelRetryPolicy(
   return kind;
 }
 
-/** `all` 档的等待上限（小时）；其它档返回 undefined，由既有默认值决定。 */
+/**
+ * `all` 档的等待上限（小时）；其它档返回 undefined，由既有默认值决定。
+ *
+ * 返回 `0` 表示**不限**（`deadlineAt: 0` 哨兵，见 `isOutageExpired`）。非法值（负数、
+ * NaN、Infinity）一律落回默认——默认现在是 0（不限），所以坏值不会把会话锁在「立刻
+ * 过期」上。
+ */
 export function policyMaxWaitHours(
   policy: ModelRetryPolicy,
   allMaxWaitHours: number = DEFAULT_ALL_POLICY_MAX_WAIT_HOURS,
 ): number | undefined {
   if (policy !== "all") return undefined;
+  if (allMaxWaitHours === 0) return 0;
   const hours = Number.isFinite(allMaxWaitHours) && allMaxWaitHours > 0
     ? allMaxWaitHours
     : DEFAULT_ALL_POLICY_MAX_WAIT_HOURS;

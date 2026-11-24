@@ -27,6 +27,7 @@ import {
   tryReserveTeamWorkerSlot,
   withTeamConfigLock,
 } from "./agent-teams-swimlane-store";
+import { prunePlanRosterMember } from "./agent-teams-plan-write";
 
 /** 409 语义（上限/冲突/在跑）。 */
 export class MemberConflictError extends Error {
@@ -711,6 +712,28 @@ async function removeTeamMemberCore(deps: MembersDeps, name: string): Promise<Re
       status: "failed",
       sessionId,
       reason: `成员已停止，但名册移除失败：${error instanceof Error ? error.message : String(error)}；请重试移除`,
+    };
+  }
+
+  // 名册已经移掉，但**配额口径是 config ∪ plan**：不同步摘 plan 条目，全局数字一点不降，
+  // 对 launch 派发出来的成员更是永远删不掉（它们只在 plan 里）。失败如实报告，
+  // 不谎报「已移除」——用户要靠这个数字腾名额（团队计数审计 P0-1）。
+  try {
+    const pruned = await prunePlanRosterMember(deps.rawTeamName, name, deps.teamDir);
+    if (!pruned.ok) {
+      return {
+        name,
+        status: "failed",
+        sessionId,
+        reason: `成员已从 config 名册移除，但 plan.json 仍有同名条目（${pruned.error ?? "未知错误"}）：全局配额不会下降，请重试。`,
+      };
+    }
+  } catch (error) {
+    return {
+      name,
+      status: "failed",
+      sessionId,
+      reason: `成员已从 config 名册移除，但清理 plan.json 失败：${error instanceof Error ? error.message : String(error)}；全局配额不会下降，请重试。`,
     };
   }
 
