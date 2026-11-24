@@ -23,11 +23,13 @@
 
 import {
   enqueueTeamMutation,
+  readTeamQuotaLimits,
   releaseQuotaSlot,
   tryReserveTeamWorkerSlot,
   withTeamConfigLock,
 } from "./agent-teams-swimlane-store";
 import { prunePlanRosterMember } from "./agent-teams-plan-write";
+import { syncPiTeamQuotaEnv } from "./pi-team-quota-env";
 
 /** 409 语义（上限/冲突/在跑）。 */
 export class MemberConflictError extends Error {
@@ -518,6 +520,12 @@ function createSemaphore(size: number): { acquire: () => Promise<void>; release:
 
 export async function runGlobalQuotaGate(deps: GlobalQuotaGateDeps, inputs: readonly AddMemberInput[]): Promise<GlobalQuotaGateResult> {
   if (inputs.length === 0) return { conflict: null, results: [] };
+  // 派发前把桌面配额同步进 env，让上游 pi-team 的 checkSpawnLimits 与桌面用同一组数值。
+  // 不同步就会出现最难解释的失败：面板说还有余量 → 点派发 → `LIMIT_EXCEEDED (32)`。
+  // 上游只认正整数，所以桌面 `0`（不限）在这里被换成一个够大的值（见
+  // lib/pi-team-quota-env.ts）。
+  // per-team 上限从当前设置读（与 per-team 复核同一来源）；全局用本次派的 limit。
+  syncPiTeamQuotaEnv(process.env, { ...readTeamQuotaLimits(), globalLimit: deps.globalLimit });
   const results = new Array<AddMemberResult | undefined>(inputs.length);
   const semaphore = createSemaphore(Math.min(deps.concurrency ?? DEFAULT_SPAWN_CONCURRENCY, inputs.length));
   let conflict: string | null = null;
