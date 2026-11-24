@@ -35,13 +35,19 @@ function stubFetch() {
   return () => { globalThis.fetch = original; };
 }
 
-/** 与 useTeamPlan.test.mjs 同一套 mount 夹具：effect 由测试显式 flush。 */
-function mount(cwd) {
+/**
+ * 与 useTeamPlan.test.mjs 同一套 mount 夹具：hook 由参数传入、effect 由测试显式 flush。
+ *
+ * 为什么把 hook 当参数传而不是在 render 里直接写 `useModelCatalog(cwd)`：规则检查
+ * （`react-hooks/rules-of-hooks`）看到 hook 名出现在普通函数里就会报错。传进来是仓库既有
+ * 写法，也让这个夹具能复用到别的数据型 hook。
+ */
+function mount(hook, cwd) {
   let latest;
   const cleanups = [];
   const render = () => {
     ReactFake.__beginRender();
-    latest = useModelCatalog(cwd);
+    latest = hook(cwd);
   };
   ReactFake.__setNotify(render);
   ReactFake.__reset();
@@ -61,7 +67,7 @@ async function settle() {
 
 test("a cold mount still starts loading, then settles with the catalog", async (t) => {
   t.after(stubFetch());
-  const first = mount("/repo/cold-start");
+  const first = mount(useModelCatalog, "/repo/cold-start");
   first.flush();
   assert.equal(first.current.loading, true, "nothing cached yet: keep the spinner");
   await settle();
@@ -73,14 +79,14 @@ test("a cold mount still starts loading, then settles with the catalog", async (
 test("a remount for the same cwd starts ready: the first click is not swallowed", async (t) => {
   t.after(stubFetch());
   const cwd = "/repo/warm-start";
-  const first = mount(cwd);
+  const first = mount(useModelCatalog, cwd);
   first.flush();
   await settle();
   const loaded = first.current.catalog;
   first.unmount();
 
   // 重开弹框 = 卸载再挂载。缓存命中 ⇒ loading 初值 false，模型下拉立即可点。
-  const second = mount(cwd);
+  const second = mount(useModelCatalog, cwd);
   second.flush();
   assert.equal(second.current.loading, false, "the remount must not re-enter the loading window");
   assert.deepEqual(second.current.catalog, loaded, "…and it renders the cached catalog, not an empty one");
@@ -89,12 +95,12 @@ test("a remount for the same cwd starts ready: the first click is not swallowed"
 
 test("a different cwd does not reuse the cache", async (t) => {
   t.after(stubFetch());
-  const first = mount("/repo/project-a");
+  const first = mount(useModelCatalog, "/repo/project-a");
   first.flush();
   await settle();
   first.unmount();
 
-  const other = mount("/repo/project-b");
+  const other = mount(useModelCatalog, "/repo/project-b");
   other.flush();
   assert.equal(other.current.loading, true, "another project loads its own catalog");
   await settle();
