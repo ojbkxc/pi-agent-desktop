@@ -13,6 +13,7 @@ import {
   resolveLeadNames,
   teamDirFor,
 } from "@/lib/agent-teams-swimlane-store";
+import { readPlanRosterMembers } from "@/lib/agent-teams-roster";
 
 export const dynamic = "force-dynamic";
 
@@ -92,10 +93,18 @@ export async function GET(
   // 无锁重读的短暂竞态对建议端点无害（建议本就只展示）；写者侧已由 quota.lock 串行。
   const limits = readTeamQuotaLimits();
   const { total: globalWorkers } = await readGlobalRosterWorkers();
+  // `rosterWorkers` 必须与 `globalWorkers` 同源（都在 config ∪ plan，排 lead）：只数 config
+  // 会让本队 plan 独有成员在两处一隐一现，用户看到「本队 4/16、全局 12/64」这种自相矛盾的
+  // 组合（团队计数审计 P2-5）。plan 侧的过滤口径也在 readPlanRosterMembers 里（未派发不计）。
+  const planMembers = await readPlanRosterMembers(teamDir);
+  const rosterNames = new Set([
+    ...memberNames,
+    ...planMembers.map((member) => member.name).filter((name) => !leadNames.has(name)),
+  ]);
   const quota: TeamWorkloadQuota = {
     perTeamLimit: limits.perTeamLimit,
     globalLimit: limits.globalLimit,
-    rosterWorkers: memberNames.length,
+    rosterWorkers: rosterNames.size,
     globalWorkers,
   };
 
