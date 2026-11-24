@@ -9,6 +9,7 @@ import {
   validateDiscoveryBaseUrl,
 } from "@/lib/model-discovery-target";
 import { isApiRequestAllowed, hasJsonContentType } from "@/lib/request-security";
+import { isLocalRequest } from "@/lib/remote-access";
 import { buildModelsListUrl, collectModelPages, parseDiscoveredModels, type ModelPageFetchResult } from "@/lib/model-discovery";
 
 export const dynamic = "force-dynamic";
@@ -70,15 +71,26 @@ export async function POST(req: Request) {
     const requestedUrls = requestedDiscoveryBaseUrls(body.provider);
     const savedBaseUrl = await resolveSavedDiscoveryBaseUrl(providerName, readStoredProvider(providerName));
 
-    // SSRF guard: a newly introduced target may not be a literal local/private
-    // address. The provider's own saved endpoint (a local Ollama, say) is exempt —
-    // the user configured it and it is not an SSRF vector. Scheme is always checked.
+    const useStoredAuth = !disallowsStoredDiscoveryAuth(requestedUrls, savedBaseUrl);
+
+    // SSRF guard. Two different dangers live here, and they need different rules:
+    //  • **Credential exfiltration**: this machine's stored key must never be spent on a
+    //    host the request chose. That is already handled by `useStoredAuth` above.
+    //  • **Reaching an internal service**: the server would fetch whatever address it is
+    //    given, credentials or not. A local model server (`http://127.0.0.1:8787/v1`,
+    //    Ollama's 11434, LM Studio) is a *documented* target, so the split is **who is
+    //    asking**, not whether a key is involved: a request from this machine may point
+    //    at a local/private address; a request relayed from another machine, the
+    //    Tailscale funnel, or an allowed login may not.
+    // Workshop note: the first version keyed the exemption off "no stored credential",
+    // which let a remote client still probe loopback without sending a key — a
+    // regression the route tests caught.
+    const fromThisMachine = isLocalRequest(req);
     for (const url of requestedUrls) {
-      const invalid = validateDiscoveryBaseUrl(url, { allowPrivate: isSameDiscoveryBaseUrl(url, savedBaseUrl) });
+      const allowPrivate = fromThisMachine || isSameDiscoveryBaseUrl(url, savedBaseUrl);
+      const invalid = validateDiscoveryBaseUrl(url, { allowPrivate });
       if (invalid) return NextResponse.json({ error: invalid }, { status: 400 });
     }
-
-    const useStoredAuth = !disallowsStoredDiscoveryAuth(requestedUrls, savedBaseUrl);
 
     let auth: ModelDiscoveryAuth;
     if (useStoredAuth) {

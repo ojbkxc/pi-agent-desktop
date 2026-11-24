@@ -14,6 +14,7 @@ import {
   validateDiscoveryBaseUrl,
 } from "@/lib/model-discovery-target";
 import { hasJsonContentType, isApiRequestAllowed, readJsonBody } from "@/lib/request-security";
+import { isLocalRequest } from "@/lib/remote-access";
 
 export const dynamic = "force-dynamic";
 
@@ -75,17 +76,22 @@ export async function POST(req: Request) {
       // Unreadable models.json: the runtime still resolves auth.json credentials.
     }
 
-    // SSRF / credential-exfiltration guard: a request that points at a Base URL
-    // other than the saved provider endpoint must not carry this machine's stored
-    // credentials. A newly introduced literal local/private target is rejected;
-    // the provider's own saved endpoint (a local Ollama, say) is exempt.
+    // SSRF / credential-exfiltration guard. Two dangers, two rules:
+    //  • the stored key must never be spent on a request-chosen host (handled by
+    //    `useStoredAuth` below), and
+    //  • the server must not be steered at an internal service. A local model server
+    //    is a documented target, so the split is **who is asking**: a request from this
+    //    machine may target a local/private address; one relayed from another machine,
+    //    the Tailscale funnel, or an allowed login may not.
     const requestedUrls = requestedDiscoveryBaseUrls(body.provider, body.model);
     const savedBaseUrl = await resolveSavedDiscoveryBaseUrl(providerName, storedProvider);
+    const useStoredAuth = !disallowsStoredDiscoveryAuth(requestedUrls, savedBaseUrl);
+    const fromThisMachine = isLocalRequest(req);
     for (const url of requestedUrls) {
-      const invalid = validateDiscoveryBaseUrl(url, { allowPrivate: isSameDiscoveryBaseUrl(url, savedBaseUrl) });
+      const allowPrivate = fromThisMachine || isSameDiscoveryBaseUrl(url, savedBaseUrl);
+      const invalid = validateDiscoveryBaseUrl(url, { allowPrivate });
       if (invalid) return NextResponse.json({ ok: false, error: invalid }, { status: 400 });
     }
-    const useStoredAuth = !disallowsStoredDiscoveryAuth(requestedUrls, savedBaseUrl);
 
     // With a saved endpoint, fold the stored provider back in (the editor omits
     // the redacted literal apiKey). For an unsaved endpoint, keep only what the

@@ -112,13 +112,17 @@ test("an unsaved endpoint still sends a key the request typed itself", async (t)
   assert.equal(requests[0].headers.get("authorization"), "Bearer sk_typed_literal");
 });
 
-test("rejects a loopback / private Base URL (SSRF guard)", async () => {
+test("a loopback Base URL from this machine is allowed (the reported case)", async () => {
+  // `http://127.0.0.1:8787/v1` for a local model server, added from the desktop app:
+  // the request comes from this machine, so the private-address guard does not apply.
+  // It used to be refused with "Base URL cannot point at a local or private network
+  // address" — that is the report this test pins.
   const response = await discover({
     providerName: "saved-provider",
     provider: { baseUrl: "http://127.0.0.1:11434/v1", api: "openai-completions" },
   });
-  assert.equal(response.status, 400);
-  assert.match(String((await response.json()).error), /local or private/i);
+  assert.notEqual(response.status, 400, await response.clone().text());
+  assert.doesNotMatch(String(await response.json().catch(() => "")), /local or private/i);
 });
 
 test("rejects a non-http(s) Base URL", async () => {
@@ -150,16 +154,18 @@ test("a saved loopback provider is allowed (the user's own local endpoint)", asy
   assert.equal(requests[0].url, "http://127.0.0.1:11434/v1/models");
 });
 
-test("an unsaved loopback Base URL is still rejected", async () => {
+test("a loopback Base URL is allowed once the request brings its own key", async () => {
+  // Adding `http://127.0.0.1:8787/v1` for a local model server: no stored credential
+  // is spent, so the SSRF guard must not refuse it (that refusal was the report).
   const response = await discover({
     providerName: "brand-new-local",
-    provider: { baseUrl: "http://127.0.0.1:11434/v1", api: "openai-completions" },
+    provider: { baseUrl: "http://127.0.0.1:11434/v1", api: "openai-completions", apiKey: "local-key" },
   });
-  assert.equal(response.status, 400);
-  assert.match(String((await response.json()).error), /local or private/i);
+  assert.notEqual(response.status, 400, await response.clone().text());
+  assert.doesNotMatch(String(await response.json().catch(() => "")), /local or private/i);
 });
 
-test("IPv6 / IPv4-mapped 私网：未保存的新 baseUrl 一律 400", async () => {
+test("IPv6 / IPv4-mapped private targets from this machine are allowed too", async () => {
   for (const baseUrl of [
     "http://[::ffff:127.0.0.1]:11434/v1", // URL normalizes the host to [::ffff:7f00:1]
     "http://[::1]:11434/v1",
@@ -170,9 +176,24 @@ test("IPv6 / IPv4-mapped 私网：未保存的新 baseUrl 一律 400", async () 
       providerName: "brand-new-v6",
       provider: { baseUrl, api: "openai-completions" },
     });
-    assert.equal(response.status, 400, baseUrl);
-    assert.match(String((await response.json()).error), /local or private/i, baseUrl);
+    assert.notEqual(response.status, 400, baseUrl);
+    assert.doesNotMatch(String(await response.json().catch(() => "")), /local or private/i, baseUrl);
   }
+});
+
+test("a relayed request is not treated as local (the guard's other half)", async () => {
+  // The route's own origin gate already refuses a request that arrives with a
+  // foreign Host/forwarded marker (403), so the private-address rule never gets to
+  // run for it. What matters here is that `isLocalRequest` — the flag the guard keys
+  // the exemption off — answers `false` for a relayed caller and `true` for a local
+  // one. Written at the unit level because the route cannot reach that branch.
+  const { isLocalRequest } = await jiti.import("../../../../lib/remote-access.ts");
+  const local = new Request("http://localhost/api/models-config/discover", { headers: { Host: "localhost" } });
+  const relayed = new Request("http://localhost/api/models-config/discover", {
+    headers: { Host: "localhost", "x-forwarded-for": "203.0.113.9" },
+  });
+  assert.equal(isLocalRequest(local), true, "a request from this machine counts as local");
+  assert.equal(isLocalRequest(relayed), false, "a relayed request does not");
 });
 
 test("IPv6-mapped 回环：已保存等价 endpoint 时放行", async (t) => {
