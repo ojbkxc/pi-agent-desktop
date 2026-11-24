@@ -459,6 +459,15 @@ export function PlanEditor({ plan, cwd = null, editable, saving = false, saveErr
                     applyModelRef(value);
                   }}
                   options={[{ value: "", label: t("teams.plan.batchPick") }, ...modelOptions]}
+                  // 两个「不能选」的原因长得一模一样，用户只能靠多点几次试：没勾成员 vs
+                  // 目录还在加载。title 点明是哪一个（`AppSelect` 只透传一个 disabled）。
+                  title={
+                    selected.length === 0
+                      ? t("teams.plan.batchNeedSelection")
+                      : catalog.loading
+                        ? t("teams.plan.modelsLoading")
+                        : undefined
+                  }
                   disabled={selected.length === 0 || catalog.loading}
                 />
               </div>

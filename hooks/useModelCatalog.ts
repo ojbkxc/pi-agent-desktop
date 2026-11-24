@@ -51,6 +51,33 @@ export interface ModelCatalogController {
   refresh: () => void;
 }
 
+/**
+ * 模块级目录缓存。
+ *
+ * 为什么需要它（审批弹框「点几次才好」的根因）：模型下拉在
+ * `disabled={!editable || catalog.loading}`，而 `loading` 初值是 `true`。`AppSelect`
+ * 把 `disabled` 传给原生 `<button disabled>`，浏览器**根本不派发 click**，于是「打开
+ * 弹框后马上点模型下拉」的第一下被整个吞掉，要等 `/api/models` 回来（几百毫秒，隧道下
+ * 更久）再点才有反应。重开弹框会卸载 `PlanEditor` 再挂载，`loading` 复位，所以同一个
+ * 窗口会反复出现——用户感受就是「要点几次」。
+ *
+ * 口径：按 cwd 键控、60 秒有效；`refresh()`（nonce 变化）永远绕过缓存重新拉取。它只让
+ * **第二次及以后的挂载**不再经历一次加载窗口，不改变首次挂载与刷新的语义。
+ */
+const CATALOG_CACHE_TTL_MS = 60_000;
+let catalogCache: { cwd: string | null; data: ModelCatalog; at: number } | null = null;
+
+function readCatalogCache(cwd: string | null): ModelCatalog | null {
+  if (!catalogCache) return null;
+  if (catalogCache.cwd !== cwd) return null;
+  if (Date.now() - catalogCache.at > CATALOG_CACHE_TTL_MS) return null;
+  return catalogCache.data;
+}
+
+function writeCatalogCache(cwd: string | null, data: ModelCatalog): void {
+  catalogCache = { cwd, data, at: Date.now() };
+}
+
 const NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
 /** 'provider/modelId'；provider 与 id 都可能自身含斜杠，故拼接不解析回拆。 */
@@ -158,14 +185,21 @@ export function buildModelCatalog(modelsPayload: unknown, enabledPayload: unknow
  * 模型列表失败 → error + 空目录；启用端点失败只降级（不影响可选列表）。
  */
 export function useModelCatalog(cwd?: string | null): ModelCatalogController {
-  const [catalog, setCatalog] = useState<ModelCatalog>(EMPTY_MODEL_CATALOG);
-  const [loading, setLoading] = useState(true);
+  // 命中缓存就以 `loading=false` 起渲染：模型下拉立即可点，第一次点击不再被吞
+  // （见上面 `catalogCache` 的注释）。未命中仍是原来的 `true`。
+  const warm = readCatalogCache(cwd ?? null);
+  const [catalog, setCatalog] = useState<ModelCatalog>(warm ?? EMPTY_MODEL_CATALOG);
+  const [loading, setLoading] = useState(warm === null);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    // 缓存命中时**首轮不进加载态**：否则 effect 一跑就把 `loading` 拨回 true，模型下拉又
+    // 变成 disabled、第一下点击继续被吞——缓存就白做了。只在这一轮（挂载后第一次 effect）
+    // 且确实有同 cwd 缓存时跳过；`refresh()`（nonce 变化）与切 cwd 仍然照常置 loading。
+    const servedFromCache = nonce === 0 && warm !== null;
+    if (!servedFromCache) setLoading(true);
     setError(null);
     const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
     // d5-24：远程/隧道访问下连接可能半开挂起——没有超时 loading 会永卡且同 cwd
@@ -183,7 +217,10 @@ export function useModelCatalog(cwd?: string | null): ModelCatalogController {
           ? await enabledResponse.json() as unknown
           : null;
         if (cancelled) return;
-        setCatalog(buildModelCatalog(modelsPayload, enabledPayload));
+        const next = buildModelCatalog(modelsPayload, enabledPayload);
+        setCatalog(next);
+        // 缓存只用于「下一次挂载不再走加载窗口」，不影响本次渲染。
+        writeCatalogCache(cwd ?? null, next);
       } catch (err) {
         if (cancelled) return;
         setCatalog(EMPTY_MODEL_CATALOG);
