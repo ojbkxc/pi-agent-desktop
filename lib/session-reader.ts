@@ -720,8 +720,24 @@ export function invalidateSessionPathCache(sessionId: string): void {
   }
 }
 
+/**
+ * Drop a leading UTF-8 BOM. Same one-liner the repo's other JSON readers use
+ * (`lib/global-settings-file.ts`, `lib/jsonc.ts`) — the session readers were the
+ * only ones without it.
+ */
+function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
 export function readSessionHeader(filePath: string): SessionHeader | null {
-  const firstLine = readBoundedLines(filePath, SESSION_HEADER_MAX_BYTES, 1)[0]?.trimEnd();
+  const raw = readBoundedLines(filePath, SESSION_HEADER_MAX_BYTES, 1)[0];
+  if (!raw) return null;
+  // A UTF-8 BOM in front of the header makes `JSON.parse` fail, and the whole
+  // session then disappears from the list and 404s on open (persistence 审计
+  // P2-2). PowerShell 5.1's `Out-File -Encoding utf8`, Notepad and several sync
+  // tools all write those three bytes. Every other JSON reader in this repo
+  // already tolerates a BOM; the session readers did not.
+  const firstLine = stripBom(raw).trimEnd();
   if (!firstLine) return null;
   try {
     const header = JSON.parse(firstLine) as SessionHeader;

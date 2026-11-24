@@ -46,7 +46,12 @@ function finish(totalsByKey: Map<string, Totals>): UsageCostBreakdownEntry[] {
 export function getUsageCostBreakdown(entries: SessionEntry[]): UsageCostBreakdownEntry[] {
   const totalsByKey = new Map<string, Totals>();
   for (const entry of entries) {
-    if (entry.type === "message") addMessage(totalsByKey, entry.message as AgentMessage);
+    // Same guard as `session-stats`: an entry typed `message` without a message
+    // object is malformed, and reading `.role` off it threw a TypeError that
+    // turned every stats/detail read for that session into a 500.
+    if (entry.type === "message") {
+      if (entry.message && typeof entry.message === "object") addMessage(totalsByKey, entry.message as AgentMessage);
+    }
     else if (entry.type === "usage") addUsage(totalsByKey, `${entry.provider}/${entry.model}`, entry.usage);
     else if (entry.type === "compaction" || entry.type === "branch_summary") {
       addUsage(totalsByKey, UNATTRIBUTED_USAGE_KEY, entry.usage);

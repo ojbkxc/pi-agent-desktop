@@ -118,7 +118,12 @@ async function readSessionHeaderSummary(filePath: string): Promise<RawEntry | nu
 		const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
 		if (bytesRead <= 0) return null;
 		const source = buffer.subarray(0, bytesRead).toString("utf8");
-		for (const line of source.split("\n")) {
+		// A leading UTF-8 BOM breaks `JSON.parse` on the header line, so the whole
+		// file is judged "no session header" and dropped from the index and the list
+		// (persistence 审计 P2-2). PowerShell 5.1 / Notepad / some sync tools write
+		// those three bytes; every other JSON reader in this repo strips them.
+		const withoutBom = source.charCodeAt(0) === 0xfeff ? source.slice(1) : source;
+		for (const line of withoutBom.split("\n")) {
 			const entry = parseLine(line.replace(/\r$/, ""));
 			if (!entry) continue;
 			return entry.type === "session" ? entry : null;

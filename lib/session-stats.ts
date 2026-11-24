@@ -124,6 +124,11 @@ export function computeSessionStats(entries: SessionEntry[]): SessionFileStats {
       continue;
     }
     if (entry.type !== "message") continue;
+    // A `message` entry without a `message` object is malformed, but it must not
+    // take the whole stats read — and with it the session detail request — down
+    // with a TypeError (persistence 审计 P3-1). The list scanner already guards
+    // this shape, so skipping here keeps "listed but 500 on open" from happening.
+    if (!entry.message || typeof entry.message !== "object") continue;
     addMessage(stats, entry.message);
   }
 
