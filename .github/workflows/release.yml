@@ -131,15 +131,21 @@ jobs:
           releaseBody: |
             ## Pi Agent Desktop 0.8.7 (fork)
 
-            **2026-11-24 · 覆盖式重发（第十五次）**
+            **2026-11-24 · 覆盖式重发（第十六次）**
 
             > 版本号保持 0.8.7 不变，本次构建替换上一版的全部安装包。升级方式与普通更新相同，直接覆盖安装即可；配置、会话与任务记录都在 `~/.pi/agent/`，不受影响。
 
             本 fork 基于上游 pi-agent-desktop 0.8.2 / pi-web 0.10 构建，已并入上游 pi-web **v0.10 → v0.17** 的全部安全、稳定性与性能修复，并在此之上维护本 fork 的桌面功能线。
 
-            本次是第十五次覆盖重发：一批来自实际使用的问题全修了——**持续重试真正不设上限**（几天几夜还在请求）、**团队上限可以设成「不限」**、**删成员真的降配额**、**批准后弹框立刻收起**、**重命名预填原名**、**右键菜单补齐**、**TPS 用真实 usage 对齐**、**目标条能暂停/恢复**，外加破甲控制台的纯转发提示与两条会话状态修复。
+            本次是第十六次覆盖重发：**审批弹框「点几次才好」的根因修掉了**（模型目录缓存），加上把强杀 App 后残留的 server 孤儿一并清掉。
 
             ### 本次重发新增 / Fixes in this re-release
+
+            - **审批弹框「点几次才好」/ model catalog cache.** 打开「Review configuration」后立刻点成员的模型下拉——完全没反应，等一两秒再点才行，重开弹框又得重来。根因：下拉是 `disabled={!editable || catalog.loading}`，而 `useModelCatalog` 的 `loading` 初值恒为 `true`；`AppSelect` 把 `disabled` 传给原生 `<button disabled>`，浏览器**根本不派发 click**，第一下被整个吞掉。现在按 cwd 键控的模块级缓存（60 秒，`refresh()` 绕过）让**第二次及以后的挂载**直接以 `loading=false` 起渲染，且 effect 首轮在命中缓存时不再把 `loading` 拨回 true——两层缺一都不成。顺带把批量下拉的两个禁用原因（没勾成员 / 目录加载中）用 `title` 分清楚，不再长得一模一样。
+            - **强杀 App 后残留的 server 孤儿 / orphaned sidecar.** 观测到 App 被强杀后留下一个旧 server，新实例又起一个，两个同时监听不同端口。看门狗本来就在（日志里有多次正常触发），漏的是判据：**Windows 上父进程死后 `process.ppid` 不会变成 1**，而 `kill(pid, 0)` 在 PID 被复用时会对无关进程返回成功——两条判据同时放行。补第三条 `process.ppid !== expectedParentPid`（父已换人），并排在 `kill()` 之前判。
+
+            ### 第十五次重发内容 / Fixes in the previous re-release
+
 
             - **「所有错误——持续重试」真的持续 / unlimited retry.** 上一版给 24 小时 / 400 次上限：一个跨夜的模型故障会在恢复前一刻被判 `expired`，与「几天几夜还在请求」正好相反。现在 `deadlineAt: 0` 作「不限」哨兵（不能用 Infinity——落盘成 JSON 会变 null，重启读回来就成了立刻过期），`maxAttempts` 抬到 `MAX_SAFE_INTEGER`；`isOutageExpired` 与 `advanceOutageBudget` 都显式判 `> 0`，否则 0 会让 `now >= 0` 恒真。刹车仍由 Stop / 取消负责——那不是上限，是操作者的手。回归测试推进 20 万次仍然不过期，并保留「有限档仍然会过期」的对照。
             - **团队上限可以设成「不限」/ unlimited team quota.** 报错「活跃成员 34 已超过上限 32」的根子是**上限本身**：操作者要的是「我说派多少就派多少」，而配额把 0 当非法值回落默认，于是永远有一道关不掉的闸。现在 `0` 是合法的「不限」（设置项与 env 同义，负数也当不限），两处判据补 `limit > 0`（少了它 0 会让 `used + inflight >= 0` 恒真、把每一次派发都拒掉）。并发度刻意不跟随：0 个并发是静默死锁，仍回落默认 4。
