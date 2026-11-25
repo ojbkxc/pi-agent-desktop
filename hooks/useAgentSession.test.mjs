@@ -508,7 +508,13 @@ test("keeps one reducer-owned assistant partial and consumes Pi JSON deltas", ()
   assert.match(streamSource, /if \(isSystemMessageEvent\(event\)\) break;/);
   assert.match(messageEndSource, /if \(isSystemMessageEvent\(event\)\) break;/);
   assert.match(messageEndSource, /normalizeToolCalls\(completed\)/);
-  assert.match(messageEndSource, /dispatch\(\{ type: "end" \}\)/);
+  // `end` 必须带上完成消息：只有它带真实 `usage.output`，速度条才能在本轮结束时从
+  // 「字符÷4 估算」切到真实 token/s（旧形态不带消息，那个分支永远是 undefined）。
+  assert.match(
+    messageEndSource,
+    /dispatch\(\{ type: "end", message: completed\?\.role === "assistant" \? completed : undefined \}\)/,
+    "message_end must hand the finished message to the stream store",
+  );
   assert.doesNotMatch(messageEndSource, /streamState\.streamingMessage/);
 });
 
