@@ -120,7 +120,7 @@ test("laneTitleKey labels root, intermediate and wrap-up layers", () => {
   assert.equal(laneTitleKey(0, 0), "teams.boardRoot");
 });
 
-test("countTaskStates is mutually exclusive, five-state and treats missing dependencies as resolved", () => {
+test("countTaskStates is mutually exclusive, six-state and treats missing dependencies as resolved", () => {
   const tickets = [
     ticket("t1", { status: "ended", assignments: [assignment("ended", "completed")] }),
     ticket("t2", { assignments: [assignment("running")] }),
@@ -128,14 +128,21 @@ test("countTaskStates is mutually exclusive, five-state and treats missing depen
     ticket("t4", { dependencies: ["t2"] }),
     ticket("t5", { dependencies: ["missing"] }),
     ticket("t6", { status: "ended", assignments: [assignment("ended", "failed")] }),
+    // G11：已派未开工（pending 派活）单列一态，不再算进 available。
+    ticket("t7", { assignments: [assignment("pending")] }),
   ];
   assert.deepEqual(countTaskStates(tickets), {
     failed: 1,
     blocked: 1,
+    assigned: 1,
     available: 2,
     running: 1,
     completed: 1,
   });
+  // 互斥性：六态之和等于票数（不多算、不漏算）。
+  const counts = countTaskStates(tickets);
+  const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
+  assert.equal(total, tickets.length, "六态必须互斥且穷尽");
 });
 
 test("dependencyPath runs from the dependency's right edge to the dependent's left edge", () => {

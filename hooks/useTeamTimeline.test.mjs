@@ -120,6 +120,55 @@ test("a changed generatedAt or version appends a new frame", () => {
   assert.equal(third.length, 3);
 });
 
+// ── contentHash 去重（生产路径）────────────────────────────────────────────────
+// 上一组用例跑的是「快照没有 contentHash」的向后兼容回退分支。生产快照总是带
+// contentHash，且 version 恒为 1、generatedAt 每轮都变——所以必须单独锁住新口径，
+// 否则回退分支全绿也说明不了真实链路是对的。
+
+function snapshotWithHash(generatedAt, contentHash) {
+  return { ...snapshot(generatedAt), contentHash };
+}
+
+test("同 contentHash + 不同 generatedAt 不追加新帧（修掉「60 帧同一张图」）", () => {
+  const first = snapshotWithHash(at(1), "aaaa1111aaaa1111");
+  const snapshots = appendTeamSnapshot([], first);
+  assert.equal(snapshots.length, 1);
+
+  // 内容未变，只是下一轮轮询换了时间戳：必须返回同一数组引用。
+  const unchanged = appendTeamSnapshot(snapshots, snapshotWithHash(at(2), "aaaa1111aaaa1111"));
+  assert.equal(unchanged, snapshots, "contentHash 相同必须保持引用不变");
+  assert.equal(unchanged.length, 1);
+
+  // 再轮询两次也不追加——模拟空闲团队连轮询。
+  let current = unchanged;
+  for (let second = 3; second <= 6; second += 1) {
+    current = appendTeamSnapshot(current, snapshotWithHash(at(second), "aaaa1111aaaa1111"));
+  }
+  assert.equal(current.length, 1, "空闲团队不应堆帧");
+});
+
+test("contentHash 变化必须追加新帧（新消息/新状态不能漏）", () => {
+  const first = snapshotWithHash(at(1), "aaaa1111aaaa1111");
+  const snapshots = appendTeamSnapshot([first], snapshotWithHash(at(2), "bbbb2222bbbb2222"));
+  assert.equal(snapshots.length, 2, "内容变了必须追加");
+  assert.equal(snapshots[1].contentHash, "bbbb2222bbbb2222");
+});
+
+test("contentHash 优先于 version/generatedAt：两者相同但 hash 不同也算新帧", () => {
+  // 防御未来有人把 version 改成真版本号：口径以 contentHash 为准。
+  const first = { ...snapshot(at(1)), contentHash: "cccc3333cccc3333" };
+  const next = { ...snapshot(at(1)), contentHash: "dddd4444dddd4444" };
+  assert.equal(appendTeamSnapshot([first], next).length, 2);
+});
+
+test("只有一侧带 contentHash 时回退到 version + generatedAt（向后兼容）", () => {
+  const legacy = snapshot(at(1));
+  const withHash = snapshotWithHash(at(1), "eeee5555eeee5555");
+  // 两侧都缺才走旧口径；一侧有一侧无 → 按旧口径比较，不同即追加。
+  assert.equal(appendTeamSnapshot([legacy], snapshot(at(1))).length, 1, "都缺 hash 且同时间戳 ⇒ 去重");
+  assert.equal(appendTeamSnapshot([legacy], withHash).length, 2, "只有一侧带 hash ⇒ 视为变化");
+});
+
 test("history is capped at the newest WORKBENCH_HISTORY_LIMIT frames", () => {
   let snapshots = [];
   for (let index = 0; index < WORKBENCH_HISTORY_LIMIT + 5; index += 1) {

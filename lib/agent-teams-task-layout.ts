@@ -33,22 +33,32 @@ const BASE_DEPTH_COLUMN_HEIGHT = (TASK_TOP - DEPTH_COLUMN_TOP) * 2;
  * - completed：票已 ended；
  * - in_progress：存在 running 的派活；
  * - blocked：仍有未 ended 的依赖票；
- * - available：无未完成依赖，等待认领。
+ * - assigned：**已派活但成员还没开工**（存在 pending 派活）。
+ * - available：无未完成依赖，且**没人认领**，等待认领。
+ *
+ * assigned 与 available 必须分开：旧口径把「已派未开工」也归进 available，
+ * 而 available 的界面文案是「可认领」——但成员侧根本没有 claim 工具
+ * （`team_ticket` 的 11 个 operation 里无 claim），所以那是假承诺。
+ * 分开之后「可认领」只剩真正无人负责的票。
  */
-export type TeamTaskState = "completed" | "in_progress" | "blocked" | "available";
+export type TeamTaskState = "completed" | "in_progress" | "blocked" | "assigned" | "available";
 
 /**
  * 展示层的紧急度口径——唯一真源，在 TeamTaskState 之上叠加「派活失败」：
- * failed > blocked > available > running > completed（顺序即优先级）。
+ * failed > blocked > assigned > available > running > completed（顺序即优先级）。
  * failed 只在票已 ended 且存在 outcome=failed 的派活时出现；in_progress 映射为
  * running（与 CSS 后缀 `--running` 对齐）。
+ *
+ * assigned 排在 blocked 之后、available 之前：它是个「停滸信号」——活已经派给人了、
+ * 但那人没开工，lead 应该去摧一下；比无人认领的 backlog 更该被看见。
  */
-export type TicketUrgency = "failed" | "blocked" | "available" | "running" | "completed";
+export type TicketUrgency = "failed" | "blocked" | "assigned" | "available" | "running" | "completed";
 
 /** 顺序即优先级（最紧急在前）；排序/择优时按此数组下标判定。 */
 export const URGENCY_ORDER: readonly TicketUrgency[] = [
   "failed",
   "blocked",
+  "assigned",
   "available",
   "running",
   "completed",
@@ -56,8 +66,9 @@ export const URGENCY_ORDER: readonly TicketUrgency[] = [
 
 /** 数值越大越紧急；由 URGENCY_ORDER 语义派生，便于比较与排序。 */
 export const URGENCY_WEIGHT: Record<TicketUrgency, number> = {
-  failed: 5,
-  blocked: 4,
+  failed: 6,
+  blocked: 5,
+  assigned: 4,
   available: 3,
   running: 2,
   completed: 1,
@@ -133,7 +144,14 @@ export function getTeamTaskState(
     const dependency = ticketsById.get(dependencyId);
     return dependency !== undefined && dependency.status !== "ended";
   });
-  return blocked ? "blocked" : "available";
+  // blocked 优先于 assigned：票既然被依赖卡着，就算有人认领也开不了工，
+  // 显示「阻塞」比显示「已派未开工」更能解释当前为甚么不动。
+  if (blocked) return "blocked";
+  // 已派活、但派活还没进入 running：有人负责但没开工。这不是「可认领」。
+  if (ticket.assignments.some((assignment) => assignment.status === "pending")) {
+    return "assigned";
+  }
+  return "available";
 }
 
 /**

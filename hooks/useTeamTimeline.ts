@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { TeamWorkbenchSnapshot } from "@/lib/agent-teams-swimlane";
 
 /** 历史快照上限：3 秒一轮询时约等于最近 3 分钟的团队动态。 */
@@ -40,16 +40,36 @@ export function isLiveTeamStatus(status: string | undefined): boolean {
 }
 
 /**
- * 追加一条快照。version 与 generatedAt 都与当前末条相同时视为同一份数据，
- * 直接返回原数组（引用不变，React 不重渲染）；超出上限时保留最新的一段。
+ * 追加一条快照。**按 contentHash 去重**（引用不变，React 不重渲染）；
+ * 超出上限时保留最新的一段。
+ *
+ * 为什么不再比 `version + generatedAt`：`version` 是硬编码的 schema 常量 1（永不变化），
+ * `generatedAt` 每次快照都是新时间戳（`agent-teams-swimlane-store.ts` 的
+ * `new Date().toISOString()`）——两者都不可能相等，旧口径的去重分支在生产环境
+ * **永不成立**，每轮轮询都追加一帧，60 帧回放变成 60 张同一帧。
+ * `contentHash` 是服务端算的「除 generatedAt 外全量内容」指纹，才是真的变更信号。
+ *
+ * 缺 contentHash 的快照（旧固件 / 测试夹具）回退到旧口径，保证向后兼容。
  */
 export function appendTeamSnapshot(
   snapshots: TeamWorkbenchSnapshot[],
   snapshot: TeamWorkbenchSnapshot,
 ): TeamWorkbenchSnapshot[] {
   const last = snapshots[snapshots.length - 1];
-  if (last?.version === snapshot.version && last.generatedAt === snapshot.generatedAt) {
-    return snapshots;
+  if (last) {
+    let same: boolean;
+    if (last.contentHash && snapshot.contentHash) {
+      // 生产路径：以内容指纹为准。
+      same = last.contentHash === snapshot.contentHash;
+    } else if (!last.contentHash && !snapshot.contentHash) {
+      // 两侧都缺（旧固件 / 测试夹具）：回退旧口径，保持向后兼容。
+      same = last.version === snapshot.version && last.generatedAt === snapshot.generatedAt;
+    } else {
+      // 只有一侧带指纹：无法证明内容相同 ⇒ 按变化处理。
+      // 宁可多一帧（视觉上多一格），不可漏一次更新（漏了就是「改了不刷新」）。
+      same = false;
+    }
+    if (same) return snapshots;
   }
   const next = [...snapshots, snapshot];
   return next.length > WORKBENCH_HISTORY_LIMIT ? next.slice(-WORKBENCH_HISTORY_LIMIT) : next;
@@ -293,7 +313,7 @@ export interface TeamTimelineController {
  *
  * - 轮询交给 createSnapshotPoller：只在团队 forming/running/finishing 时继续；
  *   页面隐藏时跳过到期的拉取、切回前台立即补拉；失败退避重试（上限 30 秒）。
- * - 新快照按 version + generatedAt 去重，最多保留 WORKBENCH_HISTORY_LIMIT 条。
+ * - 新快照按 contentHash 去重，最多保留 WORKBENCH_HISTORY_LIMIT 条。
  * - 回放钉住的是「帧身份 frameKey」而不是数组下标：历史满 60 帧丢弃最旧帧、
  *   下标整体左移时，被钉住的帧不会漂移；该帧被淘汰则夹到最旧帧并置 frameExpired。
  */
@@ -304,6 +324,8 @@ export function useTeamTimeline(teamName: string | null, reloadKey = 0): TeamTim
   const [speed, setSpeedState] = useState<ReplaySpeed>(1);
   const [loading, setLoading] = useState(Boolean(teamName));
   const [failed, setFailed] = useState(false);
+  // 最近一帧（不触发渲染的引用）：用于 ?since= 条件请求与 304 回退。
+  const lastSnapshotRef = useRef<TeamWorkbenchSnapshot | null>(null);
 
   // 换团队时清空时间线；轮询、可见性与重试都收在 createSnapshotPoller 里。
   useEffect(() => {
@@ -311,6 +333,7 @@ export function useTeamTimeline(teamName: string | null, reloadKey = 0): TeamTim
     setPinnedFrame(null);
     setPlaying(false);
     setFailed(false);
+    lastSnapshotRef.current = null;
     if (!teamName) {
       setLoading(false);
       return;
@@ -318,14 +341,26 @@ export function useTeamTimeline(teamName: string | null, reloadKey = 0): TeamTim
     setLoading(true);
     const poller = createSnapshotPoller({
       fetchSnapshot: async () => {
+        // 带 ?since=<contentHash>：内容未变时服务端回 304，省掉整棵快照的 JSON 序列化
+        // 与客户端解析。304 不是 response.ok（不在 200-299），必须单独判——直接拿上一帧
+        // 顶上，appendTeamSnapshot 会按 contentHash 去重成 no-op。
+        const since = lastSnapshotRef.current?.contentHash;
+        const query = since ? `?since=${encodeURIComponent(since)}` : "";
         // signal 与判死同源：超时不仅让 race 落地，还要真正 abort 底层请求，
         // 否则半开连接下挂起请求只增不减（state.md P1）。
-        const response = await fetch(`/api/teams/${encodeURIComponent(teamName)}/workbench`, {
+        const response = await fetch(`/api/teams/${encodeURIComponent(teamName)}/workbench${query}`, {
           cache: "no-store",
           signal: AbortSignal.timeout(SNAPSHOT_TIMEOUT_MS),
         });
+        if (response.status === 304) {
+          // 首帧不可能 304（那时还没发 since）；若真发生则当错误，交给退避重试。
+          if (!lastSnapshotRef.current) throw new Error("HTTP 304 without a prior snapshot");
+          return lastSnapshotRef.current;
+        }
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return await response.json() as TeamWorkbenchSnapshot;
+        const snapshot = await response.json() as TeamWorkbenchSnapshot;
+        lastSnapshotRef.current = snapshot;
+        return snapshot;
       },
       onSnapshot: (data) => {
         setSnapshots((current) => appendTeamSnapshot(current, data));

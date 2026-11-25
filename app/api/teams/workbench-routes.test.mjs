@@ -89,6 +89,50 @@ test("GET /api/teams/[team]/workbench returns a lane snapshot lane-diagram can r
   assert.equal(missing.status, 404);
 });
 
+test("GET /api/teams/[team]/workbench?since= 内容未变时回 304，变了回 200", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pi-teams-api-"));
+  const previous = process.env.PI_TEAM_DIR;
+  process.env.PI_TEAM_DIR = root;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.PI_TEAM_DIR;
+    else process.env.PI_TEAM_DIR = previous;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  await writeFixture(root);
+  const get = (query = "") =>
+    teamRoute.GET(
+      new Request(`http://localhost/api/teams/demo/workbench${query}`),
+      { params: Promise.resolve({ team: "demo" }) },
+    );
+
+  // 1. 首帧：没有 since，必须是 200 且带 contentHash。
+  const first = await get();
+  assert.equal(first.status, 200);
+  const body = await first.json();
+  assert.match(body.contentHash, /^[0-9a-f]{16}$/, "快照必须带 16 位 contentHash");
+
+  // 2. 带上同一个 hash：内容没变 ⇒ 304 且无 body。
+  const unchanged = await get(`?since=${body.contentHash}`);
+  assert.equal(unchanged.status, 304, "内容未变必须 304");
+  assert.equal(await unchanged.text(), "", "304 不应带 body");
+
+  // 3. 改一个会影响内容的字段（lifecycle 状态）⇒ 200 且 hash 变化。
+  const dir = join(root, sanitizeTeamName("demo"));
+  await writeFile(join(dir, "lifecycle.json"), JSON.stringify({
+    version: 1,
+    members: { impl: { name: "impl", status: "idle", sessionId: "s-impl", updatedAt: Date.parse("2026-11-05T02:00:00.000Z") } },
+  }));
+  const changed = await get(`?since=${body.contentHash}`);
+  assert.equal(changed.status, 200, "内容变了必须 200");
+  const changedBody = await changed.json();
+  assert.notEqual(changedBody.contentHash, body.contentHash, "内容变了 hash 必须变");
+
+  // 4. 非法 since（超长）一律忽略，不得因参数而 500。
+  const bogus = await get(`?since=${"x".repeat(200)}`);
+  assert.equal(bogus.status, 200, "非法 since 必须忽略而不是报错");
+});
+
 test("GET /api/teams/workbench (no session param) serves the newest team for lane-diagram", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "pi-teams-api-"));
   const previous = process.env.PI_TEAM_DIR;

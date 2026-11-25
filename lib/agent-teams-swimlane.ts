@@ -371,6 +371,109 @@ export interface TeamWorkbenchSnapshot {
   messages: WorkbenchMessage[];
   /** messages 是否因超过上限被截断（截断后 messages 只剩最新的一段）。 */
   messagesTruncated: boolean;
+  /**
+   * 任务列表的**派生内容版本**（对 tickets 的稳定序列化做哈希）。
+   *
+   * 与 cc-haha `readTaskListSnapshot()` 的 `revision` 不是一回事：那边是**写侧单调计数器**
+   * （`bumpTaskListRevisionLocked`），内容没变也可能因别的票被改而 +1，所以能排出先后；
+   * 这里只读到落盘文件的只读投影，没有写侧计数器，只能用内容哈希 —— 它只回答
+   * 「任务列表变没变」，回答不了「变了几次」。轮询去重、回放对账、UI 跳过无变化的重渲染
+   * 都够用；要真版本号需 pi-team 在 `tickets/` 下补一个 revision 文件
+   * （见 docs/agents/tasklist-gap-matrix.md G8）。
+   */
+  taskListRevision: string;
+  /**
+   * 整份快照的**内容指纹**（除 `generatedAt` 外全部字段的稳定哈希）。
+   *
+   * 为什么不能复用 `taskListRevision`：它只哈希 **tickets**（见上方注释），刻意排除
+   * messages / members / lanes / receipts。拿它做整帧去重会把通信流涷住——新消息到达时
+   * `taskListRevision` 不变，帧就不追加，AgentTeamsCommunicationFeed 永远看不到新发言。
+   * 所以需要这个覆盖全量的指纹。
+   *
+   * 两个消费口：
+   * 1. `hooks/useTeamTimeline.ts` 的 `appendTeamSnapshot` 按它去重（因 `version` 恒为 1，
+   *    `generatedAt` 每轮更新，旧口径的去重条件在生产环境永不成立）。
+   * 2. `app/api/teams/[team]/workbench` 的 `?since=` 条件请求（命中即 304）。
+   */
+  contentHash: string;
+}
+
+/**
+ * 由 tickets 算出 `taskListRevision`（纯函数，客户端可安全调用）。
+ *
+ * 只纳入**会影响画布/统计**的字段：id / status / ownerId / dependencies / 每条 assignment 的
+ * id·status·outcome。subject、description、thread、mandates 一律不参与 —— leader 改文案不该
+ * 触发全量重渲染。序列化前先把票和 assignment 按 id 排序，落盘顺序变了不算内容变化。
+ *
+ * 双 32 位 FNV-1a 累加（target 是 ES2017，不能用 BigInt 字面量）：64 位抗碰撞对
+ * 「几百张票的变更检测」绰绰有余，而快照体积只多 16 个 hex 字符。
+ */
+export function deriveTaskListRevision(
+  tickets: readonly WorkbenchTicket[],
+): string {
+  const byId = (left: { id: string }, right: { id: string }): number =>
+    left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+  const canonical = [...tickets]
+    .sort(byId)
+    .map((ticket) => {
+      const assignments = [...ticket.assignments]
+        .sort(byId)
+        .map((assignment) => `${assignment.id}:${assignment.status}:${assignment.outcome ?? ""}`)
+        .join("|");
+      return [
+        ticket.id,
+        ticket.status,
+        ticket.ownerId ?? "",
+        ticket.dependencies.join(","),
+        assignments,
+      ].join("\u001f");
+    })
+    .join("\u001e");
+  let forward = 0x811c9dc5;
+  let reverse = 0x85ebca6b;
+  for (let index = 0; index < canonical.length; index += 1) {
+    const code = canonical.charCodeAt(index);
+    forward = Math.imul(forward ^ code, 0x01000193) >>> 0;
+    reverse = Math.imul(reverse ^ (code + index), 0xc2b2ae35) >>> 0;
+  }
+  return `${forward.toString(16).padStart(8, "0")}${reverse.toString(16).padStart(8, "0")}`;
+}
+
+/**
+ * 由一份「除 generatedAt / contentHash 外」的快照算出整帧内容指纹。
+ *
+ * 与 `deriveTaskListRevision` 同款双 32 位 FNV-1a（target ES2017，不能用 BigInt 字面量）。
+ * 入参必须是**已定序**的投影数组（本文件内的投影天然确定性），否则同一内容会算出不同指纹。
+ *
+ * 覆盖字段：team / members / tickets / lanes / flows / taskAnchors / tasks / receipts /
+ * messages / messagesTruncated / taskListRevision。**新增快照字段时必须同步加入**，
+ * 漏加的表现是「那个字段变了但 UI 不刷新」。
+ */
+export function deriveSnapshotContentHash(
+  snapshot: Omit<TeamWorkbenchSnapshot, "generatedAt" | "contentHash">,
+): string {
+  const canonical = JSON.stringify([
+    snapshot.version,
+    snapshot.team,
+    snapshot.members,
+    snapshot.tickets,
+    snapshot.lanes,
+    snapshot.flows,
+    snapshot.taskAnchors,
+    snapshot.tasks,
+    snapshot.receipts,
+    snapshot.messages,
+    snapshot.messagesTruncated,
+    snapshot.taskListRevision,
+  ]);
+  let forward = 0x811c9dc5;
+  let reverse = 0x85ebca6b;
+  for (let index = 0; index < canonical.length; index += 1) {
+    const code = canonical.charCodeAt(index);
+    forward = Math.imul(forward ^ code, 0x01000193) >>> 0;
+    reverse = Math.imul(reverse ^ (code + index), 0xc2b2ae35) >>> 0;
+  }
+  return `${forward.toString(16).padStart(8, "0")}${reverse.toString(16).padStart(8, "0")}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -661,7 +764,10 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
     const existing = ticketById.get(runtime.id);
     if (existing) {
       // 同 id：运行时的 assignments/status 覆盖派生值，其余（subject/依赖）保留计划口径。
-      existing.assignments = assignments;
+      // 但**只覆盖非空**：pi-team `createTicket` 的 assignees 是可选参数（assignments 可为 []），
+      // 无条件覆盖会把计划票「谁在做、做到哪」整条抹掉 —— 画布随即从 running 跳回可认领，
+      // 而 runtime 侧根本没提供任何替代信息。空数组视为「运行时没表态」，保留计划口径。
+      if (assignments.length > 0) existing.assignments = assignments;
       existing.status = runtime.status;
       existing.source = "merged";
       if (existing.ownerId === null) {
@@ -892,9 +998,11 @@ function deriveTeamStatus(
   return accepted.length > 0 ? "completed" : "ended";
 }
 
-  return {
-    version: 1,
-    generatedAt,
+  // 先组出除 generatedAt / contentHash 外的快照，再补指绞——
+  // 指绞必须能看到全部语义字段（含 messages），否则新发言不会触发新帧。
+  const body = {
+    version: 1 as const,
+    taskListRevision: deriveTaskListRevision(tickets),
     team: {
       id: teamName,
       name: team.name || teamName,
@@ -913,6 +1021,11 @@ function deriveTeamStatus(
     receipts: receiptItems,
     messages: projectedMessages,
     messagesTruncated,
+  };
+  return {
+    ...body,
+    generatedAt,
+    contentHash: deriveSnapshotContentHash(body),
   };
 }
 

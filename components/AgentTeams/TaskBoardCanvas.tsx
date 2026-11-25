@@ -24,7 +24,8 @@ import { formationRequiredWidth } from "./FormationBand";
 
 /**
  * 任务卡片的视觉色调：引擎单一紧急度口径（failed 覆盖 completed）。
- * 「等你确认」在 pi 侧没有独立状态，available（可认领）用 warning 提示待认领。
+ * available（可认领）用 warning 提示待认领；assigned（已派未开工）用 info 区分——
+ * 两者不能共用 warning，否则「有人负责但没开工」会被看成「没人要」。
  */
 export type TaskTone = TicketUrgency;
 
@@ -54,6 +55,7 @@ export function countTaskStates(tickets: WorkbenchTicket[]): Record<TicketUrgenc
   const counts: Record<TicketUrgency, number> = {
     failed: 0,
     blocked: 0,
+    assigned: 0,
     available: 0,
     running: 0,
     completed: 0,

@@ -11966,6 +11966,7 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .agent-teams-board-task--completed { border-left-color: var(--success); opacity: 0.86; }
 .agent-teams-board-task--running { border-left-color: var(--info); }
 .agent-teams-board-task--available { border-left-color: var(--warning); }
+.agent-teams-board-task--assigned { border-left-color: var(--info); opacity: 0.9; }
 .agent-teams-board-task--blocked { border-left-color: var(--text-dim); opacity: 0.78; }
 .agent-teams-board-task--failed { border-left-color: var(--danger); }
 /* 依赖环内的票：虚线左边框做可辨识标记，不覆盖状态的色调。 */
@@ -12097,6 +12098,7 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
   animation: scheduled-pulse 1.4s ease-in-out infinite;
 }
 .agent-teams-board-task--available .agent-teams-board-task-dot { background: var(--warning); }
+.agent-teams-board-task--assigned .agent-teams-board-task-dot { background: var(--info); }
 .agent-teams-board-task--blocked .agent-teams-board-task-dot { background: var(--text-dim); }
 .agent-teams-board-task--failed .agent-teams-board-task-dot { background: var(--danger); }
 

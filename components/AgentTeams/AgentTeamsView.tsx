@@ -480,6 +480,10 @@ export function AgentTeamsView({
                   <span className="agent-teams-board-stat-label">{t("teams.stats.running")}</span>
                   <span className="agent-teams-board-stat-value">{counts.running}</span>
                 </div>
+                <div className="agent-teams-board-stat agent-teams-board-stat--info">
+                  <span className="agent-teams-board-stat-label">{t("teams.stats.assigned")}</span>
+                  <span className="agent-teams-board-stat-value">{counts.assigned}</span>
+                </div>
                 <div className="agent-teams-board-stat">
                   <span className="agent-teams-board-stat-label">{t("teams.stats.available")}</span>
                   <span className="agent-teams-board-stat-value">{counts.available}</span>
