@@ -2692,6 +2692,14 @@ export class AgentSessionWrapper {
             resolve: (value) => finish(value as T),
             settled: false,
           };
+          // 「别再弹了」也要覆盖自绘面板：这类面板没有可编程答案，所以不猜答案，直接
+          // 收起（resolve(undefined) = 用户按了取消/关闭）。旧口径只代答 confirm/select，
+          // 自绘面板照旧弹出来——操作者看到的就是「不是说好了不弹吗」。
+          if (extensionUiAutoAllowForAgentDir(getAgentDir())) {
+            console.info("[pi-web] extension UI auto-dismissed (custom): a self-drawn panel has no programmable answer");
+            this.closeCustomUi(id, undefined);
+            return;
+          }
           this.activeCustomUis.set(id, custom);
           this.emitCustomUiRender(id, custom);
           // Once per dialog: it re-renders on every keypress and redraw.
@@ -2739,6 +2747,7 @@ export class AgentSessionWrapper {
           `[pi-web] extension UI auto-allowed (${allow.kind}${allow.kind === "select" ? `: ${allow.label}` : ""}): ${title.slice(0, 120)}`,
         );
         if (allow.kind === "confirm") return Promise.resolve(parseResponse({ confirmed: true } as ExtensionUiResponse));
+        if (allow.kind === "text") return Promise.resolve(parseResponse({ value: "" } as ExtensionUiResponse));
         return Promise.resolve(parseResponse({ value: allow.label } as ExtensionUiResponse));
       }
     }

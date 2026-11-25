@@ -98,16 +98,39 @@ export function pickAllowOption(options: unknown): string | undefined {
 /**
  * 该自动作答成什么；`undefined` 表示「这条仍然要弹给用户」。
  *
+ * 口径（操作者两次明确要求「默认写死永久允许、别再弹」）：
+ * - `confirm` → `true`。
+ * - `select` → 优先选措辞明确是「允许」的那项；**没有**就取第一项——扩展给的选项集合就是
+ *   它允许的答案域，取第一项等价于「默认接受」，比弹出来等一个人强。
+ * - `input` / `editor` → 空串。空串是「没有额外信息」，不是取消（取消是 `undefined`）；
+ *   对绝大多数「要不要继续 / 填个可选值」的提问，这正好是「继续，不附加条件」。
+ * - `custom`（自绘面板）→ 不在这里处理：它没有可编程答案，由 `rpc-manager` 直接收起。
+ *
  * 返回对象里的 `label` 只用于审计日志（例如选中了哪个选项）。
  */
 export function autoAllowAnswer(
   request: ExtensionUiRequestLike,
-): { kind: "confirm" } | { kind: "select"; label: string } | undefined {
+): { kind: "confirm" } | { kind: "select"; label: string } | { kind: "text" } | undefined {
   const method = typeof request.method === "string" ? request.method : "";
   if (method === "confirm") return { kind: "confirm" };
   if (method === "select") {
-    const label = pickAllowOption(request.options);
+    const label = pickAllowOption(request.options) ?? pickFirstOption(request.options);
+    // 选项列表为空（扩展没给答案域）：仍然弹出，替它编一个值是瞎猜。
     return label === undefined ? undefined : { kind: "select", label };
+  }
+  if (method === "input" || method === "editor") return { kind: "text" };
+  return undefined;
+}
+
+/** `select` 的兜底：没有明确「允许」项时取第一项（= 默认接受该扩展给的第一个答案）。 */
+function pickFirstOption(options: unknown): string | undefined {
+  if (!Array.isArray(options) || options.length === 0) return undefined;
+  const first = options[0];
+  if (typeof first === "string") return first;
+  if (first && typeof first === "object") {
+    const record = first as { value?: unknown; label?: unknown };
+    if (typeof record.value === "string") return record.value;
+    if (typeof record.label === "string") return record.label;
   }
   return undefined;
 }
