@@ -131,15 +131,24 @@ jobs:
           releaseBody: |
             ## Pi Agent Desktop 0.8.7 (fork)
 
-            **2026-11-24 · 覆盖式重发（第十七次）**
+            **2026-11-24 · 覆盖式重发（第十八次）**
 
             > 版本号保持 0.8.7 不变，本次构建替换上一版的全部安装包。升级方式与普通更新相同，直接覆盖安装即可；配置、会话与任务记录都在 `~/.pi/agent/`，不受影响。
 
             本 fork 基于上游 pi-agent-desktop 0.8.2 / pi-web 0.10 构建，已并入上游 pi-web **v0.10 → v0.17** 的全部安全、稳定性与性能修复，并在此之上维护本 fork 的桌面功能线。
 
-            本次是第十七次覆盖重发：团队计划审批这条链上的十项审计缺陷全部收口——**模型默认就是主模型**、配额与 pi-team 同源、删成员真的降配额、连点不再静默。
+            本次是第十八次覆盖重发：**输出速度（TPS）真正与会话统计同口径**（那个数字此前是条死代码）、**扩展面板不再弹**、**停止按钮不再消失**、**计划弹框的按钮固定在底部**，外加 `deepseek-v4.1-flash` 的预设匹配修正。
 
             ### 本次重发新增 / Fixes in this re-release
+
+            - **输出速度（TPS）与会话统计同口径 / output speed.** 与 DeepSeek Harness 的 `decodeTokens / (decodeMs/1000)` 逐行核对后修了三处：①**`finalRate` 原来是死代码**——`end` 动作不带消息，而 store 里的 `streamingMessage` 来自 `message_start` 快照，pi-ai 在那一刻把 `usage` 全填 0（响应头刚到、还没计费），于是 `usage.output` 恒为 0、那个「真实 token/s」分支永远不触发，屏幕上只有「字符 ÷ 4」估算。现在 `end` 携带 `message_end` 的完整消息。②**分母含 TTFT**——本仓起点是 `message_start`（一个 token 都没吐），dsh 只算「首 token → 消息组装完」的解码段；新增 `firstTokenAt` / `decodeMs`，在首个增量（text / thinking / toolCall，与 dsh 的 `isTokenDelta` 同范围）落点，分母优先用 `decodeMs`。③取整对齐（`≥10` 取整、`<10` 一位小数，`< 1` 仍显示 `< 1`）。文案也跟着改成「与会话统计同口径」。
+            - **扩展面板真的不再弹 / extension dialogs.** 上一版只覆盖 `confirm` 与「选项里明确写着允许」的 `select`；`input` / `editor` 一律弹出（理由是「空串不是允许」）、`custom` 自绘面板也弹出（「没有可编程答案」）。现在 `input` / `editor` 自动答空串（空串是「没有额外信息」，不是取消），`select` 没有允许项就取第一项（选项集合就是扩展给的答案域），`custom` 在挂载后立刻收起；每次自动处理留一行审计日志。
+            - **停止按钮不再消失 / stop affordance.** 旧口径 `showStop = isStreaming && !canQueueStreamingMessage`：只要输入框里有字（或挂了附件），主按钮就变成「排队发送」，**停止入口当场消失**——一边打字一边想停时看到的就是「点了没反应」。现在流式期间主按钮恒为 Stop；排队仍有 Enter（流式时本来就调 `sendQueued`）。
+            - **计划弹框的底部按钮固定 / sticky footer.** 面板整体是 `overflow: auto`，底部那排「关闭 / 批准 / 停止」跟着内容一起滚，翻到任务列表中间就找不到批准按钮。现在面板是 flex 列 + `overflow: hidden`，中间内容单独滚动（`minHeight: 0`），footer `flexShrink: 0` 常驻底部；标题也在滚动区外。
+            - **`deepseek-v4.1-flash` 的预设匹配 / preset match.** 归一化把版本分隔符吃掉了（`deepseek-v4.1-flash` → `deepseekv41flash` 与 `deepseek41` 互不包含），v4.1 的请求被目录序更靠前的泛化条目 `deepseek v4` 抢走；而那条「一行覆盖两个模型」的合并条目（版本序列 `["4","1","4","1","1017"]`）按长度永远最长，又会把 `deepseek-v4` 的请求抢走。现在版本序列从**原始串按分隔符**切，命中里先取「版本一致」那一组再比长度。实测：`deepseek-v4.1-flash` → v4.1 预设、`deepseek-v4` → v4 预设、`deepseek-chat` / `deepseek-reasoner` / `gpt-5` 等没有对应预设的仍然不借别的顶替。
+
+            ### 第十七次重发内容 / Fixes in the previous re-release
+
 
             - **审批弹框的模型默认是主模型 / default model.** 计划里成员的 runtime 在真实机器上通常是 `unknown/unknown`（pi-team 读 `PI_PROVIDER_ID`/`PI_MODEL_ID`，本服务从不设置），归一后是空串，模型栏显示「未设置」——用户面对一个空下拉，只能从头挑。现在用当前会话主模型预填，**想改再改**；预填与改动判定同源（同一个 fallback 当基线），所以打开弹框不会显示「有未保存更改」，而真换了模型照样写进 PATCH。
             - **配额与 pi-team 同源 / quota parity.** 上游 `checkSpawnLimits` 现读 `PI_TEAM_MAX_GLOBAL_WORKERS`（缺省 32），桌面那套用设置项（默认 64/16，`0` = 不限）——两条闸各算各的，于是「面板说还有余量 → 点派发 → `LIMIT_EXCEEDED (32)`」。现在派发前把桌面配额写进 env；桌面 `0`（不限）会被换成一个大数，因为上游只接受正整数、`0` 会被它当成非法值回落到 32。
