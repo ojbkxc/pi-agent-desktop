@@ -18,7 +18,7 @@
  * prompt 会被词表悄悄改写成另一份东西。
  */
 
-import { normalizeModelId, presetMatchForNormalizedModel } from "./preset-match";
+import { normalizeModelId, presetMatchForNormalizedModel, sameVersion, versionSequence } from "./preset-match";
 import type { PurgeAutoPresetMode, PurgeSettings } from "./types";
 
 /** 解析预设需要的最小形状：目录里带 id / vendor / model / body 就够。 */
@@ -50,12 +50,18 @@ export interface AutoPresetHit<T extends AutoPresetTarget> {
  * 请求跑一遍（53 条 × 2 次正则 → 0 次）。WeakMap 的键是预设行本身，换一份目录
  * 就是另一批键，不需要失效逻辑。
  */
-const normalizedKeys = new WeakMap<object, { model: string; vendor: string }>();
+const normalizedKeys = new WeakMap<object, { model: string; vendor: string; version: readonly string[] }>();
 
-function keysOf(preset: AutoPresetTarget): { model: string; vendor: string } {
+function keysOf(preset: AutoPresetTarget): { model: string; vendor: string; version: readonly string[] } {
   const cached = normalizedKeys.get(preset);
   if (cached) return cached;
-  const keys = { model: normalizeModelId(preset.model), vendor: normalizeModelId(preset.vendor) };
+  const keys = {
+    model: normalizeModelId(preset.model),
+    vendor: normalizeModelId(preset.vendor),
+    // 版本序列必须从**原始**串算：归一化把分隔符折掉了，`deepseek-4-1` 会变成 `deepseek41`，
+    // 再也分不出 `4` 与 `1` 两段。
+    version: versionSequence(preset.model),
+  };
   normalizedKeys.set(preset, keys);
   return keys;
 }
@@ -87,13 +93,34 @@ export function resolveAutoPreset<T extends AutoPresetTarget>(
   // 模型只归一化一次：目录扫描里的比较全是现成的字符串。
   const active = normalizeModelId(model);
   if (active === "") return undefined;
+  // 当前模型的版本序列也要从**原始**串算（归一化后分隔符没了）。
+  const activeVersion = versionSequence(model);
 
+  // 「更具体的那条赢」：命中条件含双向包含与版本线匹配，所以 `deepseekv4`（泛化条目）也能
+  // 命中 `deepseekv41flash`。旧实现按目录原序返回第一个命中，结果 v4.1 的请求被目录里排在
+  // 前面的 v4 抢走。
+  //
+  // 分两组，缺一都会选错：
+  // 1. **版本序列与当前模型一致**的候选优先。目录里有「一行覆盖两个模型」的合并条目
+  //    （`deepseekv4.1 and v4.1-1017`），它的版本序列是 `["4","1","4","1","1017"]`——
+  //    按「越长越具体」它永远赢，于是 `deepseek-v4` 的请求会被套上 v4.1 的预设。
+  // 2. 组内再比归一化 target 长度（越长越贴近）；`deepseek-4-1`（`["4","1"]`）与
+  //    `deepseek v4`（`["4"]`）归一后等长（都 10 字符），所以版本一致这一层是必需的。
+  // 两组都空才放弃；同长度保持目录原序，结果可预期。
+  const sameVersionCandidates: Array<{ preset: T; length: number }> = [];
+  const otherCandidates: Array<{ preset: T; length: number }> = [];
   for (const preset of catalog) {
     const keys = keysOf(preset);
-    if (presetMatchForNormalizedModel(keys.model, keys.vendor, active) === "exact") {
-      return { preset, match: "exact" };
-    }
+    if (presetMatchForNormalizedModel(keys.model, keys.vendor, active, keys.version, activeVersion) !== "exact") continue;
+    const bucket = sameVersion(keys.version, activeVersion) ? sameVersionCandidates : otherCandidates;
+    bucket.push({ preset, length: keys.model.length });
   }
+  const pool = sameVersionCandidates.length > 0 ? sameVersionCandidates : otherCandidates;
+  let best: { preset: T; length: number } | undefined;
+  for (const candidate of pool) {
+    if (!best || candidate.length > best.length) best = candidate;
+  }
+  if (best) return { preset: best.preset, match: "exact" };
   if (settings.auto_preset_match !== "vendor") return undefined;
   for (const preset of catalog) {
     const keys = keysOf(preset);

@@ -38,6 +38,8 @@ export function presetMatchForModel(preset: ModelTarget, activeModel: string): P
     normalizeModelId(preset.model),
     normalizeModelId(preset.vendor),
     normalizeModelId(activeModel),
+    versionSequence(preset.model),
+    versionSequence(activeModel),
   );
 }
 
@@ -47,15 +49,63 @@ export function presetMatchForModel(preset: ModelTarget, activeModel: string): P
  * 存在的理由是自动套用要在一次请求里拿同一个模型比完整个目录（53 条），
  * 归一化只该做一次；两条路径共用这一份比较，规则不会分叉。
  */
+/**
+ * 版本号序列：`deepseek v4` → `["4"]`、`deepseek-4-1` → `["4","1"]`、`deepseekv4.1` → `["4","1"]`。
+ *
+ * 为什么需要它：目录里的 model 键来自源文件名，写法不统一——`deepseek v4`、`deepseek-4-1`、
+ * `deepseekv4.1 and v4.1-1017` 都指 DeepSeek 的同一个版本线，而归一化只是折叠分隔符，
+ * `deepseek41` 与 `deepseekv41flash` 因此互不包含。结果真实模型 `deepseek-v4.1-flash`
+ * 只能被目录序更靠前的泛化条目 `deepseek v4` 命中（`deepseekv4` 是它的子串），套错预设。
+ *
+ * 切分**必须按分隔符**，不能用 `\d+` 直扫：`deepseek-4-1` 归一化前是 `4` 与 `1` 两段，
+ * 直扫会把 `41` 当成一个数字，于是它与 `deepseek v4` 的 `["4"]` 一样只有一段，具体度分不开。
+ */
+export function versionSequence(raw: string): string[] {
+  // 先按非字母数字切段，再取每段里的数字；`v4.1` → ["4","1"]，`v4` → ["4"]。
+  return String(raw)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .flatMap((part) => part.match(/\d+/g) ?? []);
+}
+
+/** 两段版本序列是否逐段相等（`["4","1"]` vs `["4","1"]`；`["4"]` vs `["4","1"]` 不等）。 */
+export function sameVersion(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((part, index) => part === b[index]);
+}
+
+/**
+ * 字母骨架：去掉版本数字后的名字（`deepseekv41flash` → `deepseekvflash`）。
+ *
+ * 用来避免「版本号相同就认」的误配：`claude-sonnet-4-5` 与 `gpt-4-5` 版本序列都是
+ * `["4","5"]`，但骨架不同，不能互相命中。
+ */
+function alphaSkeleton(normalized: string): string {
+  return normalized.replace(/\d+/g, "");
+}
+
 export function presetMatchForNormalizedModel(
   target: string,
   vendor: string,
   active: string,
+  targetVersion: readonly string[] = versionSequence(target),
+  activeVersion: readonly string[] = versionSequence(active),
 ): PresetMatch {
   if (!target || !active) return "unknown";
 
   // 目录里有 `deepseekv4.1 and v4.1-1017` 这种一行覆盖两个模型的写法，取双向包含。
   if (active === target || active.includes(target) || target.includes(active)) return "exact";
+
+  // 版本线相同、且名字骨架对得上 ⇒ 也认（解决 `deepseek41` vs `deepseekv41flash` 的写法差异）。
+  // 方向是「**当前模型**的骨架包含预设的骨架」：`deepseekvflash`.includes(`deepseek`) 成立；
+  // 反过来不成立（预设名更短）。跨厂商靠这一条挡住——`claude-sonnet-4-5` 的骨架是
+  // `claudesonnet`，不在 `deepseekvflash` 里。
+  if (
+    targetVersion.length > 0
+    && sameVersion(targetVersion, activeVersion)
+    && alphaSkeleton(active).includes(alphaSkeleton(target))
+  ) {
+    return "exact";
+  }
 
   if (vendor && active.includes(vendor)) return "vendor";
   return "mismatch";
