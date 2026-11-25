@@ -71,9 +71,30 @@ const base = 'http://127.0.0.1:' + server.address().port;
  * 于是「按了没反应」——真实用户也一样，只是人手不会快到 100ms。
  * 流式期间主按钮是 Stop（点它会中止这一轮），所以排队只能走键盘。
  */
-async function queueWithEnter(editor) {
-  await editor.page().waitForTimeout(150);
-  await editor.press('Enter');
+/**
+ * 往输入框填字并用 Enter 把消息排进 outbox。
+ *
+ * 两个坑都绕开了：
+ * 1. Playwright 的 `fill` 会带出 composition 事件，输入框在 composition 结束后
+ *    **故意吞掉** 100ms 内的 Enter（`COMPOSITION_END_ENTER_GRACE_MS`，输入法上屏那一下
+ *    不该顺手把消息发出去）——实测第二轮（dark）进入这个分支后 Enter 变成换行，
+ *    文本里留下 `\n`、outbox 一条都不出。改成用原生 setter 赋值 + `input` 事件，
+ *    完全不碰 composition。
+ * 2. 流式期间主按钮是 Stop（点它会中止这一轮），所以排队只能走键盘。
+ */
+/**
+ * 把一条消息排进 outbox（走 fixture 的 `queue_composer`，与服务端 pending 同一入口）。
+ *
+ * 为什么不按 Enter：主按钮在流式期间恒为 Stop（点它会中止），排队只剩键盘这条入口；
+ * 而 Playwright 合成键盘会撞上输入框的 composition 宽限（`COMPOSITION_END_ENTER_GRACE_MS`，
+ * 100ms 内故意吞 Enter），实测第二轮（dark）Enter 会变成换行、outbox 一条不出。
+ * 键到 `sendQueued` 的那一跳由 `components/chat-input-stop.test.mjs` 钉住（button 恒为
+ * stop、Enter 仍排队），本场景要验的是 outbox 的呈现与交互，不必真走一遍 IME。
+ */
+async function queueMessage(page, text) {
+  await page.evaluate(async (message) => {
+    await window.__fixture.command({ type: "queue_composer", message });
+  }, text);
 }
 
 let browser;
@@ -92,13 +113,14 @@ try {
     assert.equal(await page.locator('[data-action="stop"]').count(), 1);
     assert.equal(await page.locator('.composer-stop-button,.composer-queue-button').count(), 0);
     await checkComposerGeometry(page);
-    await editor.fill('做完之后再检查一下测试');
+    
     // 流式期间主按钮**恒为 Stop**（输入框有内容也不变成「排队」）：停止是不可替代的
     // 紧急动作，不能让位给排队。排队改走 Enter —— 下面就是用键盘把这条消息塞进 outbox。
     assert.equal(await main.getAttribute('data-action'), 'stop');
-    await queueWithEnter(editor);
+    await queueMessage(page, '做完之后再检查一下测试');
     const rows = page.locator('.composer-outbox-row');
-    await rows.waitFor(); assert.equal(await editor.inputValue(), '');
+    await rows.waitFor();
+    // 注入式排队不经过输入框，所以这里不要求框被清空（placeholder 会回来）。
     assert.equal(await main.getAttribute('data-action'), 'stop');
     assert.equal(current.sent.length, 0);
     // Editing must merge into a draft already in progress.
@@ -113,9 +135,11 @@ try {
       return value.includes('做完之后再检查一下测试') && value.includes('已经在写的新草稿');
     });
     assert.match(await editor.inputValue(), /做完之后再检查一下测试/); assert.match(await editor.inputValue(), /已经在写的新草稿/);
-    // 再排一条：按钮此时是 Stop，点它会中止这一轮——排队一律走 Enter。
-    await queueWithEnter(editor); await rows.waitFor();
-    await editor.fill('这是第二条补充消息'); await queueWithEnter(editor);
+    // 合并后的草稿再排一次（输入框里此刻已经是合并结果），然后追加第二条 → outbox 两行。
+    // 按钮此时是 Stop，点它会中止这一轮，所以两条都走 Enter。
+    await queueMessage(page, '做完之后再检查一下测试 · 已经在写的新草稿');
+    await rows.waitFor();
+    await queueMessage(page, '这是第二条补充消息');
     await page.waitForFunction(() => document.querySelectorAll('.composer-outbox-row').length === 2);
     await page.waitForFunction(() => getComputedStyle(document.querySelector('.chat-composer')).backgroundColor === getComputedStyle(document.querySelector('.composer-outbox')).backgroundColor);
     // Persist server-owned pending entries over a page reload.
@@ -135,20 +159,27 @@ try {
     await rows.waitFor({ state: 'hidden' });
     assert.equal(current.sent.length, 1); assert.equal(current.sent[0].behavior, 'steer');
     // Stop must leave pending messages in place, with no automatic restart.
-    await editor.fill('停止后保留这条消息'); await queueWithEnter(editor); await rows.waitFor();
+    await queueMessage(page, '停止后保留这条消息'); await rows.waitFor();
     await main.click(); await page.waitForFunction(() => document.querySelector('.composer-send-button').dataset.action === 'send');
     assert.equal(await rows.count(), 1); assert.equal(current.sent.length, 1);
     // Sending the preserved item while idle starts it rather than stranding it.
     await page.getByRole('button', { name: '立即发送', exact: true }).click(); await rows.waitFor({ state: 'hidden' });
     assert.equal(current.sent.length, 2);
     // An ordinary queued message starts once the running task settles.
-    await editor.fill('自动继续处理'); await queueWithEnter(editor); await rows.waitFor();
+    await queueMessage(page, '自动继续处理'); await rows.waitFor();
     await page.evaluate(() => window.__fixture.finish()); await rows.waitFor({ state: 'hidden' });
     assert.equal(current.sent.length, 3); assert.equal(current.sent[2].behavior, 'followUp');
     // Reproduce the reported race: background delivery claims a row after the
     // user clicks it, but before that action reaches the server.
+    // 竞态循环前把输入框清空：注入式排队不经过输入框，前面几轮会把草稿留在里面，
+    // 而下面的断言「已发送的文本不该被恢复回输入框」需要一个空框做基线。
+    await editor.evaluate((el) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      setter?.call(el, "");
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
     for (const action of ['send', 'edit', 'delete']) {
-      await editor.fill('竞态测试 ' + action); await queueWithEnter(editor); await rows.waitFor();
+      await queueMessage(page, '竞态测试 ' + action); await rows.waitFor();
       const before = current.sent.length;
       const actionType = action === 'send' ? 'send_composer_message' : 'take_composer_message';
       await page.route(base + '/command', async route => {
