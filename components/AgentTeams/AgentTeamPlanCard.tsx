@@ -174,8 +174,15 @@ const S: Record<string, CSSProperties> = {
     overflowWrap: "anywhere",
     // 高度自适应、内容超出时**面板内滚动**（12 行成员 + 20 个任务也不会把关闭/批准按钮
     // 推到视口外）。overscroll-behavior 防滚到底后带动背后的聊天列滚动。
+    //
+    // 滚动放在**内容区**而不是面板本身：面板整体 `overflow:auto` 时，底部那排
+    // 「关闭 / 批准 / 停止」会跟着内容一起滚走，用户翻到任务列表中间就找不到批准按钮了
+    // （用户报的「按钮要一直固定在下面」）。现在面板是 flex 列、`overflow:hidden`，
+    // 中间内容自己滚，footer 用 `flexShrink: 0` 常驻底部。
     maxHeight: "min(78vh, 640px)",
-    overflow: "auto",
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
     overscrollBehavior: "contain",
     background: "var(--bg-panel)",
     border: "1px solid var(--border)",
@@ -199,8 +206,12 @@ const S: Record<string, CSSProperties> = {
   // 否则一条 alert 就能把弹框撑出横向滚动。
   alert: { color: "var(--danger)", fontSize: "var(--fs-caption)", margin: "6px 0", overflowWrap: "anywhere" },
   confirmRow: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "6px 0", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--danger)", background: "var(--bg-panel)" },
-  // 窄窗口里三个按钮换行，不挤出面板。
-  footer: { display: "flex", justifyContent: "flex-end", flexWrap: "wrap", gap: 8, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 },
+  // 面板内唯一滚动区：标题与底部按钮都留在外面，翻内容不会把按钮带走。
+  // `minHeight: 0` 是 flex 子项能真正收缩、出现滚动条的前提（少了它子项按内容撑开，
+  // 溢出会被面板的 `overflow: hidden` 裁掉，底部内容直接看不见）。
+  dialogScroll: { flex: "1 1 auto", minHeight: 0, overflowY: "auto", overscrollBehavior: "contain" },
+  // 窄窗口里三个按钮换行，不挤出面板。`flexShrink: 0` + 上边框：常驻底部、与内容分界。
+  footer: { flexShrink: 0, display: "flex", justifyContent: "flex-end", flexWrap: "wrap", gap: 8, marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 },
   ghost: { border: "1px solid var(--border)", background: "transparent", color: "var(--text)", borderRadius: 7, padding: "5px 11px", fontSize: "var(--fs-caption)", cursor: "pointer" },
   stop: { border: "1px solid var(--danger)", background: "transparent", color: "var(--danger)", borderRadius: 7, padding: "5px 12px", fontSize: "var(--fs-caption)", fontWeight: "var(--fw-semibold)", cursor: "pointer" },
   stopOff: { border: "1px solid var(--danger)", background: "transparent", color: "var(--text-dim)", borderRadius: 7, padding: "5px 12px", fontSize: "var(--fs-caption)", fontWeight: "var(--fw-semibold)", cursor: "not-allowed" },
@@ -295,6 +306,8 @@ export function planModalView(
           </h2>
           <span style={{ ...S.badge, color: planStateToneColor(plan.state) }}>{t(planStateLabelKey(plan.state))}</span>
         </div>
+        {/* 可滚动内容区：标题与底部按钮都在它外面，翻到任务列表中间也看得见「批准」。 */}
+        <div style={S.dialogScroll} data-testid="team-plan-scroll">
         <p style={S.muted}>{t("teams.plan.reviewHint")}</p>
         {/* 告警区：把「为什么不能批准 / 上次为什么失败」集中到弹框顶部，按
             启动失败 → 非法成员名 → 未分配任务 → 批准失败 的顺序自上而下排（严重度递减），
@@ -401,6 +414,8 @@ export function planModalView(
             </button>
           </div>
         ) : null}
+
+        </div>
 
         <div style={S.footer}>
           {/* busy 不再禁用关闭：批准已投递出去，弹框只是展示层；把 Close 变灰、

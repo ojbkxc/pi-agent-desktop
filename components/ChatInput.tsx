@@ -1737,7 +1737,14 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const hasInputText = Boolean(value.trim());
   const canQueueStreamingMessage = hasInputText || attachedImages.length > 0 || attachedFiles.length > 0;
   const canSend = canQueueStreamingMessage && !workspaceUnavailable;
-  const showStop = isStreaming && !canQueueStreamingMessage;
+  // 流式期间这个按钮**永远是 Stop**。
+  //
+  // 旧口径是 `isStreaming && !canQueueStreamingMessage`：只要输入框里有字（或挂了附件），
+  // 主按钮就变成「排队发送」，**停止入口直接消失**——用户看到的就是「停止对话失灵」，
+  // 尤其是启动团队后成员还在跑、他一边打字一边想停的时候。停止是不可替代的紧急动作，
+  // 排队不是：Enter 在流式期间本来就调 `sendQueued`（见下面的 keydown 分支），
+  // 排队这条路没断。
+  const showStop = isStreaming;
   // Warn when images are attached but the selected model is known not to accept
   // image input (#584), including a resolved default. Unknown models stay silent.
   const showImageUnsupportedWarning = (

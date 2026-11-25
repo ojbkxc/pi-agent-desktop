@@ -269,10 +269,22 @@ test("dialog 宽度与输入框等宽：跟随聊天内容列，缺失 region �
   assert.doesNotMatch(source, /720px/, "不得再用 720 固定封顶");
   assert.match(source, /className="team-plan-dialog"/, "弹框挂载容器查询/换行规则的类名");
   assert.match(source, /overflowWrap: "anywhere"/, "长文本可断行，防撑宽弹框");
-  // 小窗口（<480px 视口）不溢出、内容可滚：border-box + maxWidth 100% + 面板内滚动。
+  // 小窗口（<480px 视口）不溢出、内容可滚：border-box + maxWidth 100%。
   assert.match(source, /boxSizing: "border-box"/, "padding 不吃宽");
   assert.match(source, /maxWidth: "100%"/);
-  assert.match(source, /overflow: "auto"/, "内容超出时面板内滚动（footer 按钮仍可达）");
+  // 滚动在**内容区**，不在面板本身：面板整体 overflow:auto 时底部那排「关闭 / 批准 / 停止」
+  // 会跟着内容滚走（用户报的「按钮要一直固定在下面」）。
+  assert.match(source, /dialogScroll: \{[^}]*overflowY: "auto"/, "内容区自己滚");
+  assert.match(source, /dialogScroll: \{[^}]*minHeight: 0/, "flex 子项要能真正收缩才出滚动条");
+  assert.match(source, /maxHeight: "min\(78vh, 640px\)"/, "面板整体仍然限高");
+  assert.match(source, /footer: \{[^}]*flexShrink: 0/, "footer 常驻底部，不被内容挤走");
+  assert.match(source, /data-testid="team-plan-scroll"/, "滚动区真的在 DOM 里");
+  // 关闭 / 批准 / 停止必须在滚动区之外——否则「固定」只是视觉上的巧合。
+  const scrollOpen = source.indexOf('data-testid="team-plan-scroll"');
+  const footerAt = source.indexOf("style={S.footer}");
+  const closeAt = source.indexOf('data-testid="team-plan-close"');
+  assert.ok(scrollOpen > 0 && footerAt > scrollOpen, "footer 在滚动区之后");
+  assert.ok(closeAt > footerAt, "关闭按钮在 footer 里（滚动区外）");
   assert.match(source, /overscrollBehavior: "contain"/, "滚到底不带动背后的聊天列");
   assert.match(source, /padding: "clamp\(10px, 2\.5vw, 16px\)"/, "窄窗口内边距收一档");
 });
