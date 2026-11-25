@@ -23,6 +23,12 @@ import {
 import { formationRequiredWidth } from "./FormationBand";
 
 /**
+ * 悬空依赖告警里最多列出几条。超过就截断（末尾用 count 总数告诉用户还有多少），
+ * 否则一个批量改 id 的事故会往界面上贴几十行。
+ */
+const DANGLING_WARNING_LIMIT = 5;
+
+/**
  * 任务卡片的视觉色调：引擎单一紧急度口径（failed 覆盖 completed）。
  * available（可认领）用 warning 提示待认领；assigned（已派未开工）用 info 区分——
  * 两者不能共用 warning，否则「有人负责但没开工」会被看成「没人要」。
@@ -277,6 +283,17 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
     <>
       {layout.hasCycle && (
         <p className="agent-teams-board-cycle-warning" role="status">{t("teams.cycleWarning")}</p>
+      )}
+      {layout.danglingDependencies.length > 0 && (
+        <p className="agent-teams-board-cycle-warning" role="status">
+          {t("teams.danglingWarning", {
+            count: layout.danglingDependencies.length,
+            list: layout.danglingDependencies
+              .slice(0, DANGLING_WARNING_LIMIT)
+              .map((item) => `${item.ticketId} → ${item.dependencyId}`)
+              .join("、"),
+          })}
+        </p>
       )}
       <div className="agent-teams-board-scroll">
         <div className="agent-teams-board" style={{ width: canvasWidth, minWidth: canvasWidth, height: boardHeight }}>

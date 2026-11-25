@@ -95,6 +95,21 @@ export interface PositionedTeamTask {
   y: number;
 }
 
+/**
+ * 一条「指向不存在任务」的依赖边。
+ *
+ * 典型成因：plan 里的任务被删除/改 id 后，别的任务还指着旧 id；或手写 plan.json 拼错。
+ * 现状是 fail-open（缺失依赖视为已解除），于是拼错会被静默放行——任务看起来「可开工」，
+ * 实际前置根本没做过。这里只负责**报出来**，不改变 fail-open 语义：
+ * 改成 fail-closed 会让一条拼错的依赖永久锁死整条下游链，比静默更坑。
+ */
+export interface DanglingDependency {
+  /** 拥有这条依赖的任务 id。 */
+  ticketId: string;
+  /** 指向不存在的那个依赖 id。 */
+  dependencyId: string;
+}
+
 export interface TeamTaskLayout {
   lanes: TeamTaskLane[];
   tasks: PositionedTeamTask[];
@@ -102,6 +117,8 @@ export interface TeamTaskLayout {
   height: number;
   /** 是否存在依赖环（供画布渲染告警）。 */
   hasCycle: boolean;
+  /** 指向不存在任务的依赖边（供画布渲染告警）。按 (ticketId, dependencyId) 自然序稳定排序。 */
+  danglingDependencies: DanglingDependency[];
 }
 
 const TICKET_ID_COLLATOR = new Intl.Collator("en", {
@@ -152,6 +169,34 @@ export function getTeamTaskState(
     return "assigned";
   }
   return "available";
+}
+
+/**
+ * 找出所有指向**不存在任务**的依赖边。
+ *
+ * 纯函数、确定性输出：先按 (ticketId, dependencyId) 自然序排序，同输入恒同输出。
+ * 自依赖不算 dangling（它指向自己，自己是存在的）；那种情况由环检测负责。
+ *
+ * 为甚么单独一个函数而不在 getTeamTaskState 里报：那个函数是热路径（每张票每次布局都调），
+ * 而且它的契约是「返回一个状态」——把告警塞进去会让每个调用方都得处理一个它不关心的返回值。
+ */
+export function findDanglingDependencies(
+  tickets: readonly WorkbenchTicket[],
+): DanglingDependency[] {
+  const known = new Set(tickets.map((ticket) => ticket.id));
+  const dangling: DanglingDependency[] = [];
+  for (const ticket of tickets) {
+    for (const dependencyId of ticket.dependencies) {
+      if (known.has(dependencyId)) continue;
+      dangling.push({ ticketId: ticket.id, dependencyId });
+    }
+  }
+  dangling.sort((left, right) => {
+    const byTicket = TICKET_ID_COLLATOR.compare(left.ticketId, right.ticketId);
+    if (byTicket !== 0) return byTicket;
+    return TICKET_ID_COLLATOR.compare(left.dependencyId, right.dependencyId);
+  });
+  return dangling;
 }
 
 /**
@@ -422,5 +467,6 @@ export function layoutTeamWorkbenchTasks(
     width,
     height: DEPTH_COLUMN_TOP + tallestLane + CANVAS_BOTTOM_PADDING,
     hasCycle: cycleIdOf.size > 0,
+    danglingDependencies: findDanglingDependencies(tickets),
   };
 }

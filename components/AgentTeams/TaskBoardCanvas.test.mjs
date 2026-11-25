@@ -240,6 +240,17 @@ test("marks cycle tickets and shows a warning banner when the graph has a cycle"
   assert.doesNotMatch(clean, /agent-teams-board-cycle-warning/);
 });
 
+test("G16：悬空依赖在画布上渲染告警，且列出具体的票→依赖", () => {
+  const html = render(snapshot([ticket("a", { dependencies: ["ghost"] })]));
+  assert.match(html, /agent-teams-board-cycle-warning/, "复用同一告警样式");
+  assert.match(html, /a → ghost/, "必须点名是哪条边，否则用户不知道改哪里");
+  assert.match(html, /1 dependency edge|1 条依赖/, "带总数");
+
+  // 无悬空依赖时不得出现噪声告警。
+  const clean = render(snapshot([ticket("a"), ticket("b", { dependencies: ["a"] })]));
+  assert.doesNotMatch(clean, /dependency edge|条依赖/);
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 本轮修复：并发可见（同票多成员并行）+ 重复依赖去重 + 成员多时画布宽度。
 // ─────────────────────────────────────────────────────────────────────────────
