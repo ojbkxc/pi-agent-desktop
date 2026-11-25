@@ -1926,7 +1926,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         } else if (completed) {
           setMessages((prev) => [...prev, normalizeToolCalls(completed)]);
         }
-        dispatch({ type: "end" });
+        // 把完成消息一起交给 store：只有它带真实的 `usage.output`，速度条才能在本轮结束时
+        // 从「字符÷4 估算」切到真实 token/s（旧实现不带，那个分支永远是 undefined）。
+        dispatch({ type: "end", message: completed?.role === "assistant" ? completed : undefined });
         setAgentPhase({ kind: "waiting_model" });
         break;
       }

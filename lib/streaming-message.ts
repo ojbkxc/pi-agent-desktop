@@ -24,6 +24,17 @@ export interface StreamingState {
    */
   baselineChars?: number;
   /**
+   * 首个 token 增量（text / thinking / toolCall 参数）的墙钟时刻。
+   *
+   * DeepSeek Harness 的输出速度分母是「首 token → 消息组装完」这段**纯解码时间**
+   * （`decodeMs`），不含首字节延迟（TTFT）。本仓的 `startedAt` 起于 `message_start`，
+   * 那是 HTTP 响应头刚到、一个 token 都还没吐的时刻，直接拿它当分母会系统性地偏低
+   * —— 慢模型（TTFT 几秒）能差一倍以上，这正是「两边数字完全不一样」的来源之一。
+   */
+  firstTokenAt?: number;
+  /** `firstTokenAt` → 最后一个增量的毫秒数；单轮口径下等于 dsh 的 `decodeMs`。 */
+  decodeMs?: number;
+  /**
    * The **finished** turn's output speed, in tokens per second.
    *
    * While text streams the readout can only estimate (characters ÷ 4 ÷ seconds)
@@ -41,7 +52,15 @@ export type StreamAction =
   | { type: "resume" }
   | { type: "snapshot"; message: AgentMessage }
   | { type: "delta"; event: ClientAssistantMessageEvent }
-  | { type: "end" };
+  /**
+   * `message` 是 `message_end` 带来的**完整** assistant 消息（含 `usage`）。
+   *
+   * 必须传：store 里的 `streamingMessage` 来自 `message_start` 的快照，而 pi-ai 在那一刻
+   * 把 `usage` 全填 0（响应头刚到，还没计费）。旧实现 `end` 不带消息，于是
+   * `finishedTurnRate` 读到的 `usage.output` 恒为 0、`finalRate` 恒 undefined —— 屏幕上
+   * 永远只有 `字符÷4` 的估算，那个「真实 token/s」是条死代码。
+   */
+  | { type: "end"; message?: AgentMessage };
 
 export const INITIAL_STREAMING_STATE: StreamingState = {
   isStreaming: false,
@@ -61,10 +80,14 @@ export const FINAL_RATE_TTL_MS = 8_000;
  * prints as `{tps} tok/s`. Only produced when both are usable: a zero/absurd duration
  * would otherwise turn into an infinite rate.
  */
-function finishedTurnRate(state: StreamingState): { tps: number; at: number } | undefined {
-  const usage = state.streamingMessage?.usage;
-  const output = typeof usage?.output === "number" ? usage.output : 0;
-  const seconds = state.streamingMs / 1000;
+function finishedTurnRate(
+  state: StreamingState,
+  message: AssistantMessage | null,
+): { tps: number; at: number } | undefined {
+  const output = typeof message?.usage?.output === "number" ? message.usage.output : 0;
+  // 分母优先用 decode 段（首 token → 末 token），与 DeepSeek Harness 同口径；
+  // 老路径/重连没有首 token 时刻时退回整段墙钟（宁可略低，也不要凭空编）。
+  const seconds = ((state.decodeMs ?? 0) > 0 ? state.decodeMs! : state.streamingMs) / 1000;
   if (output <= 0 || !Number.isFinite(seconds) || seconds < 0.2) return undefined;
   const tps = output / seconds;
   if (!Number.isFinite(tps) || tps <= 0) return undefined;
@@ -207,12 +230,26 @@ export function streamReducer(
         baselineChars: baseline,
       };
     }
-    case "delta":
-      return applyDelta(state, action.event);
+    case "delta": {
+      const next = applyDelta(state, action.event);
+      if (next === state) return state;
+      // 首 token 时刻与 decode 段在这里落点：`applyDelta` 的所有分支（text / thinking /
+      // toolCall）都产出新状态，任一 个首个增量都算「开始吐 token」——与 DeepSeek Harness
+      // 的 `isTokenDelta`（text-delta / reasoning-delta / tool-call-delta）同一判定范围。
+      const now = Date.now();
+      const firstTokenAt = state.firstTokenAt ?? now;
+      return {
+        ...next,
+        firstTokenAt,
+        decodeMs: Math.max(state.decodeMs ?? 0, now - firstTokenAt),
+      };
+    }
     case "end": {
       // Prefer the turn's real output tokens over the running estimate, so the
       // readout ends on the model's actual TPS rather than on a characters ÷ 4 guess.
-      const finished = finishedTurnRate(state);
+      // `action.message` 是 message_end 的完整消息：只有它带真实的 `usage.output`。
+      const settled = action.message?.role === "assistant" ? action.message : state.streamingMessage;
+      const finished = finishedTurnRate(state, settled);
       return finished ? { ...INITIAL_STREAMING_STATE, finalRate: finished } : INITIAL_STREAMING_STATE;
     }
     default:

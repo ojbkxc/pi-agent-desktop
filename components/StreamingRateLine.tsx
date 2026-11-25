@@ -62,7 +62,9 @@ export function StreamingRateLine({ store, variant = "line" }: { store: Streamin
   const seconds = Math.max(sample.streamingMs / 1000, 0.5);
   const tokens = sample.chars / 4;
   const rate = sample.finalTps ?? tokens / seconds;
-  const label = rate < 1 ? "< 1" : String(Math.round(rate));
+  // 与 DeepSeek Harness 的 formatTokensPerSecond 同口径：≥10 取整，<10 保留一位小数。
+  // 一律取整会让 3.4 与 3.6 都显示 3/4 这种跳跃，低速段看着像在乱跳。
+  const label = rate < 1 ? "< 1" : rate >= 10 ? String(Math.round(rate)) : String(Math.round(rate * 10) / 10);
   return (
     <div
       className={variant === "inline" ? "composer-rate-inline" : "composer-rate-line"}
