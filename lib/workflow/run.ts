@@ -49,12 +49,19 @@ export async function runWorkflow(options: WorkflowRunOptions): Promise<Workflow
     options.onEvent?.(event);
   };
 
+  // 内部取消通道：超时时由沙箱的回调 abort 它，钩子据此拒绝新节点、并通过 signal 把
+  // 已经在跑的子 Agent 停掉。只靠 `Promise.race` 的话，返回之后脚本还会接着起节点。
+  const budgetController = new AbortController();
+  const combinedSignal = options.signal
+    ? AbortSignal.any([options.signal, budgetController.signal])
+    : budgetController.signal;
+
   const handle = createWorkflowHooks({
     parentContext: options.parentContext,
     runtime: options.runtime,
     limits,
     onEvent: emit,
-    ...(options.signal ? { signal: options.signal } : {}),
+    signal: combinedSignal,
   });
 
   let value: unknown;
@@ -65,6 +72,8 @@ export async function runWorkflow(options: WorkflowRunOptions): Promise<Workflow
       hooks: handle.hooks,
       timeoutMs: limits.timeoutMs,
       limits,
+      // 超时 = 取消：先把钩子和在跑的子 Agent 停掉，再让 race 抛。
+      onTimeout: () => budgetController.abort(new Error("workflow budget exceeded")),
     });
   } catch (error) {
     // 取消与超时是「事情没做完」，不是脚本写错：带上已经跑出来的部分结果一起返回，
@@ -77,6 +86,9 @@ export async function runWorkflow(options: WorkflowRunOptions): Promise<Workflow
     } else {
       throw error;
     }
+  } finally {
+    // 正常返回也要收尾：脚本可能留下了还在跑的后台节点（它自己 return 了，节点没结束）。
+    if (!budgetController.signal.aborted) budgetController.abort(new Error("workflow finished"));
   }
 
   return {

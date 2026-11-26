@@ -97,16 +97,32 @@ export function createWorkflowHooks(options: CreateHooksOptions): HooksHandle {
       if (typeof prompt !== "string" || prompt.trim() === "") {
         throw new WorkflowError("runtime", "agent() needs a non-empty prompt");
       }
+      // 名额必须**先原子占**再排队。旧实现把检查放在 `await semaphore.acquire()` 之前、
+      // 自增放在之后：排队期间所有等待者读到的 `started` 都还是旧值，于是
+      // `maxAgents=2, maxConcurrent=2, parallel(8)` 实测**起了 8 个**——总量预算被并发
+      // 窗口整体绕过（典型 TOCTOU）。这里改成「检查 + 自增」在同一次同步执行内完成。
       if (started >= limits.maxAgents) {
         throw new WorkflowError(
           "limit",
           `Workflow reached its ${limits.maxAgents}-agent budget; split it into a script with fewer nodes`,
         );
       }
-
-      await semaphore.acquire();
       const index = started;
       started += 1;
+
+      try {
+        await semaphore.acquire();
+      } catch (error) {
+        // 排队失败要把刚占的名额还回去，否则预算会被永久吃掉。
+        started -= 1;
+        throw error;
+      }
+      // 取消可能发生在排队期间：拿到名额后再看一次，否则「点停止之后又起了一个节点」。
+      if (cancelled()) {
+        started -= 1;
+        semaphore.release();
+        throw new WorkflowError("aborted", "Workflow was cancelled while the agent was queued");
+      }
       const description = describeAgent(agentOptions, index);
       onEvent?.({ type: "agent_start", index, description });
       try {

@@ -64,6 +64,14 @@ export interface RunSandboxOptions {
   /** 脚本整体超时（毫秒）：沙箱里的死循环不能把进程拖住。 */
   timeoutMs: number;
   limits: WorkflowLimits;
+  /**
+   * 超时那一刻的回调。
+   *
+   * 为什么必须有：`Promise.race` 只表示「我们不再等了」，**脚本本身还在跑**，它接着还能
+   * `agent()` 起新节点、写日志——实测预算 150ms 时，返回后 700ms 又起了一个、`logs` 也被
+   * 追加。所以调用方要在这里 abort 一个 controller，让钩子把它们真的停掉。
+   */
+  onTimeout?: () => void;
 }
 
 /**
@@ -116,7 +124,16 @@ export async function runWorkflowScript(options: RunSandboxOptions): Promise<unk
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new WorkflowError("timeout", `Workflow exceeded its ${Math.round(options.timeoutMs / 1000)}s budget`)),
+      () => {
+        // 先让调用方把钩子与已起的子 Agent 停掉，再拒绝。顺序反了的话，脚本会在我们
+        // 抛出之后继续跑一段（它拿到的每个 `agent()` 都还没被 abort）。
+        try {
+          options.onTimeout?.();
+        } catch {
+          // 取消钩子自己出错不能顶掉超时这个真原因。
+        }
+        reject(new WorkflowError("timeout", `Workflow exceeded its ${Math.round(options.timeoutMs / 1000)}s budget`));
+      },
       options.timeoutMs,
     );
   });
