@@ -377,9 +377,13 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
             const stalled = ticketStalled(ticket, snapshot.members);
             const inChain = chainState(ticket.id);
             const concurrent = concurrencyById.get(ticket.id);
-            // 上一帧 blocked、本帧 available → 刚解锁。
-            const justUnlocked = urgencyBeforeById?.get(ticket.id) === "blocked"
-              && urgencyNowById.get(ticket.id) === "available";
+            // 「刚解锁」= 上一帧还被依赖卡着、本帧不再被卡——与它落到 available 还是
+            // assigned 无关。旧判定写死目标态 `=== "available"`，而计划票几乎都有 owner
+            // （解析成功就合成一条派活），解锁后落到 assigned ⇒ 这个瞬时反馈对有主的票
+            // **永久不出现**。
+            const wasBlocked = urgencyBeforeById?.get(ticket.id) === "blocked";
+            const nowBlocked = urgencyNowById.get(ticket.id) === "blocked";
+            const justUnlocked = wasBlocked && !nowBlocked;
             const classNames = [
               "agent-teams-board-task",
               taskToneClass(task.urgency),

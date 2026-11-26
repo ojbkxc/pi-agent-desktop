@@ -134,10 +134,18 @@ test("同 contentHash + 不同 generatedAt 不追加新帧（修掉「60 帧同�
   const snapshots = appendTeamSnapshot([], first);
   assert.equal(snapshots.length, 1);
 
-  // 内容未变，只是下一轮轮询换了时间戳：必须返回同一数组引用。
+  // 内容未变、只是下一轮轮询换了时间戳：**不追加帧**，但末帧的时间要跟着走。
+  //
+  // 为什么必须刷新时间：`generatedAt` 有两个消费者拿它当「现在」用 —— `layoutFormation`
+  // 的队长「在读写」判定（`LEAD_IDLE_AFTER_MS`，10 分钟无活动就翻 idle）与 `DispatchPanel`
+  // 的刷新节拍（依赖 `snapshotStamp`）。整帧丢弃会让它们读到冻结的时间戳：空闲团队的队长
+  // 卡片永远显示「在读流」，调度建议永不自动刷新。内容引用仍复用上一帧（hash 一致）。
   const unchanged = appendTeamSnapshot(snapshots, snapshotWithHash(at(2), "aaaa1111aaaa1111"));
-  assert.equal(unchanged, snapshots, "contentHash 相同必须保持引用不变");
-  assert.equal(unchanged.length, 1);
+  assert.equal(unchanged.length, 1, "contentHash 相同不追加帧");
+  assert.equal(unchanged[0].generatedAt, at(2), "但时间戳必须前进（否则「现在」被冻住）");
+  assert.equal(unchanged[0].tickets, snapshots[0].tickets, "内容字段复用上一帧的引用");
+  // 时间戳也没变时连这一步都省掉：引用不变，React 不重渲染。
+  assert.equal(appendTeamSnapshot(unchanged, snapshotWithHash(at(2), "aaaa1111aaaa1111")), unchanged);
 
   // 再轮询两次也不追加——模拟空闲团队连轮询。
   let current = unchanged;

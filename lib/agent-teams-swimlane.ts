@@ -767,7 +767,19 @@ export function projectTeamWorkbench(input: SwimlaneInput): TeamWorkbenchSnapsho
       // 但**只覆盖非空**：pi-team `createTicket` 的 assignees 是可选参数（assignments 可为 []），
       // 无条件覆盖会把计划票「谁在做、做到哪」整条抹掉 —— 画布随即从 running 跳回可认领，
       // 而 runtime 侧根本没提供任何替代信息。空数组视为「运行时没表态」，保留计划口径。
-      if (assignments.length > 0) existing.assignments = assignments;
+      if (assignments.length > 0) {
+        existing.assignments = assignments;
+      } else if (runtime.status === "ended") {
+        // 单向保护的另一半：runtime 的空 assignments 只说明「没提供新派活」，**不说明**
+        // 「旧派活还活着」。票已经 ended、却把计划侧那条 running 派活留着，会造出任何单一
+        // 来源都不存在的状态「已完成 + 进行中」——画布挂「1 项进行中」并发徽标、进度条画成
+        // 比例未知、成员检查器与 `idleMemberIds` 把这位**已经干完活**的成员永久算忙
+        // （他从此不再出现在调度建议的候选里）。所以票结束时要一并收尾保留的派活。
+        existing.assignments = existing.assignments.map((item) =>
+          item.status === "running" || item.status === "pending"
+            ? { ...item, status: "ended" as const, outcome: item.outcome ?? "completed" }
+            : item);
+      }
       existing.status = runtime.status;
       existing.source = "merged";
       if (existing.ownerId === null) {

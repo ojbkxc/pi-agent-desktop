@@ -81,6 +81,24 @@ test("有主票：渲染负责人（可点）、票 id / 主题 / 状态标签",
   assert.doesNotMatch(html, /Unassigned/);
 });
 
+test("已派未开工的票：抽屉标签必须是「Assigned」而不是「Available」", () => {
+  // 假承诺回归：成员侧没有 claim 工具，把「已派但没开工」显示成可认领是错的。
+  // 旧实现用 if/else 尾兜 `teams.stats.available`，新增 assigned 态时抽屉与检查器都没跟上。
+  const assigned = ticket("t2", {
+    ownerId: "impl",
+    subject: "Assigned thing",
+    assignments: [{ id: "as-1", status: "pending", memberId: "impl", assignee: "impl" }],
+  });
+  const html = render({
+    snapshot: snapshot({ members: [member("impl", "impl")], tickets: [assigned] }),
+    ticketId: "t2",
+    onClose: () => {},
+    onSelectMember: () => {},
+  });
+  assert.match(html, /Assigned/, "assigned 必须显示成「已派未开工」");
+  assert.doesNotMatch(html, /Available/, "绝不能落回「可认领」");
+});
+
 test("依赖与解锁：依赖列本票的 dependencies，解锁列依赖本票的其它票", () => {
   const tickets = [
     ticket("t0", { subject: "root" }),

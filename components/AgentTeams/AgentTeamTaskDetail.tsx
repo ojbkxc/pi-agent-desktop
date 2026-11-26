@@ -9,12 +9,25 @@ import { resolveTicketOwner } from "@/lib/agent-teams-owner";
 import type { TeamWorkbenchSnapshot } from "@/lib/agent-teams-swimlane";
 
 /** 票态（紧急度）→ 复用既有词条键（与成员检查器同一口径）。 */
+/**
+ * 票态 → 词条键。**穷尽映射**，不写 `if` 链兜底。
+ *
+ * 旧实现是 `if/else` 尾兜 `teams.stats.available`：新增第 6 态 `assigned`（已派未开工）时
+ * 只有画布与统计头跟上了，抽屉与成员检查器仍把它显示成「可认领」——正是这次收口要消灭的
+ * 那个假承诺（成员侧根本没有 claim 工具）。`Record<TicketUrgency, string>` 让枚举再扩张时
+ * **编译期就红**，不会静默错分。
+ */
+const TICKET_STATE_LABEL_KEY: Record<TicketUrgency, string> = {
+  completed: "teams.status.completed",
+  running: "teams.status.running",
+  failed: "teams.status.failed",
+  blocked: "teams.stats.blocked",
+  assigned: "teams.stats.assigned",
+  available: "teams.stats.available",
+};
+
 function ticketStateLabelKey(urgency: TicketUrgency): string {
-  if (urgency === "completed") return "teams.status.completed";
-  if (urgency === "running") return "teams.status.running";
-  if (urgency === "failed") return "teams.status.failed";
-  if (urgency === "blocked") return "teams.stats.blocked";
-  return "teams.stats.available";
+  return TICKET_STATE_LABEL_KEY[urgency];
 }
 
 /** 抽屉切换到「低位全宽」形态的视口宽度门槛（与 useIsMobile / globals.css 同值）。 */

@@ -69,7 +69,20 @@ export function appendTeamSnapshot(
       // 宁可多一帧（视觉上多一格），不可漏一次更新（漏了就是「改了不刷新」）。
       same = false;
     }
-    if (same) return snapshots;
+    if (same) {
+      // 内容没变，但**时间在走**：`generatedAt` 不是纯展示字段，有两个消费者拿它当「现在」
+      // 用 —— `layoutFormation` 的队长「在读写」判定（`LEAD_IDLE_AFTER_MS`）与
+      // `DispatchPanel` 的刷新节拍（依赖 `snapshotStamp`）。整帧丢弃会让这两个判定读到
+      // 冻结的时间戳：一支内容长期不变的空闲团队，队长卡片会永远显示「在读流」，调度建议
+      // 也永不自动刷新。
+      //
+      // 所以只刷新末帧的**时间**（内容字段仍取 last，与 contentHash 保持一致）；
+      // `generatedAt` 相等时连这一步都省掉，引用不变、React 不重渲染。
+      if (last.generatedAt === snapshot.generatedAt) return snapshots;
+      const refreshed = [...snapshots];
+      refreshed[refreshed.length - 1] = { ...last, generatedAt: snapshot.generatedAt };
+      return refreshed;
+    }
   }
   const next = [...snapshots, snapshot];
   return next.length > WORKBENCH_HISTORY_LIMIT ? next.slice(-WORKBENCH_HISTORY_LIMIT) : next;

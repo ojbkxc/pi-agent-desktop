@@ -12452,6 +12452,9 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .agent-teams-formation-seg--blocked { background: var(--warning); }
 .agent-teams-formation-seg--failed { background: var(--danger); }
 .agent-teams-formation-seg--available { background: var(--text-dim); }
+/* assigned：已派未开工。与 running 同为 info 色系但更淡（虚位而非实心）—— */
+/* 静态截图里两者必须能分开，光靠 running 的 pulse 动画不够（reduced-motion 下动画也没了）。 */
+.agent-teams-formation-seg--assigned { background: var(--info); opacity: 0.45; }
 
 .agent-teams-formation-badge {
   padding: 1px 6px;
@@ -12464,6 +12467,7 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
 .agent-teams-formation-badge--blocked { background: var(--warning); color: var(--bg); }
 .agent-teams-formation-badge--failed { background: var(--danger); color: var(--bg); }
 .agent-teams-formation-badge--available { background: var(--bg-hover); color: var(--text-muted); }
+.agent-teams-formation-badge--assigned { background: var(--bg-hover); color: var(--info); }
 
 /* #55 忙闲可见：忙闲 pill 与紧急度徽标同排（meta-row），卡高不变。pill 三态——
    idle 用中性底（有别于可认领的 warning），running/pending 沿用 info/warning 色。 */
