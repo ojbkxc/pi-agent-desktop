@@ -401,9 +401,19 @@ export interface TeamWorkbenchSnapshot {
 /**
  * 由 tickets 算出 `taskListRevision`（纯函数，客户端可安全调用）。
  *
+ * **现状：没有任何消费者。** 全仓只有这里产出、以及 `contentHash` 把它算进整帧指纹
+ * （而 `contentHash` 本来就整份 hash 了 tickets，等于重复）。留着是因为「任务列表变没变」
+ * 这个信号将来有用，但别再往 docstring 里写「轮询去重/回放对账/UI 跳重渲染都用它」——
+ * 那是承诺，不是现状（去重走 `contentHash`，回放对账走 `frameKey`）。
+ *
  * 只纳入**会影响画布/统计**的字段：id / status / ownerId / dependencies / 每条 assignment 的
- * id·status·outcome。subject、description、thread、mandates 一律不参与 —— leader 改文案不该
- * 触发全量重渲染。序列化前先把票和 assignment 按 id 排序，落盘顺序变了不算内容变化。
+ * id·status·outcome·assignee·memberId·startedAt·lastActivityAt / createdAt / source。
+ * subject、description、thread、mandates 一律不参与 —— leader 改文案不该触发全量重渲染。
+ *
+ * 序列化必须**无歧义**：依赖与 assignment 都用 JSON 数组而不是 `join(",")` / `join("|")`。
+ * 旧写法有两个洞：`["a,b"]` 与 `["a","b"]` 摘要相同（分隔符碰撞），而依赖**没排序**导致
+ * `["a","b"]` 与 `["b","a"]` 被当成两次不同内容（误报）——画布行序按 `createdAt`、
+ * 泳道锚点按 `source`，这两个字段以前没进表，改了画面却摘要不变。
  *
  * 双 32 位 FNV-1a 累加（target 是 ES2017，不能用 BigInt 字面量）：64 位抗碰撞对
  * 「几百张票的变更检测」绰绰有余，而快照体积只多 16 个 hex 字符。
@@ -418,14 +428,24 @@ export function deriveTaskListRevision(
     .map((ticket) => {
       const assignments = [...ticket.assignments]
         .sort(byId)
-        .map((assignment) => `${assignment.id}:${assignment.status}:${assignment.outcome ?? ""}`)
-        .join("|");
+        .map((assignment) => [
+          assignment.id,
+          assignment.status,
+          assignment.outcome ?? "",
+          assignment.assignee,
+          assignment.memberId ?? "",
+          assignment.startedAt ?? "",
+          assignment.lastActivityAt ?? "",
+        ]);
       return [
         ticket.id,
         ticket.status,
         ticket.ownerId ?? "",
-        ticket.dependencies.join(","),
-        assignments,
+        // JSON 数组 + 排序：既不会被分隔符碰撞，也不会因依赖书写顺序不同而误报。
+        JSON.stringify([...ticket.dependencies].sort()),
+        JSON.stringify(assignments),
+        ticket.createdAt,
+        ticket.source,
       ].join("\u001f");
     })
     .join("\u001e");

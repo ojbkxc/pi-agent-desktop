@@ -167,13 +167,25 @@ export function createWorkflowHooks(options: CreateHooksOptions): HooksHandle {
     async pipeline(items, ...stages) {
       if (!Array.isArray(items)) throw new WorkflowError("runtime", "pipeline() needs an array of items");
       // **没有栅栏**：每个 item 独立穿过所有 stage，一项慢不挡别人。
+      //
+      // 也**逐项容错**：某项的某个 stage 抛错只把那项变成 `null`，与 `parallel` 一致
+      // （那边 `:72-82` 就是这么做的）。旧实现直接 `Promise.all`，一项失败整个 pipeline
+      // reject，已经跑完的其它项成果一起丢掉——实测「item a failed」时 b 明明已经跑完了。
       return Promise.all(
         items.map(async (item, index) => {
           let previous: unknown = item;
-          for (const stage of stages) {
-            previous = await stage(previous, item, index);
+          try {
+            for (const stage of stages) {
+              previous = await stage(previous, item, index);
+            }
+            return previous;
+          } catch (error) {
+            // 失败不抛出，但要让调用方能看出是哪一项坏了：记一条带下标的日志。
+            // 具体错误信息由 stage 自己负责（它比这里更清楚上下文）。
+            const message = error instanceof Error ? error.message : String(error);
+            logs.push(`pipeline item ${index} failed: ${message}`);
+            return null;
           }
-          return previous;
         }),
       );
     },
