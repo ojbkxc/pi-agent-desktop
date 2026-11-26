@@ -56,6 +56,15 @@ export interface RalphReport {
   next: string;
   /** 阻塞原因；空表示没被卡住。 */
   blocker: string;
+  /**
+   * worker 明确报告 `STATUS: blocked`。
+   *
+   * 为什么要单独一个字段：旧实现只读 `complete`，`blocked` 被整条丢掉。worker 按契约写
+   * `STATUS: blocked` 但 `BLOCKER:` 留空（契约里写着可以写 `none`）时，`blocker` 是空串、
+   * `complete` 是 false ⇒ 循环当成「继续」，一路空转到 `maxRounds`（实测 5 轮全在空转）。
+   * `blocked` 是 worker 的**结论**，不该因为缺一句说明就作废。
+   */
+  blocked: boolean;
   /** 目标是否已达成。 */
   complete: boolean;
 }
@@ -111,6 +120,8 @@ export function parseRalphReport(text: string): RalphReport {
     blocker: /^(none|no|n\/a|-)?$/i.test(blocker) ? "" : blocker,
     // 只有明确写着 complete 才算完成；其它（含空）一律 continue。
     complete: /^complete(d)?$/.test(status),
+    // 但 `blocked` 是 worker 的结论，不能因为 BLOCKER 留空就丢掉（见 RalphReport.blocked）。
+    blocked: /^blocked$/.test(status),
   };
 }
 
@@ -199,7 +210,7 @@ export async function runRalphLoop(options: RalphLoopOptions): Promise<RalphResu
         index,
         status: "failed",
         sessionId: run.sessionId,
-        report: { did: "", next: "", blocker: "", complete: false },
+        report: { did: "", next: "", blocker: "", blocked: false, complete: false },
         error: run.error ?? run.status,
       };
       rounds.push(round);
@@ -211,7 +222,7 @@ export async function runRalphLoop(options: RalphLoopOptions): Promise<RalphResu
     const report = parseRalphReport(run.result ?? "");
     const round: RalphRound = {
       index,
-      status: report.complete ? "complete" : report.blocker ? "blocked" : "continue",
+      status: report.complete ? "complete" : (report.blocked || report.blocker) ? "blocked" : "continue",
       sessionId: run.sessionId,
       report,
     };
@@ -222,10 +233,18 @@ export async function runRalphLoop(options: RalphLoopOptions): Promise<RalphResu
       stopReason = "complete";
       break;
     }
+    // worker 说 `STATUS: blocked` 但没给理由（契约允许 `BLOCKER: none`）：那是它的结论，
+    // 不该当成「继续」一路空转到上限。旧实现只认 blocker 文本，实测 5 轮全在空转。
+    if (report.blocked && !report.blocker) {
+      stopReason = "blocked";
+      break;
+    }
     if (report.blocker) {
       // 同一个阻塞连续出现 = 再跑也一样；换了阻塞说明还在推进，继续。
-      blockerRepeats = report.blocker === previousBlocker ? blockerRepeats + 1 : 1;
-      previousBlocker = report.blocker;
+      // 比较前归一化：大小写或多余空白变一下就算「换了阻塞」，会让早停永远不触发。
+      const normalized = report.blocker.trim().toLowerCase().replace(/\s+/g, " ");
+      blockerRepeats = normalized === previousBlocker ? blockerRepeats + 1 : 1;
+      previousBlocker = normalized;
       if (blockerRepeats >= RALPH_REPEAT_BLOCKER_LIMIT) {
         stopReason = "blocked";
         break;
