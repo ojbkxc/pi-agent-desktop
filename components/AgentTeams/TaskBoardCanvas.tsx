@@ -285,13 +285,22 @@ export const TaskBoardCanvas = memo(function TaskBoardCanvas({
         <p className="agent-teams-board-cycle-warning" role="status">{t("teams.cycleWarning")}</p>
       )}
       {layout.danglingDependencies.length > 0 && (
-        <p className="agent-teams-board-cycle-warning" role="status">
+        // 两个类名：`cycle-warning` 供样式复用（同一行横幅样式），
+        // `dangling-warning` 供语义区分——两者同屏时读屏用户不该拿到两个同名 status 区域。
+        <p className="agent-teams-board-cycle-warning agent-teams-board-dangling-warning" role="status">
           {t("teams.danglingWarning", {
             count: layout.danglingDependencies.length,
             list: layout.danglingDependencies
               .slice(0, DANGLING_WARNING_LIMIT)
               .map((item) => `${item.ticketId} → ${item.dependencyId}`)
-              .join("、"),
+              // 分隔符走 i18n：写死中文顿号会出现在英文界面上（同一仓其它列表都用逗号）。
+              .join(t("common.listSeparator")),
+            // 截断必须说出来：`count` 是总数，括号里只有 5 项，不标「还有 N 条」的话
+            // 读者会以为悬空边就这几条。传的是**拼好的文本**而不是数字——模板里写着
+            // `（{list}{more}）`，丢一个裸数字进去会渲染成 `t4 → ghost4`。
+            more: layout.danglingDependencies.length > DANGLING_WARNING_LIMIT
+              ? t("teams.danglingWarningMore", { count: layout.danglingDependencies.length - DANGLING_WARNING_LIMIT })
+              : "",
           })}
         </p>
       )}

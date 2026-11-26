@@ -251,6 +251,22 @@ test("G16：悬空依赖在画布上渲染告警，且列出具体的票→依�
   assert.doesNotMatch(clean, /dependency edge|条依赖/);
 });
 
+test("G16：截断到 5 条时必须说出还有几条（否则读者以为悬空边就这些）", () => {
+  const many = Array.from({ length: 9 }, (_, i) => ticket(`t${i}`, { dependencies: ["ghost"] }));
+  const html = render(snapshot(many));
+  assert.match(html, /9 dependency edges|9 条依赖/, "count 是总数");
+  assert.match(html, /4 more|另有 4 条/, "截断后剩下的 4 条要标出来");
+  // 只列 5 条具体边：第 6 条（t5）不该出现在列表里。
+  assert.match(html, /t4 → ghost/);
+  assert.doesNotMatch(html, /t5 → ghost/);
+});
+
+test("G16：分隔符跟随语言——英文界面不出现中文顿号", () => {
+  const html = render(snapshot([ticket("a", { dependencies: ["ghost1", "ghost2"] })]));
+  assert.doesNotMatch(html, /ghost1、ghost2/, "英文 locale 下分隔符必须是逗号");
+  assert.match(html, /ghost1, ghost2/);
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 本轮修复：并发可见（同票多成员并行）+ 重复依赖去重 + 成员多时画布宽度。
 // ─────────────────────────────────────────────────────────────────────────────

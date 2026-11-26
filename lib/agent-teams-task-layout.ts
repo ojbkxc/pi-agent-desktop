@@ -146,8 +146,8 @@ function compareTicketsForAppend(left: WorkbenchTicket, right: WorkbenchTicket):
  * ended → completed；有 running 派活 → in_progress；依赖里存在未 ended 的票 →
  * blocked；其余 available。已从任务列表消失的依赖视为已解除（与 cc-haha 一致）。
  *
- * 注意：这是四态口径，保留给仍在使用的调用方（AgentTeamsView）；展示层请改用
- * getTicketUrgency，它是叠加了失败态的单一真源。
+ * 注意：这是**五态**口径（多了 `assigned`：已派活但派活还没 running）。保留给仍在使用的
+ * 调用方（AgentTeamsView）；展示层请改用 getTicketUrgency，它是叠加了失败态的单一真源。
  */
 export function getTeamTaskState(
   ticket: WorkbenchTicket,
@@ -186,15 +186,24 @@ export function findDanglingDependencies(
   const known = new Set(tickets.map((ticket) => ticket.id));
   const dangling: DanglingDependency[] = [];
   for (const ticket of tickets) {
+    // 同一条依赖写了两遍（`dependencies` 是上游原样透传的，写入侧没有去重保证）只该报
+    // 一次：否则横幅会显示「3 条依赖…（a → ghost、a → ghost、a → ghost）」，而实际只有
+    // 一条边——计数虚高比不报更误导。上层邻接表本来就去重（`[...new Set(...)]`），这里
+    // 之前漏了。
+    const seen = new Set<string>();
     for (const dependencyId of ticket.dependencies) {
-      if (known.has(dependencyId)) continue;
+      if (known.has(dependencyId) || seen.has(dependencyId)) continue;
+      seen.add(dependencyId);
       dangling.push({ ticketId: ticket.id, dependencyId });
     }
   }
+  // 排序要**全序**：`TICKET_ID_COLLATOR` 对 `A`/`a`、`t-1`/`t-01` 这类返回 0，而
+  // `Array.prototype.sort` 稳定 ⇒ 平局时保留输入顺序，「与输入顺序无关」就成了空话，
+  // 快照对比/回放也会抖。复用同文件的 `compareTicketIds`（它带原始字符串兜底）。
   dangling.sort((left, right) => {
-    const byTicket = TICKET_ID_COLLATOR.compare(left.ticketId, right.ticketId);
+    const byTicket = compareTicketIds(left.ticketId, right.ticketId);
     if (byTicket !== 0) return byTicket;
-    return TICKET_ID_COLLATOR.compare(left.dependencyId, right.dependencyId);
+    return compareTicketIds(left.dependencyId, right.dependencyId);
   });
   return dangling;
 }
