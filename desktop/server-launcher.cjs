@@ -310,5 +310,14 @@ try {
 }
 
 // The standalone Next.js entrypoint is CommonJS.
+//
+// 这一段是启动期最大的同步块：`server.js` 会同步加载整棵 Next 模块图（含 React、
+// 路由清单），实测吃掉 3.5–15 秒，期间事件循环**完全阻塞**——桌面壳的探针会以为
+// 服务挂了（打一条 `server is alive but not answering`），首帧窗口也在这儿等。
+// 所以前后各打一条时间，把「到底卡在这一步多久」变成可测的数字，而不是靠猜。
+const nextRequireStartedAt = Date.now();
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 require("./server.js");
+console.error(
+  `[Pi Agent] next entry loaded in ${Date.now() - nextRequireStartedAt} ms (${sinceStart()})`,
+);
