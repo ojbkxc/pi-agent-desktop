@@ -162,9 +162,11 @@ export function registerNodeInstrumentation(): void {
   // 事件循环被占 4431ms——那 4.4 秒不是路由自己的，是这个预热 import 的解码/编译在主线程上
   // 跑。「注意(overlap)」的假设只在浏览器慢于 import 时成立。
   //
-  // 所以延后一拍：等首个请求（桌面壳的 identity 探针）走完再开始预热。首请求不再被拖住，
-  // 预热仍在用户真正操作之前完成。`setTimeout(0)` 不够——那时首请求可能还没到；给 1.5s。
-  const warmAfterStartupMs = Number.parseInt(process.env.PI_WEB_WARMUP_DELAY_MS ?? "1500", 10);
+  // 第一版修法是「延后 1.5 秒」，实测**只挪不消**：首响应从 4655ms 降到 76ms（对了），但
+  // 阻塞挪到了连接之前（首个连接 +1.0s → +4.6s），总时长没省。
+  //
+  // 现在的口径：等**首个响应真的发出**再预热。launcher 的探针在 `finish` 时置
+  // `globalThis.__piFirstResponseSent`，这里轮询它，最多等 10 秒（探针不来也不能永远不预热）。
   const warmUp = () => {
     const startedAt = Date.now();
     void import("@earendil-works/pi-coding-agent")
@@ -174,10 +176,21 @@ export function registerNodeInstrumentation(): void {
         if (elapsed >= 50) console.error(`[Pi Agent] instrumentation: sdk-warmup took ${elapsed} ms`);
       });
   };
-  if (Number.isFinite(warmAfterStartupMs) && warmAfterStartupMs > 0) {
-    const timer = setTimeout(warmUp, warmAfterStartupMs);
-    timer.unref?.();
-  } else {
+  /** `PI_WEB_WARMUP_DELAY_MS=0` 恢复「立刻预热」（对照用）；正数则等首响应后这么多毫秒。 */
+  const warmDelayMs = Number.parseInt(process.env.PI_WEB_WARMUP_DELAY_MS ?? "0", 10);
+  if (Number.isFinite(warmDelayMs) && warmDelayMs <= 0) {
     warmUp();
+  } else {
+    const deadline = Date.now() + 10_000;
+    const waitForFirstResponse = (): void => {
+      if ((globalThis as { __piFirstResponseSent?: boolean }).__piFirstResponseSent === true || Date.now() >= deadline) {
+        const timer = setTimeout(warmUp, warmDelayMs);
+        timer.unref?.();
+        return;
+      }
+      const again = setTimeout(waitForFirstResponse, 100);
+      again.unref?.();
+    };
+    waitForFirstResponse();
   }
 }

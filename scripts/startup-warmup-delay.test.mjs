@@ -3,40 +3,55 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 /**
- * SDK 预热必须**让开首个请求**。
+ * SDK 预热必须**等首个响应发出之后**，而不是靠固定延迟。
  *
- * 实测（用新加的启动分段计时抓到的）：桌面壳的首个探针 `GET /api/desktop/identity` 花了
- * **4655ms**，期间事件循环被占 **4431ms**。那条路由本身只读一个环境变量——4.4 秒不是它的，
- * 是 `import("@earendil-works/pi-coding-agent")` 在主线程上解码/编译整棵 SDK。
+ * 两轮实测：
+ * 1. 原实现（register 末尾直接 import）：桌面壳首探针 `GET /api/desktop/identity` 4655ms，
+ *    期间事件循环被占 4431ms。那 4.4 秒是 SDK 解码/编译在主线程上跑，不是路由自己的
+ *    （那条路由只读一个环境变量）。
+ * 2. 第一版修法（延后 1.5 秒）：首响应降到 **76ms**（对了），但阻塞**挪到了连接之前**
+ *    ——首个连接从 +1.0s 变 +4.6s，总时长没省。等于只是让观察者看到的数字好看。
  *
- * 旧注释的假设是「预热与打开浏览器重叠」，但那次 import 比浏览器快，于是它和首个请求撞在
- * 一起，把「马上返回 204」的探针拖成 4.6 秒，桌面壳还会因此打一条
- * `server is alive but not answering`（误报）。
- *
- * 修法：延后一拍再预热（默认 1.5s，`PI_WEB_WARMUP_DELAY_MS` 可调，设 0 则立刻预热）。
+ * 现在的口径：launcher 在首个响应 `finish` 时置 `globalThis.__piFirstResponseSent`，
+ * instrumentation 轮询它（最多等 10 秒，探针不来也不能永远不预热），确认之后才预热。
  */
-const source = readFileSync(new URL("../instrumentation-node.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+const instrumentation = readFileSync(new URL("../instrumentation-node.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+const launcher = readFileSync(new URL("../desktop/server-launcher.cjs", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
-test("the SDK warm-up is deferred instead of racing the first request", () => {
-  assert.match(source, /PI_WEB_WARMUP_DELAY_MS/, "延迟要可调");
-  assert.match(source, /setTimeout\(warmUp, warmAfterStartupMs\)/, "默认走延迟路径");
-  // 旧形态：register() 末尾直接 import()——那正是和首请求抢主线程的写法。
+test("the launcher publishes a flag when the first response is actually sent", () => {
+  assert.match(launcher, /globalThis\.__piFirstResponseSent = true/, "launcher 要在首响应 finish 时置标记");
+  // 必须在 first response 日志的同一个 finish 回调里——不能在 request 到达时就置，
+  // 那时预热会和「正在处理的这个请求」抢线程。
+  const finishAt = launcher.indexOf('response?.once?.("finish"');
+  const flagAt = launcher.indexOf("__piFirstResponseSent = true");
+  assert.ok(finishAt > 0 && flagAt > finishAt, "标记要落在 finish 回调里");
+});
+
+test("the warm-up waits for that flag instead of a fixed delay", () => {
+  assert.match(instrumentation, /__piFirstResponseSent/, "预热要轮询标记");
+  assert.match(instrumentation, /__piFirstResponseSent === true \|\| Date\.now\(\) >= deadline/, "标记为真或超时才继续");
+  assert.match(instrumentation, /10_000/, "要有上限：探针不来也不能永远不预热");
+});
+
+test("delay 0 still warms immediately (comparison escape hatch)", () => {
+  assert.match(instrumentation, /warmDelayMs <= 0/, "0 走立即分支");
+});
+
+test("the fixed-delay version is gone (it only moved the block, did not remove it)", () => {
   assert.doesNotMatch(
-    source,
-    /\n  import\("@earendil-works\/pi-coding-agent"\)\.catch\(\(\) => \{\}\);/,
-    "不能再在 register() 末尾直接 import",
+    instrumentation,
+    /setTimeout\(warmUp, warmAfterStartupMs\)/,
+    "固定延迟版本已被实测证伪，不许回来",
+  );
+  assert.doesNotMatch(
+    instrumentation,
+    /\n {2}import\("@earendil-works\/pi-coding-agent"\)\.catch\(\(\) => \{\}\);/,
+    "register() 末尾直接 import 更不许回来",
   );
 });
 
-test("setting the delay to 0 still warms immediately (escape hatch kept)", () => {
-  assert.match(source, /warmAfterStartupMs > 0/, "0 要走立即分支");
-  assert.match(source, /} else \{\s*\n\s*warmUp\(\);/, "立即分支必须存在");
-});
-
-test("the warm-up is timed, so a slow one shows up instead of hiding", () => {
-  assert.match(source, /instrumentation: sdk-warmup took/, "预热也要记账");
-});
-
-test("the timer does not hold the process open", () => {
-  assert.match(source, /\.unref\?\.\(\)/, "延迟定时器必须 unref，否则进程退不出去");
+test("the polling timers are unref'd and the warm-up is timed", () => {
+  assert.match(instrumentation, /timer\.unref\?\.\(\)/, "预热定时器要 unref");
+  assert.match(instrumentation, /again\.unref\?\.\(\)/, "轮询定时器也要 unref，否则进程退不出去");
+  assert.match(instrumentation, /instrumentation: sdk-warmup took/, "预热要记账");
 });

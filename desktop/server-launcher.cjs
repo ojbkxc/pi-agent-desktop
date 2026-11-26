@@ -140,6 +140,10 @@ console.error(`[Pi Agent] launcher started ${sinceStart()} (node ${process.versi
         console.error(
           `[Pi Agent] first response ${response.statusCode} sent after ${Date.now() - received} ms (${sinceStart()})`,
         );
+        // 首个响应发出 = 桌面壳的 identity 探针已经过了。放在 `globalThis` 上供
+        // `instrumentation-node.ts` 轮询：SDK 预热要等这一刻之后再做，否则它会和首个请求
+        // 抢主线程（实测把一条只读环境变量的路由拖到 4655ms）。
+        globalThis.__piFirstResponseSent = true;
       });
     }
     if (sawConnection && sawRequest && http.Server.prototype.emit === emitWithStartupTiming) {
