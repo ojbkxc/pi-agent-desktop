@@ -157,5 +157,27 @@ export function registerNodeInstrumentation(): void {
   // Windows (#964). Start that import now, unawaited so register() stays fast:
   // it overlaps the browser opening, and the routes reuse Node's cached module.
   // A failure is left for the routes' own import to report.
-  import("@earendil-works/pi-coding-agent").catch(() => {});
+  //
+  // 但它和**首个请求**抢主线程：实测 identity 那条只读环境变量的极轻路由要 4655ms，期间
+  // 事件循环被占 4431ms——那 4.4 秒不是路由自己的，是这个预热 import 的解码/编译在主线程上
+  // 跑。「注意(overlap)」的假设只在浏览器慢于 import 时成立。
+  //
+  // 所以延后一拍：等首个请求（桌面壳的 identity 探针）走完再开始预热。首请求不再被拖住，
+  // 预热仍在用户真正操作之前完成。`setTimeout(0)` 不够——那时首请求可能还没到；给 1.5s。
+  const warmAfterStartupMs = Number.parseInt(process.env.PI_WEB_WARMUP_DELAY_MS ?? "1500", 10);
+  const warmUp = () => {
+    const startedAt = Date.now();
+    void import("@earendil-works/pi-coding-agent")
+      .catch(() => undefined)
+      .finally(() => {
+        const elapsed = Date.now() - startedAt;
+        if (elapsed >= 50) console.error(`[Pi Agent] instrumentation: sdk-warmup took ${elapsed} ms`);
+      });
+  };
+  if (Number.isFinite(warmAfterStartupMs) && warmAfterStartupMs > 0) {
+    const timer = setTimeout(warmUp, warmAfterStartupMs);
+    timer.unref?.();
+  } else {
+    warmUp();
+  }
 }
