@@ -19,6 +19,45 @@ import { WorkflowError } from "./types";
 /** 脚本最大长度：够写几百行的编排，又不至于把工具参数变成一份代码库。 */
 export const MAX_WORKFLOW_SCRIPT_BYTES = 64 * 1024;
 
+/**
+ * 脚本里**不许出现**的标识符。
+ *
+ * 为什么需要这道静态闸：`vm` 不是安全边界，而钩子函数本身是**宿主函数**——
+ * `agent.constructor.constructor("return process")()` 就能拿到宿主的 `process`，进而
+ * `process.getBuiltinModule("node:fs")` 读任意文件、`process.env` 读凭据。实测（探针）：
+ * 裸 `process` / `require` / `fetch` 都是 `undefined`，但上面那条链能读到 `package.json`
+ * 与 56 个环境变量。
+ *
+ * 真正的隔离要靠「脚本跑不出原型链」，而 `vm` 做不到（同一堆、同一 realm 的 Function）。
+ * 所以这里把**写出那条链的手段**挡在编译之前：没有 `constructor` / `__proto__` /
+ * `globalThis` / `Function(` / `eval(` / 动态 `import(`，就没有从钩子爬到宿主的桥。
+ *
+ * 边界要说清：这是**收窄**不是隔离——它挡的是「模型顺手读个文件」，配合 worktree 与会话
+ * 隔离使用。真要跑不可信代码，必须换子进程 + 权限降级，不是加固这个列表。
+ */
+const FORBIDDEN_SCRIPT_TOKENS: ReadonlyArray<{ token: string; why: string }> = [
+  { token: "constructor", why: "原型链逃逸：hook.constructor.constructor 能拿到宿主 Function" },
+  { token: "__proto__", why: "原型链逃逸" },
+  { token: "prototype", why: "原型链逃逸" },
+  { token: "globalThis", why: "绕开「只给钩子」的上下文约定" },
+  { token: "Function(", why: "动态造函数 = 拿回完整的 JS" },
+  { token: "eval(", why: "同上" },
+  { token: "import(", why: "动态导入没有模块加载器也仍是逃逸面" },
+  { token: "require(", why: "模块加载" },
+  { token: "process", why: "宿主进程（env / getBuiltinModule）" },
+];
+
+/** 命中就抛 `unsafe-script`，并指出是哪个词、为什么。 */
+function assertScriptIsSafe(script: string): void {
+  for (const { token, why } of FORBIDDEN_SCRIPT_TOKENS) {
+    if (!script.includes(token)) continue;
+    throw new WorkflowError(
+      "unsafe-script",
+      `Workflow script may not contain \`${token}\` (${why}). Use the provided hooks: agent / parallel / pipeline / phase / log.`,
+    );
+  }
+}
+
 export interface RunSandboxOptions {
   script: string;
   hooks: WorkflowHooks;
@@ -44,6 +83,9 @@ export async function runWorkflowScript(options: RunSandboxOptions): Promise<unk
       `Workflow script is larger than ${MAX_WORKFLOW_SCRIPT_BYTES} bytes; move the bulk into the prompts`,
     );
   }
+
+  // 编译前先过静态闸：`vm` 挡不住原型链，那就别让它写出那条链。
+  assertScriptIsSafe(script);
 
   // 包成 async IIFE：脚本里可以直接 `await`，`return` 值成为整个 workflow 的结果。
   const wrapped = `(async () => {\n${script}\n})()`;

@@ -106,7 +106,14 @@ export class WorkflowError extends Error {
     | "limit"
     | "timeout"
     | "aborted"
-    | "no-script";
+    | "no-script"
+    /**
+     * 脚本里出现了会打通「钩子 → 宿主」的构造（`constructor` / `__proto__` / `globalThis`
+     * / `Function(` / `eval(` / 动态 `import(` / `require(` / `process`）。
+     * 单独一个 code 而不是复用 `limit`：这不是「跑太多」，是「想跑出去」，调用方与日志
+     * 都该能分辨。
+     */
+    | "unsafe-script";
   constructor(code: WorkflowError["code"], message: string) {
     super(message);
     this.name = "WorkflowError";
