@@ -1,16 +1,27 @@
 /**
- * Workflow 的**沙箱执行器**：只做一件事——把操作者写的脚本跑起来，并把它能用的一切
- * 限制在 `WorkflowHooks` 上。
+ * Workflow 的**脚本执行器**：把操作者写的脚本跑起来，并把它能用的一切限制在
+ * `WorkflowHooks` 上。
  *
- * 为什么必须是沙箱而不是 `eval`：脚本内容是模型写的。直接在主进程 eval 等于把整个宿主
- * （fs、凭据、子进程）交给它。这里用 `node:vm` 起一个**只有钩子**的上下文：
+ * 用 `node:vm` 而不是裸 `eval`：裸 eval 连「上下文里有哪些自由变量」都不收窄。这里起一个
+ * **只有钩子**的上下文：
  * - 不给 `require` / `process` / `Buffer` / 定时器；
  * - 不给 `import`（`vm.Script` 里没有模块加载器）；
  * - 只用 `runInContext` 跑一个 async 函数体，脚本拿到的自由变量只有拼进去的钩子。
  *
- * 逃逸面：`vm` 不是安全边界（同一进程、同一堆），但它把「脚本能碰到什么」从
- * 「整个 Node」收窄到「显式传进去的对象」。这条足以挡住「模型顺手读个文件/发个请求」，
- * 真正的隔离靠子 Agent 的 worktree 与会话隔离——分工在图里，执行在会话里。
+ * **边界（实测过，别再往好里写）**：`vm` 不是安全边界。
+ * - 钩子是宿主函数，`agent.constructor.constructor("return process")()` 能拿到宿主
+ *   `process` → `getBuiltinModule("node:fs")` 读文件、`process.env` 读凭据（56 个键）。
+ *   下面的静态闸把**写出那条链的手段**挡在编译前，但拼串（`["constr","uctor"].join("")`）
+ *   能绕过它。
+ * - 纯微任务死循环（`while (true) { await null; }`）会饿死宿主事件循环，`vm` 的 `timeout`
+ *   与外面的 `Promise.race` **同时失效**，进程不返回、不报错、不响应取消。
+ *
+ * 也测过「换 worker_threads」：worker 里照样有 `process` / `require`（等于没有隔离），
+ * 它只解决第二个问题（`terminate()` 2ms 就能杀掉 spinning worker），却要把所有钩子改成
+ * 异步消息协议——为一个「只用于可信脚本」的工具不值。
+ *
+ * 所以结论是**如实定位**：workflow 脚本是**可信输入**（和 Bash 工具同级），不是沙箱。
+ * 真要跑不可信代码，得子进程 + 权限降级（`--experimental-permission` 之类），与本工具无关。
  */
 import vm from "node:vm";
 import type { WorkflowHooks, WorkflowLimits } from "./types";
