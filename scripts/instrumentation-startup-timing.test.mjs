@@ -12,7 +12,7 @@ import test from "node:test";
  *
  * 这条测试钉住：新增一个启动子系统却忘了包 `timed(...)` 时，这里会红。
  */
-const source = readFileSync(new URL("./instrumentation-node.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+const source = readFileSync(new URL("../instrumentation-node.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const body = source.slice(source.indexOf("export function registerNodeInstrumentation"));
 
 /** 每一个已知的启动子系统：调用名 → 它必须在 timed/timedAsync 里被调。 */
