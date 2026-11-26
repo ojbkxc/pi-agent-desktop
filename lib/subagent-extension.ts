@@ -12,10 +12,19 @@ import {
   type SubagentRunInfo,
 } from "./subagents";
 import { MAX_SUBAGENT_INPUT_FILES } from "./subagent-input";
+import { normalizeWorkflowLimits, runWorkflow } from "./workflow/run";
+import { formatWorkflowReport } from "./workflow/report";
+import { formatRalphReport, runRalphLoop } from "./workflow/ralph";
 
 export const HOST_SUBAGENT_EXTENSION_NAME = "pi-web-subagents";
 const HOST_SUBAGENT_EXTENSION_PATH = `<inline:${HOST_SUBAGENT_EXTENSION_NAME}>`;
-const SUBAGENT_TOOL_NAMES = new Set<string>(SUBAGENT_CONTROL_TOOL_NAMES);
+/** workflow 与 ralph 都是「在子 Agent 之上编排」的工具，冲突处理与子 Agent 工具同组。 */
+const ORCHESTRATION_TOOL_NAMES = ["workflow", "ralph"] as const;
+/**
+ * 这些名字归 Pi Web 的集成实现所有：外部包（旧 `pi-subagents`、各类编排扩展）若注册了
+ * 同名工具，`preferPiWebSubagentExtension` 会把它们摘掉，避免两套编排同时挂在一个会话上。
+ */
+const SUBAGENT_TOOL_NAMES = new Set<string>([...SUBAGENT_CONTROL_TOOL_NAMES, ...ORCHESTRATION_TOOL_NAMES]);
 const LEGACY_SUBAGENT_PACKAGE_NAME = "pi-subagents";
 const TERMINAL_SUBAGENT_STATUSES = new Set<SubagentRunInfo["status"]>(["completed", "failed", "aborted", "interrupted"]);
 /**
@@ -325,6 +334,105 @@ export function createSubagentExtension(
             return { content: [{ type: "text", text: `Steering message sent to ${params.agent_id}.` }], details: undefined };
           } catch (error) {
             return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], details: undefined, isError: true };
+          }
+        },
+      }));
+
+      // ── 编排工具：workflow（脚本编排）┄ ralph（fresh-agent 循环）───────────────
+      //
+      // 两者都建在**同一个** runtime 上：workflow 的 `agent()` 与 Ralph 的每轮 worker
+      // 都是这里的 `runtime.start`，所以隔离、并发、配额、清理全部复用既有那套，不再
+      // 另起一个「子 Agent 启动器」。工具暴露标 `model-only`（同 Agent）——避免
+      // codemode 脚本间接拉起子会话，那条路径没有 transcript 关联。
+      pi.registerTool(defineTool({
+        name: "workflow",
+        label: "Workflow",
+        description:
+          "Run a deterministic orchestration script that fans work out across subagents. "
+          + "The script is a JS function body with `agent(prompt, opts)`, `parallel(thunks)`, `pipeline(items, ...stages)`, `phase(title)` and `log(message)`. "
+          + "Prefer this over ad-hoc delegation when the shape of the work matters: the same script always produces the same fan-out, so it can be reviewed and re-run.",
+        promptSnippet: "Orchestrate subagents with a deterministic JS script",
+        exposure: SUBAGENT_TOOL_EXPOSURE,
+        promptGuidelines: [
+          "Use workflow when a task splits into independent nodes whose results must be collected.",
+          "Inside the script, `parallel` is a barrier and `pipeline` has none; pick deliberately.",
+        ],
+        parameters: Type.Object({
+          script: Type.String({ description: "JS function body. Use `return` for the value the tool reports." }),
+          description: Type.String({ description: "Short activity label shown in the UI." }),
+          max_concurrent: Type.Optional(Type.Number({ description: "How many subagents may run at once (default 8)." })),
+          max_agents: Type.Optional(Type.Number({ description: "Total subagent budget for this script (default 64)." })),
+          timeout_minutes: Type.Optional(Type.Number({ description: "Wall-clock budget in minutes (default 30)." })),
+        }),
+        async execute(_toolCallId, params, signal, onUpdate, ctx) {
+          try {
+            const limits = normalizeWorkflowLimits({
+              ...(params.max_concurrent !== undefined ? { maxConcurrent: params.max_concurrent } : {}),
+              ...(params.max_agents !== undefined ? { maxAgents: params.max_agents } : {}),
+              ...(params.timeout_minutes !== undefined ? { timeoutMs: params.timeout_minutes * 60_000 } : {}),
+            });
+            const result = await runWorkflow({
+              script: params.script,
+              parentContext: ctx,
+              runtime,
+              limits,
+              ...(signal ? { signal } : {}),
+              onEvent: (event) => {
+                if (event.type === "phase") {
+                  onUpdate?.({ content: [{ type: "text", text: `workflow phase: ${event.title}` }], details: undefined });
+                }
+              },
+            });
+            return { content: [{ type: "text", text: formatWorkflowReport(result) }], details: { kind: "pi-web-workflow", ...result } };
+          } catch (error) {
+            const text = error instanceof Error ? error.message : String(error);
+            return { content: [{ type: "text", text }], details: { kind: "pi-web-workflow", error: text }, isError: true };
+          }
+        },
+      }));
+
+      pi.registerTool(defineTool({
+        name: "ralph",
+        label: "Ralph loop",
+        description:
+          "Iterate a task with a **fresh** worker every round: no conversation seed, no inherited context. "
+          + "The shared workspace is the long-term memory; each round's worker only sees the objective, the workspace, and the previous round's bounded report. "
+          + "Stops when a round reports completion, when the round budget is spent, or when the same blocker repeats.",
+        promptSnippet: "Iterate with a fresh worker per round until the objective is met",
+        exposure: SUBAGENT_TOOL_EXPOSURE,
+        promptGuidelines: [
+          "Use ralph for long objectives that need many rounds of small, verifiable progress.",
+          "Each round starts from zero context on purpose: put durable state in files, not in the prompt.",
+        ],
+        parameters: Type.Object({
+          objective: Type.String({ description: "The immutable objective every round works toward." }),
+          context: Type.Optional(Type.String({ description: "Extra notes passed to every round (keep it short)." })),
+          max_rounds: Type.Optional(Type.Number({ description: "Round budget (default 8, max 50)." })),
+          subagent_type: Type.Optional(Type.String({ description: "Worker profile (default general-purpose)." })),
+          model: Type.Optional(Type.String({ description: "Optional provider/modelId for the workers." })),
+          isolation: Type.Optional(Type.String({ description: "Pass \"worktree\" to give the loop its own git worktree." })),
+        }),
+        async execute(_toolCallId, params, signal, onUpdate, ctx) {
+          try {
+            const result = await runRalphLoop({
+              objective: params.objective,
+              ...(params.context !== undefined ? { context: params.context } : {}),
+              ...(params.max_rounds !== undefined ? { maxRounds: params.max_rounds } : {}),
+              ...(params.subagent_type ? { subagentType: params.subagent_type } : {}),
+              ...(params.model ? { model: params.model } : {}),
+              ...(params.isolation === "worktree" ? { isolation: "worktree" as const } : {}),
+              parentContext: ctx,
+              runtime,
+              ...(signal ? { signal } : {}),
+              onRound: (round) => onUpdate?.({
+                content: [{ type: "text", text: `ralph round ${round.index}: ${round.status}` }],
+                details: { kind: "pi-web-ralph", round },
+              }),
+            });
+            return { content: [{ type: "text", text: formatRalphReport(result) }], details: { kind: "pi-web-ralph", ...result } };
+          } catch (error) {
+            const text = error instanceof Error ? error.message : String(error);
+            return { content: [{ type: "text", text }], details: { kind: "pi-web-ralph", error: text }, isError: true };
           }
         },
       }));
