@@ -2,8 +2,9 @@
  * Workflow 的**编排原语**：`agent` / `parallel` / `pipeline`，以及配额与事件。
  *
  * 三条语义刻意与 DeepSeek Harness 一致：
- * - `parallel` 是**栅栏**：全部结算才返回，抛错的项变 `null`（不中止其它项）；
- * - `pipeline` **没有栅栏**：每个 item 自己穿过所有 stage，一项卡住不挡别人；
+ * - `parallel` 是**栅栏**：全部结算才返回，**普通失败**的项变 `null`（不中止其它项）；
+ *   取消 / 超时 / 配额这类**终局错误**不吞，向上抛给调用方（M2：否则 `aborted` 信号丢失）；
+ * - `pipeline` **没有栅栏**：每个 item 自己穿过所有 stage，一项卡住不挡别人；终局错误同样上抛；
  * - `agent` 默认**不继承父上下文**：workflow 的价值是「每个节点只看自己那部分」。
  *
  * 另外两件事这里负责，脚本作者不用管：
@@ -20,6 +21,24 @@ import type {
   WorkflowLimits,
 } from "./types";
 import { WorkflowError } from "./types";
+
+/**
+ * 识别「终局」错误：取消 / 超时（以及底层同族的 limit）。这些**不是**「这一项失败」，
+ * 是整条 workflow 已经停了——逐项吞成 `null` 会把 `aborted` 信号吃掉，调用方拿到的
+ * 就是一个看似正常但全是 null 的结果，分辨不出「子任务都失败」与「被取消」。
+ *
+ * 与 DSH 的 `isFatalWorkflowError` 对齐：`CANCELLED` 是 fatal，组合子必须 re-throw 而不是
+ * 把 item 归零。其它错误（业务失败、stage 抛错）依旧转 `null`，不挡同批其它项。
+ *
+ * 识别按 `name === "WorkflowError"` 而不是 `instanceof`：钩子与调用方可能来自不同
+ * 模块实例（jiti 测试夹具 / 多处 import），`instanceof` 会静默失配。
+ */
+function isTerminalWorkflowError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const named = error as { name?: unknown; code?: unknown };
+  if (named.name !== "WorkflowError" || typeof named.code !== "string") return false;
+  return named.code === "aborted" || named.code === "timeout" || named.code === "limit";
+}
 
 export interface CreateHooksOptions {
   parentContext: Parameters<WorkflowAgentRuntime["start"]>[0]["parentContext"];
@@ -64,7 +83,9 @@ function createSemaphore(limit: number) {
 }
 
 /**
- * `parallel` 的栅栏语义：全部结算再返回；抛错变 `null`，不让一个失败吃掉整批。
+ * `parallel` 的栅栏语义：全部结算再返回；**普通失败**（业务错、stage 抛错）变 `null`，
+ * 不让一个失败吃掉整批；**终局信号**（`aborted` / `timeout` / `limit`）必须向上抛，
+ * 否则调用方与 UI 拿到的全是 `null`，看不出「被停了」与「都失败了」的区别（M2）。
  *
  * 单独写成泛型函数（而不是对象字面量里的方法）：`WorkflowHooks` 的同名签名是泛型，
  * 字面量方法无法引用外层泛型，回调只能退化成 `unknown`。
@@ -74,7 +95,8 @@ async function runParallel<T>(thunks: Array<() => Promise<T>>): Promise<Array<T 
     thunks.map(async (thunk) => {
       try {
         return await thunk();
-      } catch {
+      } catch (error) {
+        if (isTerminalWorkflowError(error)) throw error;
         return null;
       }
     }),
@@ -168,9 +190,12 @@ export function createWorkflowHooks(options: CreateHooksOptions): HooksHandle {
       if (!Array.isArray(items)) throw new WorkflowError("runtime", "pipeline() needs an array of items");
       // **没有栅栏**：每个 item 独立穿过所有 stage，一项慢不挡别人。
       //
-      // 也**逐项容错**：某项的某个 stage 抛错只把那项变成 `null`，与 `parallel` 一致
-      // （那边 `:72-82` 就是这么做的）。旧实现直接 `Promise.all`，一项失败整个 pipeline
+      // 也**逐项容错**：某项的某个 stage 抛普通错只把那项变成 `null`，与 `parallel` 一致
+      // （那边就是这么做的）。旧实现直接 `Promise.all`，一项失败整个 pipeline
       // reject，已经跑完的其它项成果一起丢掉——实测「item a failed」时 b 明明已经跑完了。
+      //
+      // 例外：**终局错误**（取消 / 超时 / 配额）必须向上抛，不能转 `null`——否则
+      // `runWorkflow` 的 `aborted` 永远 false，UI 看到一堆 null 不知道是被停了还是全失败（M2）。
       return Promise.all(
         items.map(async (item, index) => {
           let previous: unknown = item;
@@ -180,6 +205,7 @@ export function createWorkflowHooks(options: CreateHooksOptions): HooksHandle {
             }
             return previous;
           } catch (error) {
+            if (isTerminalWorkflowError(error)) throw error;
             // 失败不抛出，但要让调用方能看出是哪一项坏了：记一条带下标的日志。
             // 具体错误信息由 stage 自己负责（它比这里更清楚上下文）。
             const message = error instanceof Error ? error.message : String(error);

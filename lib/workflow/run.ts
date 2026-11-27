@@ -76,11 +76,14 @@ export async function runWorkflow(options: WorkflowRunOptions): Promise<Workflow
       onTimeout: () => budgetController.abort(new Error("workflow budget exceeded")),
     });
   } catch (error) {
-    // 取消与超时是「事情没做完」，不是脚本写错：带上已经跑出来的部分结果一起返回，
-    // 调用方才能报告「跑了 N 个节点后被停」。
+    // 取消 / 超时 / 配额是「事情没做完」，不是脚本写错：带上已经跑出来的部分结果一起返回，
+    // 调用方才能报告「跑了 N 个节点后被停 / 撞预算」。
     // 按 name 认（不用 instanceof）：钩子/沙箱可能来自不同模块实例，那时 instanceof 会失配。
+    //
+    // `limit` 也是终局信号（M2）：parallel/pipeline 的逐项 catch 现在会把它上抛，而不是
+    // 吞成 null——脚本该看到「预算撞墙」这个真信号，而不是一堆看似正常的 null。
     const code = isWorkflowError(error) ? error.code : null;
-    if (code === "aborted" || code === "timeout") {
+    if (code === "aborted" || code === "timeout" || code === "limit") {
       aborted = true;
       value = null;
     } else {
