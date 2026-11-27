@@ -21,6 +21,7 @@ import { DispatchPanel } from "@/components/AgentTeams/DispatchPanel";
 import { TeamLifecycleActions } from "@/components/AgentTeams/TeamLifecycleActions";
 import { AgentTeamsRuntimeControls } from "@/components/AgentTeams/AgentTeamsRuntimeControls";
 import { FallbackSettings } from "@/components/AgentTeams/FallbackSettings";
+import { QuotaSettings } from "@/components/AgentTeams/QuotaSettings";
 import { AgentTeamsMemberInspector } from "@/components/AgentTeams/AgentTeamsMemberInspector";
 import { AgentTeamTaskDetail } from "@/components/AgentTeams/AgentTeamTaskDetail";
 import { AgentTeamsCommunicationFeed } from "@/components/AgentTeams/AgentTeamsCommunicationFeed";
@@ -819,6 +820,11 @@ export function AgentTeamsView({
         <section className="agent-teams-section" aria-label={t("teams.fallback.heading")}>
           <h3 className="agent-teams-section-title">{t("teams.fallback.heading")}</h3>
           <FallbackSettings />
+        </section>
+
+        <section className="agent-teams-section" aria-label={t("teams.quota.heading")}>
+          <h3 className="agent-teams-section-title">{t("teams.quota.heading")}</h3>
+          <QuotaSettings />
         </section>
       </div>
 
