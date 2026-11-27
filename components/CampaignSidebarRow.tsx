@@ -10,7 +10,7 @@ interface Props {
 /**
  * 「长时项目战役（Campaign）」入口，放在侧栏 New Session 下方的功能区。
  *
- * 与 Auto-fix 行同形，但**不**带实时徽标：战役页自身轮询列表，侧栏行只做导航，
+ * 与 Auto Repair 行同形，但**不**带实时徽标：战役页自身轮询列表，侧栏行只做导航，
  * 避免再造一个共享 store / SSE（最简 UI，见 docs/agents/fork-long-run-campaign.md §10 P1）。
  */
 export function CampaignSidebarRow({ active, onOpen }: Props) {

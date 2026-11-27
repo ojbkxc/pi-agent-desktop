@@ -24,7 +24,7 @@ interface Props {
 const MAX_ROUND_OPTIONS = [5, 10, AUTOFIX_DEFAULT_MAX_ROUNDS];
 
 /**
- * 「自动修 Bug」页：一句任务说明 → 启动 → 看轮次/日志。
+ * 「自动修复（Auto Repair）」页：一句任务说明 → 启动 → 看轮次/日志。
  *
  * 语义（与 lib/autofix 一致）：每一轮 agent 回合结束后由**服务端引擎**跑验证命令，
  * exit code 0 才算修好；失败输出自动喂回下一轮，撞轮次上限即 exhausted。

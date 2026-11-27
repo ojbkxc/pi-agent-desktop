@@ -107,10 +107,10 @@ interface Props {
   /** Opens the Scheduled page; the row under New Session is absent without it. */
   onOpenScheduled?: () => void;
   scheduledOpen?: boolean;
-  /** Opens the Auto-fix bugs page; the row under Scheduled is absent without it. */
+  /** Opens the Auto Repair page; the row under Scheduled is absent without it. */
   onOpenAutofix?: () => void;
   autofixOpen?: boolean;
-  /** Opens the Project campaigns page; the row under Auto-fix is absent without it. */
+  /** Opens the Project campaigns page; the row under Auto Repair is absent without it. */
   onOpenCampaigns?: () => void;
   campaignsOpen?: boolean;
   /** Opens the Artifacts page; the row under Scheduled is absent without it. */

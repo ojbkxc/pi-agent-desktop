@@ -8,7 +8,7 @@ interface Props {
   onOpen: () => void;
 }
 
-/** The Auto-fix entry under New Session: opens the task list, badges active fixes. */
+/** The Auto Repair entry under New Session: opens the task list, badges active repairs. */
 export function AutofixSidebarRow({ active, onOpen }: Props) {
   const { t } = useI18n();
   const state = useAutofix();
