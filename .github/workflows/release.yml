@@ -133,9 +133,10 @@ jobs:
 
             ### 更新内容
 
-            - 预热闸门修好：上一版把「等首个响应再预热」写成了默认立即执行（0 被当成「立刻」），实测 sdk-warmup 仍发生在首响应之前、4.5 秒阻塞原样存在。现在默认等到首响应发出再预热，首探针恢复正常；需要旧行为时把 PI_WEB_WARMUP_DELAY_MS 设成负值。
+            - 把启动耗时拆到 `import` 与 `register` 两段：上一版已确认预热不再抢首个请求（首探针 113ms，此前 4655ms），但 Ready 之后仍有约 3.5 秒初始化。这两段分开记账后，日志能直接指认是哪一段。
+            - 系统代理探测（`applyNetworkProxy`）纳入计时：它是启动期最后一个未计时的项。
 
-            > 直接覆盖安装即可；配置、会话与任务记录在 ~/.pi/agent/，不受影响。
+            > 直接覆盖安装即可；配置、会话与任务记录在 `~/.pi/agent/`，不受影响。
           releaseDraft: true
           prerelease: false
           uploadUpdaterJson: true
