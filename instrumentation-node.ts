@@ -176,15 +176,23 @@ export function registerNodeInstrumentation(): void {
         if (elapsed >= 50) console.error(`[Pi Agent] instrumentation: sdk-warmup took ${elapsed} ms`);
       });
   };
-  /** `PI_WEB_WARMUP_DELAY_MS=0` 恢复「立刻预热」（对照用）；正数则等首响应后这么多毫秒。 */
+  /**
+   * 首响应之后再多等多久才预热。
+   *
+   * **默认 0，且 0 的语义是「等到首响应就开」**——不是「立刻预热」。之前把默认写成 0 又把
+   * 0 解释成「立即」，于是闸门从来没启用过：实测 `sdk-warmup took 154 ms` 出现在首响应
+   * **之前**，那 4.5 秒阻塞原样存在。想恢复旧的「立刻预热」用 `-1`（负值）。
+   */
   const warmDelayMs = Number.parseInt(process.env.PI_WEB_WARMUP_DELAY_MS ?? "0", 10);
-  if (Number.isFinite(warmDelayMs) && warmDelayMs <= 0) {
+  if (Number.isFinite(warmDelayMs) && warmDelayMs < 0) {
+    // 对照/排查用：不等首响应，register() 一生效就预热（旧行为）。
     warmUp();
   } else {
+    const delay = Number.isFinite(warmDelayMs) && warmDelayMs > 0 ? warmDelayMs : 0;
     const deadline = Date.now() + 10_000;
     const waitForFirstResponse = (): void => {
       if ((globalThis as { __piFirstResponseSent?: boolean }).__piFirstResponseSent === true || Date.now() >= deadline) {
-        const timer = setTimeout(warmUp, warmDelayMs);
+        const timer = setTimeout(warmUp, delay);
         timer.unref?.();
         return;
       }
