@@ -45,6 +45,21 @@ export interface StreamingState {
    * so it is the honest figure for "how fast did this model write".
    */
   finalRate?: { tps: number; at: number };
+  /**
+   * 会话累计的 decode 统计——**与 DeepSeek Harness 的 `SessionStats` 同一口径**。
+   *
+   * dsh 的 `deriveStats(nodes)` 遍历会话里**所有已完成的 assistant 步**，累加
+   * `decodeTokens += outputTokens` 与 `decodeMs += (completedTime − firstTokenTime)`，
+   * 然后 pill 显示 `ΣoutputTokens / (ΣdecodeMs / 1000)`。它不估算流式中的速率
+   * （源码：`const speed = stats.decodeMs > 0 ? decodeSpeed(stats, t) : null`）。
+   *
+   * 本仓旧实现显示的是**单轮**速率，于是同一个模型在两个产品里数字不同：
+   * dsh 的数字被历史轮次摊平，本仓的数字只反映当前这一轮。这里改成同样的累计口径。
+   *
+   * 只累加**已完成**的步（每步在 `end` 时结算一次），因此流式进行中数字不会跳动
+   * ——这也和 dsh 一致。
+   */
+  sessionTotals?: { decodeTokens: number; decodeMs: number };
 }
 
 export type StreamAction =
@@ -208,7 +223,15 @@ export function streamReducer(
 ): StreamingState {
   switch (action.type) {
     case "start":
-      return { isStreaming: true, streamingMessage: null, streamingMs: 0, startedAt: Date.now() };
+      // 会话累计要跨轮活下来：`start` 只重置本轮的流式字段，不能把 `sessionTotals`
+      // 一起清掉（清掉的话每一轮都从零起算，数字又退回「单轮」，与 dsh 不一致）。
+      return {
+        isStreaming: true,
+        streamingMessage: null,
+        streamingMs: 0,
+        startedAt: Date.now(),
+        ...(state.sessionTotals ? { sessionTotals: state.sessionTotals } : {}),
+      };
     case "resume":
       return { ...state, isStreaming: true, startedAt: state.startedAt ?? Date.now() };
     case "snapshot": {
@@ -228,6 +251,10 @@ export function streamReducer(
         streamingMs: 0,
         startedAt: Date.now(),
         baselineChars: baseline,
+        // 会话累计同样必须跨 `snapshot` 活下来：它和 `start` 一样是「重置本轮」的
+        // 动作，不能顺手把跨轮的统计清掉（清了之后第二轮读到的就是 undefined，
+        // 累计退化成单轮 —— 正是这次要修的那个不一致）。
+        ...(state.sessionTotals ? { sessionTotals: state.sessionTotals } : {}),
       };
     }
     case "delta": {
@@ -250,7 +277,28 @@ export function streamReducer(
       // `action.message` 是 message_end 的完整消息：只有它带真实的 `usage.output`。
       const settled = action.message?.role === "assistant" ? action.message : state.streamingMessage;
       const finished = finishedTurnRate(state, settled);
-      return finished ? { ...INITIAL_STREAMING_STATE, finalRate: finished } : INITIAL_STREAMING_STATE;
+      // 会话累计（dsh 口径）：把这一轮结算进 totals。分母优先用本轮 decode 段
+      // （首 token → 末 token），没有首 token 时刻时退回整段墙钟——与 dsh 的
+      // `decodeMs = completedTime − firstTokenTime` 同构，且在缺时间戳时不会算出 0。
+      const output = typeof settled?.usage?.output === "number" ? settled.usage.output : 0;
+      const stepDecodeMs = (state.decodeMs ?? 0) > 0 ? state.decodeMs! : state.streamingMs;
+      const previousTotals = state.sessionTotals;
+      // 只在**这一轮真的有 token 与时间**时累计。没有 usage 的轮次（被取消、provider
+      // 不报）不能凭一个虚假的 0 去动分母，否则平均值会被稀释。
+      const sessionTotals = output > 0 && stepDecodeMs > 0
+        ? {
+          decodeTokens: (previousTotals?.decodeTokens ?? 0) + output,
+          decodeMs: (previousTotals?.decodeMs ?? 0) + stepDecodeMs,
+        }
+        : previousTotals;
+      // 没有任何累计可保留时，**返回同一个 INITIAL 引用**：调用方（store）靠引用相等
+      // 判断「状态没变」，凭空造一个新对象会让每次 end 都触发一次无意义的重渲染。
+      if (!finished && !sessionTotals) return INITIAL_STREAMING_STATE;
+      return {
+        ...INITIAL_STREAMING_STATE,
+        ...(finished ? { finalRate: finished } : {}),
+        ...(sessionTotals ? { sessionTotals } : {}),
+      };
     }
     default:
       return state;

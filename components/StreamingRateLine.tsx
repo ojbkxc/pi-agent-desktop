@@ -48,6 +48,11 @@ export function StreamingRateLine({ store, variant = "line" }: { store: Streamin
         next.chars === previous.chars
         && next.streaming === previous.streaming
         && next.streamingMs === previous.streamingMs
+        // 会话累计变了也必须重渲染：它是 dsh 口径下的**主**读数，跳过它会让
+        // 一轮结束后数字停在旧值上。
+        && next.finalTps === previous.finalTps
+        && next.sessionTotals?.decodeTokens === previous.sessionTotals?.decodeTokens
+        && next.sessionTotals?.decodeMs === previous.sessionTotals?.decodeMs
       ) ? previous : next);
       timer = setTimeout(tick, 500);
     };
@@ -59,9 +64,22 @@ export function StreamingRateLine({ store, variant = "line" }: { store: Streamin
   }, [store]);
 
   if (!sample.streaming) return null;
-  const seconds = Math.max(sample.streamingMs / 1000, 0.5);
-  const tokens = sample.chars / 4;
-  const rate = sample.finalTps ?? tokens / seconds;
+  // **与 DeepSeek Harness 完全同一条公式**（`dsh-client-ui-chat` 的 `ActivityPill`）：
+  //
+  //   speed = stats.decodeMs > 0 ? formatTokensPerSecond(decodeTokens / (decodeMs / 1000)) : null
+  //
+  // 其中 `decodeTokens = Σusage.outputTokens`、`decodeMs = Σ(completedTime − firstTokenTime)`，
+  // 遍历会话里**所有已完成**的 assistant 步。所以：
+  // - 有会话累计时（`sessionTotals.decodeMs > 0`）用它——这是 dsh 显示的那个数；
+  // - 否则退回本轮估算（流式中还没有任何已完成步，或历史消息没带 usage）。
+  const totals = sample.sessionTotals;
+  const settledRate = totals && totals.decodeMs > 0 && totals.decodeTokens > 0
+    ? totals.decodeTokens / (totals.decodeMs / 1000)
+    : null;
+  const rate = settledRate ?? sample.finalTps ?? (() => {
+    const seconds = Math.max(sample.streamingMs / 1000, 0.5);
+    return (sample.chars / 4) / seconds;
+  })();
   // 与 DeepSeek Harness 的 formatTokensPerSecond 同口径：≥10 取整，<10 保留一位小数。
   // 一律取整会让 3.4 与 3.6 都显示 3/4 这种跳跃，低速段看着像在乱跳。
   const label = rate < 1 ? "< 1" : rate >= 10 ? String(Math.round(rate)) : String(Math.round(rate * 10) / 10);
@@ -86,18 +104,21 @@ interface RateSample {
   streamingMs: number;
   /** 已结束回合的真实 TPS（来自 usage.output）；有值时直接显示它。 */
   finalTps?: number;
+  /** 会话累计统计（dsh 口径）：`Σoutput / ΣdecodeMs`。 */
+  sessionTotals?: { decodeTokens: number; decodeMs: number };
 }
 
 /** 累计流字符数（扣除重连基线）：与真正到达的增量一致。 */
 function measure(store: StreamingStore): RateSample {
   const state = store.getState();
+  const totals = state.sessionTotals;
   if (!state.isStreaming || !state.streamingMessage) {
     // Stream over: show the finished turn's **real** output TPS for a while (that is
     // the number DeepSeek Harness prints), then disappear. Falls back to nothing when
     // the provider reported no usage.
     const final = state.finalRate;
     if (final && Date.now() - final.at < FINAL_RATE_TTL_MS) {
-      return { streaming: true, chars: 1, streamingMs: 1000, finalTps: final.tps };
+      return { streaming: true, chars: 1, streamingMs: 1000, finalTps: final.tps, ...(totals ? { sessionTotals: totals } : {}) };
     }
     return { streaming: false, chars: 0, streamingMs: 0 };
   }
@@ -110,5 +131,10 @@ function measure(store: StreamingStore): RateSample {
   // snapshot 已经带来的那部分不参与速率：分母从 snapshot 时刻起算，分子就得只数
   // 之后的增量，否则首采样是一个几乎全是虚高的数（实测 4000 字符 → 2000 tok/s）。
   const baseline = typeof state.baselineChars === "number" && state.baselineChars > 0 ? state.baselineChars : 0;
-  return { streaming: true, chars: Math.max(0, chars - baseline), streamingMs: state.streamingMs };
+  return {
+    streaming: true,
+    chars: Math.max(0, chars - baseline),
+    streamingMs: state.streamingMs,
+    ...(totals ? { sessionTotals: totals } : {}),
+  };
 }
