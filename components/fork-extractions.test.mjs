@@ -531,6 +531,36 @@ const FORK_FEATURES = [
       "<AgentTeamsCommunicationFeed",
     ],
   },
+  {
+    name: "atomic file replacement guards user data",
+    file: "lib/atomic-file.ts",
+    // Upstream (#295) ships only writePrivateFileAtomicSync (credentials). The fork
+    // added the user-data forms on top — replaceFileAtomicSync (84e5fe6b, the
+    // string form for transcripts/settings/skills/auth), replaceFileAtomicStream
+    // (e7b95ca5, for transcripts too large to buffer), replaceFileAtomicBytesSync
+    // (0b0b1d1d, for user-picked binary destinations) — and the private
+    // atomicTarget helper that resolves a symlink to its target (dotfiles links
+    // survive) and preserves the original permission bits. replaceFileAtomicStream
+    // also runs an fsync before the rename so a crash cannot publish a truncated
+    // transcript. A clean upstream merge of this file would silently drop the
+    // fork forms or revert them to a plain write+rename (no realpath, no mode
+    // preservation, no fsync), restoring the "truncate the user's file on crash
+    // or full disk" failure mode 84e5fe6b/e7b95ca5/0b0b1d1d exist to prevent.
+    // tsc catches a deleted export (every caller uses a named import), but it
+    // cannot catch an in-place rewrite of the function bodies; these markers pin
+    // the semantics, not the names. The behavioural tests in lib/atomic-file.test.mjs
+    // pin the runtime guarantees; this entry pins the fork additions themselves
+    // against silent erosion by a merge that happens to keep behaviour close
+    // enough to fool a casual read.
+    markers: [
+      "replaceFileAtomicSync",
+      "replaceFileAtomicStream",
+      "replaceFileAtomicBytesSync",
+      "atomicTarget",
+      "realpathSync",
+      "fsyncSync",
+    ],
+  },
 ];
 
 for (const extraction of EXTRACTIONS) {
