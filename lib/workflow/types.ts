@@ -108,8 +108,13 @@ export class WorkflowError extends Error {
     | "aborted"
     | "no-script"
     /**
-     * 脚本里出现了会打通「钩子 → 宿主」的构造（`constructor` / `__proto__` / `globalThis`
-     * / `Function(` / `eval(` / 动态 `import(` / `require(` / `process`）。
+     * 脚本里出现了「钩子 → 宿主」逃逸链需要的语法形态。静态闸是 AST 黑名单（不是子串匹配）：
+     * - `MemberExpression.property` 名为 `constructor` / `__proto__` / `prototype`；
+     * - 读取裸标识符 `process` / `globalThis` / `Function` / `eval` / `require`；
+     * - 任何 `ImportExpression`。
+     * 字符串、注释、标识符子串（`processData` 等）、`obj.process` / `{ process: 1 }` 等成员
+     * 与键名都**不**命中。仍存在的绕过面（计算属性拼接 / `Object.getPrototypeOf(fn).constructor` /
+     * `Reflect.get`）在 sandbox.ts 的 docstring 与工具描述里如实标注。
      * 单独一个 code 而不是复用 `limit`：这不是「跑太多」，是「想跑出去」，调用方与日志
      * 都该能分辨。
      */

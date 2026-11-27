@@ -24,6 +24,7 @@
  * 真要跑不可信代码，得子进程 + 权限降级（`--experimental-permission` 之类），与本工具无关。
  */
 import vm from "node:vm";
+import * as acorn from "acorn";
 import type { WorkflowHooks, WorkflowLimits } from "./types";
 import { WorkflowError } from "./types";
 
@@ -31,41 +32,190 @@ import { WorkflowError } from "./types";
 export const MAX_WORKFLOW_SCRIPT_BYTES = 64 * 1024;
 
 /**
- * 脚本里**不许出现**的标识符。
+ * 静态闸：把「写出『钩子 → 宿主』逃逸链所必须的语法形态」挡在编译之前。
  *
- * 为什么需要这道静态闸：`vm` 不是安全边界，而钩子函数本身是**宿主函数**——
- * `agent.constructor.constructor("return process")()` 就能拿到宿主的 `process`，进而
- * `process.getBuiltinModule("node:fs")` 读任意文件、`process.env` 读凭据。实测（探针）：
- * 裸 `process` / `require` / `fetch` 都是 `undefined`，但上面那条链能读到 `package.json`
- * 与 56 个环境变量。
+ * 为什么不查子串：bcd3ca2e 那版用 `script.includes(token)`——「`process`」就把
+ * `processData` / `dataProcessing` 一起拒了，「`prototype`」把 `Object.prototype
+ * .hasOwnProperty.call(...)` 这种**安全通行写法**也拒了。同时它**没**挡住
+ * `["c","o","n","s","t","r","u","c","t","o","r"].join("")` —— 误伤与漏拦同时存在。
  *
- * 真正的隔离要靠「脚本跑不出原型链」，而 `vm` 做不到（同一堆、同一 realm 的 Function）。
- * 所以这里把**写出那条链的手段**挡在编译之前：没有 `constructor` / `__proto__` /
- * `globalThis` / `Function(` / `eval(` / 动态 `import(`，就没有从钩子爬到宿主的桥。
+ * 所以这里换 AST：acorn 解析后只盯**语法位置**，不再扫字符串。
+ * - `MemberExpression` 的 property 名字命中危险名单（`constructor` / `__proto__` /
+ *   `prototype`）→ 拒：这是逃逸链真正需要的形态；
+ * - `Identifier` 命中（`globalThis` / `process`）→ 拒：是「拿到宿主」所需的入口名；
+ * - `CallExpression` 的 callee 是 `Function` / `eval` / `require`、任何 `ImportExpression` → 拒；
+ * - 字符串字面量、注释、模板串、对象字面量键、标识符**子串**（`processData`、
+ *   `dataProcessing`、`myConstructor`）一律放过——它们不是逃逸面。
  *
- * 边界要说清：这是**收窄**不是隔离——它挡的是「模型顺手读个文件」，配合 worktree 与会话
- * 隔离使用。真要跑不可信代码，必须换子进程 + 权限降级，不是加固这个列表。
+ * 仍存在的**绕过面**（如实写，不再当「narrow but reliable」）：
+ * - 计算属性 `obj["constr" + "uctor"]` / `obj[atob("...")]` 在静态下求不出最终属性名，
+ *   这道闸对它们是盲的；
+ * - 字符串拼接造标识符 `globalThis["pro" + "cess"]` 同理（不过 `globalThis` 本身已被拦）；
+ * - `Reflect.get(obj, "constr" + "uctor")` 完全在 AST 黑名单视野之外；
+ * - `Object.getPrototypeOf(fn).constructor` 等价于 `fn.constructor`，名字本身不在名单里。
+ * 这些是这道闸的固有边界，与既有 docstring 的定位一致：**收窄**而非隔离，
+ * 与 Bash 工具同级（可信输入），真要跑不可信代码必须换子进程 + 权限降级。
+ *
+ * 为什么 `prototype` 仍一刀切：`Object.prototype.hasOwnProperty.call(x, "k")` 是合法
+ * 通行写法，但 `fn.prototype.constructor` 就是逃逸链——按 property 名字拒会一起拒前者。
+ * 要更细，得做「这个 MemberExpression 的 object 静态上能否追到一个函数/类」的指向分析，
+ * 不是几行 AST 巡检能承担的。当前选择是**宁可误伤 `Object.prototype.*` 也要把
+ * `fn.prototype.constructor` 挡住**，并在工具描述里给出替代写法（`Object.hasOwn`，ES2022+）。
  */
-const FORBIDDEN_SCRIPT_TOKENS: ReadonlyArray<{ token: string; why: string }> = [
-  { token: "constructor", why: "原型链逃逸：hook.constructor.constructor 能拿到宿主 Function" },
-  { token: "__proto__", why: "原型链逃逸" },
-  { token: "prototype", why: "原型链逃逸" },
-  { token: "globalThis", why: "绕开「只给钩子」的上下文约定" },
-  { token: "Function(", why: "动态造函数 = 拿回完整的 JS" },
-  { token: "eval(", why: "同上" },
-  { token: "import(", why: "动态导入没有模块加载器也仍是逃逸面" },
-  { token: "require(", why: "模块加载" },
-  { token: "process", why: "宿主进程（env / getBuiltinModule）" },
+
+/** 成员表达式上不许出现的 property 名字。 */
+const FORBIDDEN_MEMBER_PROPERTIES: ReadonlyArray<{ name: string; why: string }> = [
+  { name: "constructor", why: "原型链逃逸：hook.constructor.constructor 能拿到宿主 Function" },
+  { name: "__proto__", why: "原型链逃逸" },
+  { name: "prototype", why: "原型链逃逸（fn.prototype.constructor 即 Function）" },
 ];
 
-/** 命中就抛 `unsafe-script`，并指出是哪个词、为什么。 */
+/** 不许作为「自由变量标识符」或「调用 callee」出现的名字（读取就拒，无论是否调用）。 */
+const FORBIDDEN_IDENTIFIER_NAMES: ReadonlyArray<{ name: string; why: string }> = [
+  { name: "globalThis", why: "绕开「只给钩子」的上下文约定" },
+  { name: "process", why: "宿主进程（env / getBuiltinModule）" },
+  { name: "Function", why: "动态造函数 = 拿回完整的 JS" },
+  { name: "eval", why: "动态执行任意字符串" },
+  { name: "require", why: "模块加载" },
+];
+
+/**
+ * 不许作为「直接调用的 callee」出现的名字（`fn(...)`，不含 `obj.fn(...)`）。
+ * 保留这个独立名单是为让错误消息更准：`Function()` 比「不许读 `Function`」更直白。
+ * 实际上由于上面把 `Function` / `eval` / `require` 加入了读取黑名单，
+ * 这里的 callee 分支是**冗余兜底**：直接调用会先被 Identifier 分支拦下。
+ */
+const FORBIDDEN_CALL_CALLEES: ReadonlyArray<{ name: string; why: string }> = [];
+
+interface AcornNode {
+  type: string;
+  computed?: boolean;
+  property?: AcornNode;
+  callee?: AcornNode;
+  name?: string;
+  value?: unknown;
+  [key: string]: unknown;
+}
+
+/** 取 MemberExpression 的 property 静态名字；求不出（拼接/变量）就 null。 */
+function memberPropertyName(node: AcornNode): string | null {
+  if (!node.property) return null;
+  if (node.computed) {
+    // 计算属性只在 property 是字符串字面量时能静态看到名字。
+    return node.property.type === "Literal" && typeof node.property.value === "string"
+      ? node.property.value
+      : null;
+  }
+  return node.property.type === "Identifier" ? (node.property.name ?? null) : null;
+}
+
+/**
+ * 浅递归 walk：acorn 不带 walker，自己写。只看语法位置，不求值。
+ * 返回 [node, parent, parentKey]，让调用方能区分「读取位置」与「非读取位置」。
+ */
+function* walk(
+  node: AcornNode | null | undefined,
+  parent: AcornNode | null = null,
+  parentKey: string | null = null,
+): Generator<[AcornNode, AcornNode | null, string | null], void, unknown> {
+  if (!node || typeof node !== "object") return;
+  yield [node, parent, parentKey];
+  for (const key of Object.keys(node)) {
+    if (key === "type" || key === "start" || key === "end" || key === "loc" || key === "range") continue;
+    const value = node[key];
+    if (Array.isArray(value)) {
+      for (const child of value) {
+        if (child && typeof child === "object" && typeof (child as AcornNode).type === "string") {
+          yield* walk(child as AcornNode, node, key);
+        }
+      }
+    } else if (value && typeof value === "object" && typeof (value as AcornNode).type === "string") {
+      yield* walk(value as AcornNode, node, key);
+    }
+  }
+}
+
+/**
+ * 这个 Identifier 出现在「读这个名字」的位置上吗？
+ * 不是读取位置的形态（这些 Identifier 与作用域解析无关，命中无意义）：
+ * - `MemberExpression.property`（非 computed）——`obj.process` 读的是 obj 的属性
+ * - `Property.key`（非 computed）——`{ process: 1 }` 声明的是键名
+ * - `VariableDeclarator.id` / `FunctionDeclaration.id` / `FunctionExpression.id` /
+ *   `ArrowFunctionExpression` / 函数 `params` / `ClassDeclaration.id` / `CatchClause.param` ——
+ *   都是**绑定**而不是读取；在 vm 里 shadow `process` 没有任何逃逸收益
+ * - `LabeledStatement.label` / `BreakStatement.label` / `ContinueStatement.label`
+ * - `ImportSpecifier.imported` / `ExportSpecifier.exported` 等模块语法（脚本里也进不来）
+ * - `MethodDefinition.key` / `PropertyDefinition.key`（非 computed）
+ */
+function isReadPosition(parent: AcornNode | null, parentKey: string | null): boolean {
+  if (!parent || !parentKey) return true;
+  if (parent.type === "MemberExpression" && parentKey === "property" && !parent.computed) return false;
+  if ((parent.type === "Property" || parent.type === "PropertyDefinition" || parent.type === "MethodDefinition")
+      && parentKey === "key" && !parent.computed) return false;
+  if (parent.type === "VariableDeclarator" && parentKey === "id") return false;
+  if ((parent.type === "FunctionDeclaration" || parent.type === "FunctionExpression" || parent.type === "ClassDeclaration")
+      && (parentKey === "id" || parentKey === "params")) return false;
+  if (parent.type === "ArrowFunctionExpression" && parentKey === "params") return false;
+  if (parent.type === "CatchClause" && parentKey === "param") return false;
+  if ((parent.type === "LabeledStatement" || parent.type === "BreakStatement" || parent.type === "ContinueStatement")
+      && parentKey === "label") return false;
+  return true;
+}
+
+function unsafeMessage(name: string, why: string): string {
+  return `Workflow script may not use \`${name}\` (${why}). Use the provided hooks: agent / parallel / pipeline / phase / log.`;
+}
+
+/**
+ * 命中就抛 `unsafe-script`，并指出是哪个名字、为什么。
+ * 只盯语法位置：字符串、注释、模板串、标识符子串（`processData`）都不会命中。
+ */
 function assertScriptIsSafe(script: string): void {
-  for (const { token, why } of FORBIDDEN_SCRIPT_TOKENS) {
-    if (!script.includes(token)) continue;
-    throw new WorkflowError(
-      "unsafe-script",
-      `Workflow script may not contain \`${token}\` (${why}). Use the provided hooks: agent / parallel / pipeline / phase / log.`,
-    );
+  // 与运行时一致地包成 async IIFE 再 parse；脚本是函数体，顶层 return 才合法。
+  const wrapped = `(async () => {\n${script}\n})()`;
+  let program: AcornNode;
+  try {
+    program = acorn.parse(wrapped, { ecmaVersion: "latest", sourceType: "script" }) as unknown as AcornNode;
+  } catch (error) {
+    // 语法错沿用原来的 `syntax` code（vm 那条老路不再先到）。
+    throw new WorkflowError("syntax", error instanceof Error ? error.message : String(error));
+  }
+
+  for (const [node, parent, parentKey] of walk(program)) {
+    if (node.type === "MemberExpression") {
+      const prop = memberPropertyName(node);
+      if (prop) {
+        const hit = FORBIDDEN_MEMBER_PROPERTIES.find((entry) => entry.name === prop);
+        if (hit) throw new WorkflowError("unsafe-script", unsafeMessage(hit.name, hit.why));
+      }
+      continue;
+    }
+    if (node.type === "CallExpression") {
+      // 只拦「直接调用」：`Function(...)` / `eval(...)` / `require(...)`。
+      // `obj.eval(...)` 不是宿主入口，放行。
+      if (node.callee?.type === "Identifier") {
+        const callee = node.callee.name;
+        const hit = FORBIDDEN_CALL_CALLEES.find((entry) => entry.name === callee);
+        if (hit) throw new WorkflowError("unsafe-script", unsafeMessage(hit.name, hit.why));
+      }
+      continue;
+    }
+    if (node.type === "ImportExpression") {
+      // 动态 import 一律拒（vm 里没模块加载器也仍是逃逸面）。
+      throw new WorkflowError(
+        "unsafe-script",
+        unsafeMessage("import()", "动态导入没有模块加载器也仍是逃逸面"),
+      );
+    }
+    if (node.type === "Identifier") {
+      // 只拦「读取位置」的危险标识符。绑定位置（`const process = ...`）、成员名
+      // （`obj.process`）、键名（`{ process: 1 }`）都放行——它们不读宿主入口。
+      if (!isReadPosition(parent, parentKey)) continue;
+      const name = node.name;
+      if (!name) continue;
+      const hit = FORBIDDEN_IDENTIFIER_NAMES.find((entry) => entry.name === name);
+      if (hit) throw new WorkflowError("unsafe-script", unsafeMessage(hit.name, hit.why));
+    }
   }
 }
 

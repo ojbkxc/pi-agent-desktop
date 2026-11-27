@@ -352,14 +352,24 @@ export function createSubagentExtension(
           + "The script is a JS function body with `agent(prompt, opts)`, `parallel(thunks)`, `pipeline(items, ...stages)`, `phase(title)` and `log(message)`. "
           + "Prefer this over ad-hoc delegation when the shape of the work matters: the same script always produces the same fan-out, so it can be reviewed and re-run. "
           // 沙箱的边界必须写在工具描述里：模型读得到，才不会以为「反正是沙箱，随便写」。
-          + "NOTE: the script runs in a `vm` context that exposes only these hooks, but `vm` is NOT a security boundary — a script that reaches for `constructor` / `process` is refused before it runs, while a script that spins forever on `await` can stall the host. Treat scripts as trusted input.",
+          + "NOTE: the script runs in a `vm` context that exposes only these hooks, but `vm` is NOT a security boundary — a script that reaches for `constructor` / `process` is refused before it runs, while a script that spins forever on `await` can stall the host. Treat scripts as trusted input. "
+          // 静态闸是按 AST 语法位置判的（不是子串匹配）：可以放心使用 `processData`、
+          // `dataProcessing`、`myConstructor` 等名字，字符串与注释里出现这些词也不会命中。
+          // 真正不能写的形态按位置说清，模型才能避坑而不是猜。
+          + "The static gate inspects the AST, not substrings: identifiers like `processData` / `dataProcessing` / `myConstructor` are fine, and so are strings and comments containing those words. "
+          + "What IS refused: "
+          + "(1) member access named `constructor` / `__proto__` / `prototype` — so `Object.prototype.hasOwnProperty.call(...)` is refused too (use `Object.hasOwn(obj, key)` instead); "
+          + "(2) reading the bare identifiers `process` / `globalThis` / `Function` / `eval` / `require`, directly or via destructuring; "
+          + "(3) dynamic `import(...)`; "
+          + "(4) these names as variable / parameter / function names (shadowing is refused for consistency). "
+          + "Known bypass lanes (do not rely on the gate for isolation): computed keys built at runtime (`obj[\"constr\" + \"uctor\"]`), `Object.getPrototypeOf(fn).constructor`, and `Reflect.get` — they are statically invisible. The gate narrows the script's reach; it does not sandbox it.",
         promptSnippet: "Orchestrate subagents with a deterministic JS script",
         exposure: SUBAGENT_TOOL_EXPOSURE,
         promptGuidelines: [
           "Use workflow when a task splits into independent nodes whose results must be collected.",
           "Inside the script, `parallel` is a barrier and `pipeline` has none; pick deliberately.",
           "Never write an unbounded `while (true) { await ... }` loop: it starves the host event loop and the wall-clock budget cannot interrupt it.",
-          "No `constructor` / `__proto__` / `globalThis` / `Function(` / `eval(` / `require(` / `process` in the script — it is refused.",
+          "No `constructor` / `__proto__` / `prototype` member access; no bare `process` / `globalThis` / `Function` / `eval` / `require`; no dynamic `import(...)`. For own-key checks use `Object.hasOwn(obj, key)` (Object.prototype.hasOwnProperty is refused as part of the prototype ban).",
         ],
         parameters: Type.Object({
           script: Type.String({ description: "JS function body. Use `return` for the value the tool reports." }),
