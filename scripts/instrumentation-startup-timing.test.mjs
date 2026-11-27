@@ -23,6 +23,7 @@ const SUBSYSTEMS = [
   ["startCampaignSweep", "timed"],
   ["startKeepalive", "timed"],
   ["startUnattendedSweepLoop", "timed"],
+  ["applyNetworkProxy", "timedAsync"],
   ["restartRelayFromConfig", "timedAsync"],
   ["restartPublicAccessFromConfig", "timedAsync"],
 ];

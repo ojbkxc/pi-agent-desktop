@@ -48,12 +48,15 @@ export function registerNodeInstrumentation(): void {
   // 再 force 重装 dispatcher —— node 的 fetch 不读系统代理，模型请求要走出去得靠这一步。
   // 必须排在 configureHttpDispatcher() 之后（这里要覆盖它在无代理环境下装的那个实例）。
   // 设置读不出来、系统探测失败都不该拦住启动，所以整段只记一行日志。
-  void applyNetworkProxy().catch((error) => {
+  //
+  // 这一项以前没计时，而它恰好是启动期最后一个大的同步块：Windows 上探测系统代理要读注册表
+  // （WinINET 设置），实测 `preparing/started` 与 `Ready` 之间有 3.5 秒零日志的空档就落在这里。
+  timedAsync("network-proxy", () => applyNetworkProxy().catch((error) => {
     console.error(
       "[network-proxy] could not apply the saved setting:",
       error instanceof Error ? error.message : error,
     );
-  });
+  }));
 
   // Scheduled tasks must fire without anyone having opened a page, and the
   // packaged app keeps this server alive while its window is hidden in the tray.
