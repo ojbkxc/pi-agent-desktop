@@ -6269,6 +6269,37 @@ html.dark {
   line-height: 1.4;
 }
 
+/* Autopilot sub-options: indented under the master switch, same row style as
+   .settings-option but with a leading inset so the hierarchy reads. */
+.settings-autopilot-suboptions {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+  margin-top: 6px;
+  margin-left: 20px;
+  border-left: 2px solid var(--separator);
+  padding-left: 12px;
+}
+.settings-autopilot-suboptions .settings-option {
+  padding: 8px 0;
+}
+.settings-autopilot-suboptions .settings-option + .settings-option {
+  border-top: var(--hairline) solid var(--separator);
+}
+.settings-autopilot-suboptions input[type="number"] {
+  width: 72px;
+  padding: 4px 8px;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-small);
+}
+.settings-autopilot-suboptions input[type="number"]:disabled {
+  opacity: 0.55;
+}
+
 @media (max-width: 640px) {
   .artifact-panel-toolbar .file-viewer-meta {
     display: none;
