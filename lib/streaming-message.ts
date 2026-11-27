@@ -75,7 +75,18 @@ export type StreamAction =
    * `finishedTurnRate` 读到的 `usage.output` 恒为 0、`finalRate` 恒 undefined —— 屏幕上
    * 永远只有 `字符÷4` 的估算，那个「真实 token/s」是条死代码。
    */
-  | { type: "end"; message?: AgentMessage };
+  | { type: "end"; message?: AgentMessage }
+  /**
+   * 会话切换时调用：清空 `sessionTotals`，其他字段一并归零。
+   *
+   * `sessionTotals` 的语义是「**当前**会话的累计」（与 dsh 的 `deriveStats(nodes)` 同口径，
+   * nodes 就是当前会话里的 assistant 步）。但 `streamingStore` 绑在 `useAgentSession` 实例
+   * 上，而 `AppShell` 切会话不重挂 ChatWindow（注释：「ChatWindow stays mounted and swaps
+   * session data in place」）——同一个 store 会被多个会话复用。`start` / `snapshot` / `end`
+   * 都按设计**保留** `sessionTotals`（41edbada），没有这条 action 就没有任何清零点：
+   * 切到另一个会话后，速率条仍显示上一个会话的累计。
+   */
+  | { type: "reset-session" };
 
 export const INITIAL_STREAMING_STATE: StreamingState = {
   isStreaming: false,
@@ -300,6 +311,12 @@ export function streamReducer(
         ...(sessionTotals ? { sessionTotals } : {}),
       };
     }
+    case "reset-session":
+      // 会话切换是**唯一**合法清掉 `sessionTotals` 的地方。`end` 必须保留它（同会话
+      // 跨轮累计），`start` / `snapshot` 也是（重连/新轮不能把上一轮的累计清掉，
+      // 41edbada）；只有「换了一个会话」才要回到 0，否则速率条会把上会话的
+      // Σoutput / ΣdecodeMs 错挂到新会话头上。
+      return INITIAL_STREAMING_STATE;
     default:
       return state;
   }

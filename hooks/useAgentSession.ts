@@ -673,7 +673,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setEntryIds([]);
     setHistoryCursor(null);
     setHasEarlierMessages(false);
-    dispatch({ type: "end" });
+    // 切会话唯一清零点：`reset-session` 把整个流式状态（含 `sessionTotals`）归零。
+    // 不能继续用 `end`——`end` 按设计**保留** `sessionTotals`（41edbada 的 dsh 累计口径），
+    // 跨会话必须显式清，否则速率条把上一会话的 Σoutput / ΣdecodeMs 错挂到新会话。
+    dispatch({ type: "reset-session" });
     setAgentRunning(false);
     setBashRunning(false);
     setPendingBash(null);

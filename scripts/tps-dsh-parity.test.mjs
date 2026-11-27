@@ -95,6 +95,46 @@ test("session totals accumulate across turns (not per-turn)", async () => {
   assert.ok(second.decodeMs >= first.decodeMs, "分母也必须累加（≥ 第一轮）");
 });
 
+test("session totals are cleared on session switch (H1 cross-session pollution)", async () => {
+  // H1（41edbada 引入的回归）：`streamingStore` 绑在 `useAgentSession` 实例上，
+  // 而 `AppShell` 切会话不重挂 ChatWindow（「stays mounted and swaps session data
+  // in place」）——同一个 store 服务多个会话。`start` / `snapshot` / `end` 都按
+  // dsh 累计口径**保留** `sessionTotals`，没有任何清零点的话，切到另一个会话后
+  // 速率条仍显示上一个会话的 Σoutput / ΣdecodeMs。
+  const store = createStreamingStore();
+
+  // 会话 A 跑两轮，累计 = 100 + 200。
+  await turn(store, { output: 100 });
+  await turn(store, { output: 200 });
+  assert.equal(store.getState().sessionTotals?.decodeTokens, 300, "前提：会话 A 有累计");
+
+  // 切到会话 B：useAgentSession 的 render-phase switch bookkeeping 必须 dispatch
+  // reset-session。归零后，新会话的速率条不得把 A 的累计当成自己的起点。
+  store.dispatch({ type: "reset-session" });
+  assert.equal(store.getState().sessionTotals, undefined, "切会话必须清掉 sessionTotals");
+
+  // 会话 B 的第一轮：累计只含这一轮自己的 50，绝不能把 A 的 300 算进来。
+  await turn(store, { output: 50 });
+  const totals = store.getState().sessionTotals;
+  assert.ok(totals, "B 的第一轮结束后必须有累计");
+  assert.equal(totals.decodeTokens, 50, "B 的累计只能是 B 自己的，不能延续 A 的");
+});
+
+test("reset-session does not affect end/start preserving totals within one session", async () => {
+  // 反向锚定：同一会话内 `end` / `start` 仍按 41edbada 的设计保留累计——
+  // reset-session 只能由「会话切换」触发，不能误伤同会话跨轮累计。
+  const store = createStreamingStore();
+  await turn(store, { output: 100 });
+  const before = store.getState().sessionTotals;
+
+  store.dispatch({ type: "start" });
+  assert.deepEqual(store.getState().sessionTotals, before, "start 仍要保留累计（未被 reset-session 误伤）");
+
+  store.dispatch({ type: "reset-session" });
+  store.dispatch({ type: "start" });
+  assert.equal(store.getState().sessionTotals, undefined, "reset-session 后再 start 也是新会话");
+});
+
 test("a turn with no usage must not dilute the average", async () => {
   const store = createStreamingStore();
   await turn(store, { output: 100 });
