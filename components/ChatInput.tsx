@@ -1065,8 +1065,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const [atMenuMaxHeight, setAtMenuMaxHeight] = useState<number | null>(null);
   const [atActiveIndex, setAtActiveIndex] = useState(0);
   const [imageWarningDismissed, setImageWarningDismissed] = useState(false);
-  const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
-  const [historyActiveIndex, setHistoryActiveIndex] = useState(0);
   const [builtinCommandPending, setBuiltinCommandPending] = useState(false);
   const builtinCommandPendingRef = useRef(false);
   // 内置命令 15s 超时：本次发送被终止（输入保留），用一条常驻提示引导重试。
@@ -1088,7 +1086,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const thinkingDropdownRef = useRef<HTMLDivElement>(null);
   const automationDropdownRef = useRef<HTMLDivElement>(null);
   const controlsMenuRef = useRef<HTMLDivElement>(null);
-  const historyMenuRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
   const slashCommandsRequestedRef = useRef(false);
@@ -1096,8 +1093,12 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const atMenuRef = useRef<HTMLDivElement>(null);
   const atItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const historyItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const fileIndexMetaRef = useRef<{ cwd: string; fetchedAt: number } | null>(null);
+  // ISSUE-5：↑/↓ 历史导航索引。0 = 当前草稿位；N ≥ 1 = 正在浏览 inputHistory[N-1]。
+  // 对齐 cc-haha useComposerPromptHistory 的 historyIndexRef 语义。
+  const historyIndexRef = useRef(0);
+  // 第一次按 ↑ 时快照的原始草稿；↓ 越过最新一条时恢复。清空/会话切换时清空。
+  const historyDraftRef = useRef<{ text: string; images: AttachedImage[]; files: ChatTextAttachment[] } | null>(null);
   const fileIndexFetchingRef = useRef<string | null>(null);
   const draftKeyRef = useRef(draftKey);
   const valueRef = useRef(value);
@@ -1159,7 +1160,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       setValue(restoredText);
       setAtQuery(null);
       setHashQuery(null);
-      setHistoryMenuOpen(false);
       setAttachedImages((prev) => {
         prev.forEach(revokeImagePreview);
         return restoredImages;
@@ -1225,7 +1225,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         return movedImages;
       });
       setAtQuery(null);
-      setHistoryMenuOpen(false);
     },
     restoreSubmission(text: string, images?: ChatDraftImage[], targetDraftKey?: string) {
       // A queued or rejected message carries its files as markup; they return as attachments.
@@ -1277,7 +1276,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         return restored;
       });
       setAtQuery(null);
-      setHistoryMenuOpen(false);
       if (images?.length) {
         setAttachedImages((current) => {
           const available = Math.max(0, MAX_ATTACHED_IMAGES - current.length);
@@ -1486,7 +1484,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     setValue("");
     setAtQuery(null);
     setHashQuery(null);
-    setHistoryMenuOpen(false);
+    // ISSUE-5：清空即退出历史导航，丢弃草稿快照（已清空，无需恢复）。
+    historyIndexRef.current = 0;
+    historyDraftRef.current = null;
     if (draftKey) clearDraft(draftKey);
     if (draftKeyRef.current && draftKeyRef.current !== draftKey) clearDraft(draftKeyRef.current);
     clearImages();
@@ -1498,6 +1498,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
 
   useEffect(() => {
     if (!draftKey || draftKeyRef.current !== draftKey) return;
+    // ISSUE-5：历史导航中 value 是历史条目而非用户草稿，勿污染草稿存储；
+    // 恢复草稿/退出导航后再写。
+    if (historyIndexRef.current > 0) return;
     setDraft(draftKey, {
       value,
       images: attachedImages.map(imageToDraftImage),
@@ -1529,7 +1532,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     setValue(nextValue);
     setAtQuery(null);
     setHashQuery(null);
-    setHistoryMenuOpen(false);
+    // ISSUE-5：会话切换即退出历史导航，清空草稿快照与索引。
+    historyIndexRef.current = 0;
+    historyDraftRef.current = null;
     setAttachedImages((prev) => {
       prev.forEach(revokeImagePreview);
       return nextImages;
@@ -1902,52 +1907,79 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     atItemRefs.current[atActiveIndex]?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [atActiveIndex, atMenuOpen]);
 
-  useEffect(() => {
-    if (historyActiveIndex >= inputHistory.length) {
-      setHistoryActiveIndex(Math.max(0, inputHistory.length - 1));
-    }
-  }, [inputHistory.length, historyActiveIndex]);
-
-  useEffect(() => {
-    historyItemRefs.current.length = inputHistory.length;
-  }, [inputHistory.length]);
-
-  useEffect(() => {
-    if (!historyMenuOpen) return;
-    historyItemRefs.current[historyActiveIndex]?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [historyActiveIndex, historyMenuOpen]);
-
-  const applyHistoryInput = useCallback((entry: ComposerHistoryEntry) => {
-    // Same admission as editing history: a restored prompt must not append to
-    // a draft the user is still writing. Their text stays untouched if refused.
-    const ta = textareaRef.current;
-    const current = ta ? ta.value : value;
-    if (!canRestoreUserMessage(current, attachedImagesRef.current.length + attachedFilesRef.current.length, pendingImageCountRef.current)) return;
-    const { text: restoredText, files: restoredFiles } = splitMessageForComposer(entry.text);
-    const restoredImages = draftImagesToAttachedImages(entry.images);
+  // ISSUE-5：把一条历史条目或草稿快照直接写入 composer 的共用原语。
+  // 不再走 canRestoreUserMessage 的空值闸门——↑/↓ 历史导航明确以覆盖当前输入为意图，
+  // 原始草稿在第一次 ↑ 时已快照到 historyDraftRef，↓ 越过最新一条时恢复。
+  const applyComposerState = useCallback((
+    nextText: string,
+    nextImages: AttachedImage[],
+    nextFiles: ChatTextAttachment[],
+    cursor: "start" | "end",
+  ) => {
     attachmentClearVersionRef.current += 1;
-    valueRef.current = restoredText;
-    attachedImagesRef.current = restoredImages;
-    attachedFilesRef.current = restoredFiles;
-    setAttachedFiles(restoredFiles);
-    setValue(restoredText);
+    valueRef.current = nextText;
+    attachedImagesRef.current = nextImages;
+    attachedFilesRef.current = nextFiles;
+    setAttachedFiles(nextFiles);
+    setValue(nextText);
     setAttachedImages((previous) => {
       previous.forEach(revokeImagePreview);
-      return restoredImages;
+      return nextImages;
     });
-    setHistoryMenuOpen(false);
-    setHistoryActiveIndex(0);
     setAtQuery(null);
     setHashQuery(null);
     requestAnimationFrame(() => {
       const area = textareaRef.current;
       if (!area) return;
       area.focus();
-      area.setSelectionRange(restoredText.length, restoredText.length);
+      const pos = cursor === "start" ? 0 : nextText.length;
+      area.setSelectionRange(pos, pos);
       area.style.height = "auto";
       area.style.height = `${Math.min(area.scrollHeight, 200)}px`;
     });
-  }, [setHashQuery, value]);
+  }, [setHashQuery]);
+
+  const applyHistoryEntry = useCallback((entry: ComposerHistoryEntry, cursor: "start" | "end") => {
+    const { text: restoredText, files: restoredFiles } = splitMessageForComposer(entry.text);
+    applyComposerState(restoredText, draftImagesToAttachedImages(entry.images), restoredFiles, cursor);
+  }, [applyComposerState]);
+
+  // ↑：第一次按先快照当前草稿，再逐条上翻；光标放开头。
+  const onHistoryUp = useCallback((): boolean => {
+    if (inputHistory.length === 0) return false;
+    if (historyIndexRef.current === 0) {
+      const ta = textareaRef.current;
+      const text = ta ? ta.value : valueRef.current;
+      historyDraftRef.current = {
+        text,
+        images: attachedImagesRef.current.slice(),
+        files: attachedFilesRef.current.slice(),
+      };
+    }
+    const targetIndex = historyIndexRef.current;
+    if (targetIndex >= inputHistory.length) return true;
+    historyIndexRef.current = targetIndex + 1;
+    applyHistoryEntry(inputHistory[targetIndex], "start");
+    return true;
+  }, [applyHistoryEntry, inputHistory]);
+
+  // ↓：逐条下翻；越过最新一条时恢复原始草稿，光标放末尾。
+  const onHistoryDown = useCallback((): boolean => {
+    const currentIndex = historyIndexRef.current;
+    if (currentIndex <= 0) return false;
+    const nextIndex = currentIndex - 1;
+    if (nextIndex >= 1) {
+      historyIndexRef.current = nextIndex;
+      applyHistoryEntry(inputHistory[nextIndex - 1], "end");
+      return true;
+    }
+    // 越过最新一条：回到草稿位，恢复快照的原始草稿。
+    historyIndexRef.current = 0;
+    const draft = historyDraftRef.current;
+    historyDraftRef.current = null;
+    applyComposerState(draft?.text ?? "", draft?.images ?? [], draft?.files ?? [], "end");
+    return true;
+  }, [applyComposerState, inputHistory]);
 
   const applySlashCommand = useCallback((command: SlashCommandPaletteItem) => {
     const nextValue = `/${command.name} `;
@@ -2090,25 +2122,31 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         return;
       }
 
-      if (historyMenuOpen && !extensionUiOpen && !isComposing) {
-        if (e.key === "ArrowDown") {
+      // ISSUE-5：↑/↓ 历史导航（cc-haha 直填模式）。
+      // 正在浏览历史时（historyIndexRef > 0）↑/↓ 优先于斜杠/@/# 补全菜单；
+      // 在草稿位时，↑ 仅在无补全菜单打开且光标位于首行时介入，否则 ↑ 原生上移光标
+      // （保留多行编辑能力）。
+      if (!isComposing && !isStreaming && !extensionUiOpen && inputHistory.length > 0) {
+        const navigating = historyIndexRef.current > 0;
+        if (e.key === "ArrowUp" && (navigating || (!slashMenuOpen && !atMenuOpen && !hashMenuOpen))) {
+          if (!navigating) {
+            const ta = textareaRef.current;
+            const onFirstLine = !ta || ta.selectionStart === 0 || !ta.value.slice(0, ta.selectionStart).includes("\n");
+            if (!onFirstLine) return;
+          }
           e.preventDefault();
-          setHistoryActiveIndex((i) => Math.min(Math.max(0, inputHistory.length - 1), i + 1));
+          setSlashMenuOpen(false);
+          setAtMenuOpen(false);
+          setHashMenuOpen(false);
+          onHistoryUp();
           return;
         }
-        if (e.key === "ArrowUp") {
+        if (e.key === "ArrowDown" && navigating) {
           e.preventDefault();
-          setHistoryActiveIndex((i) => Math.max(0, i - 1));
-          return;
-        }
-        if (e.key === "Escape") {
-          e.preventDefault();
-          setHistoryMenuOpen(false);
-          return;
-        }
-        if ((e.key === "Tab" || acceptShortcut) && inputHistory[historyActiveIndex]) {
-          e.preventDefault();
-          applyHistoryInput(inputHistory[historyActiveIndex]);
+          setSlashMenuOpen(false);
+          setAtMenuOpen(false);
+          setHashMenuOpen(false);
+          onHistoryDown();
           return;
         }
       }
@@ -2205,16 +2243,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         }
       }
 
-      if (e.key === "ArrowUp" && !isComposing && !isStreaming && inputHistory.length > 0 && value.trim().length === 0) {
-        e.preventDefault();
-        setSlashMenuOpen(false);
-        setAtMenuOpen(false);
-        setHashMenuOpen(false);
-        setHistoryActiveIndex(inputHistory.length - 1);
-        setHistoryMenuOpen(true);
-        return;
-      }
-
       // Esc stops the agent when no slash/@/history menu or IME composition is active.
       if (e.key === "Escape" && !isComposing && isStreaming && onAbort) {
         e.preventDefault();
@@ -2231,7 +2259,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         }
       }
     },
-    [isMobile, enterSendMode, isStreaming, onSteer, onFollowUp, onAbort, extensionUiOpen, slashMenuOpen, slashQuery, displayedSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, hashMenuOpen, hashQuery, hashMatches, hashActiveIndex, applyHashCompletion, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, historyMenuOpen, inputHistory, historyActiveIndex, applyHistoryInput, value, setHashActiveIndex, setHashMenuOpen]
+    [isMobile, enterSendMode, isStreaming, onSteer, onFollowUp, onAbort, extensionUiOpen, slashMenuOpen, slashQuery, displayedSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, hashMenuOpen, hashQuery, hashMatches, hashActiveIndex, applyHashCompletion, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, inputHistory, onHistoryUp, onHistoryDown, value, setHashActiveIndex, setHashMenuOpen]
   );
 
   const handleInput = useCallback(() => {
@@ -2268,7 +2296,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         attachedFilesRef.current = next;
         setAttachedFiles(next);
         setPasteNotice({ draftKey, message: t("chat.longPasteAttached") });
-        setHistoryMenuOpen(false);
         setSlashMenuOpen(false);
         setAtMenuOpen(false);
         setHashMenuOpen(false);
@@ -2297,7 +2324,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     e.preventDefault();
     valueRef.current = nextValue;
     setValue(nextValue);
-    setHistoryMenuOpen(false);
     updateAtQuery(nextValue, start + markdown.length);
     requestAnimationFrame(() => {
       ta.focus();
@@ -2315,7 +2341,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     removeAttachedFile(file.id);
     setPreviewFileId(null);
     setPasteNotice(null);
-    setHistoryMenuOpen(false);
     updateAtQuery(nextValue, start + file.text.length);
     requestAnimationFrame(() => {
       ta.focus();
@@ -2488,9 +2513,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       }
       if (projectDropdownRef.current && !projectDropdownRef.current.contains(e.target as Node)) {
         setProjectDropdownOpen(false);
-      }
-      if (historyMenuRef.current && !historyMenuRef.current.contains(e.target as Node) && !textareaRef.current?.contains(e.target as Node)) {
-        setHistoryMenuOpen(false);
       }
     };
     document.addEventListener("mousedown", handler);
@@ -2823,94 +2845,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
 
         {/* Main input */}
         <div style={{ position: "relative", minWidth: 0 }}>
-          {historyMenuOpen && !extensionUiOpen && inputHistory.length > 0 && (
-            <div
-              ref={historyMenuRef}
-              className="native-popover app-menu app-suggestion-menu"
-              style={{
-                position: "absolute",
-                left: 0,
-                right: 0,
-                bottom: "calc(100% + 8px)",
-                zIndex: "var(--z-dropdown)",
-                background: "var(--bg)",
-                border: "var(--hairline) solid var(--border)",
-                borderRadius: "var(--radius-md)",
-                boxShadow: "var(--shadow-popover)",
-                overflow: "hidden",
-                maxHeight: "min(44vh, 360px)",
-              }}
-            >
-              <div
-                title={t("chat.inputHistory")}
-                style={{
-                  height: 30,
-                  padding: "0 10px",
-                  borderBottom: "var(--hairline) solid var(--border)",
-                  display: "flex",
-                  alignItems: "center",
-                  color: "var(--text-dim)",
-                }}
-              >
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.75"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M3 12a9 9 0 1 0 3-6.7" />
-                  <path d="M3 4v5h5" />
-                  <path d="M12 7v5l3 2" />
-                </svg>
-              </div>
-              <div style={{ maxHeight: "calc(min(44vh, 360px) - 31px)", overflowY: "auto", padding: 4 }}>
-                {inputHistory.map((item, index) => {
-                  const active = index === historyActiveIndex;
-                  return (
-                    <button
-                      key={`${index}:${item.text}:${item.images.length}`}
-                      ref={(node) => {
-                        historyItemRefs.current[index] = node;
-                      }}
-                      type="button"
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        applyHistoryInput(item);
-                      }}
-                      onMouseEnter={() => setHistoryActiveIndex(index)}
-                      style={{
-                        width: "100%",
-                        display: "flex",
-                        alignItems: "flex-start",
-                        gap: 8,
-                        padding: "7px 8px",
-                        border: "none",
-                        borderRadius: "var(--radius-sm)",
-                        background: active ? "var(--bg-selected)" : "none",
-                        color: "var(--text)",
-                        cursor: "pointer",
-                        textAlign: "left",
-                        fontSize: "var(--fs-body)",
-                        lineHeight: 1.45,
-                      }}
-                    >
-                      <span style={{ flexShrink: 0, fontFamily: "var(--font-mono)", fontSize: "var(--fs-micro)", color: "var(--text-dim)", paddingTop: 1 }}>
-                        {index + 1}
-                      </span>
-                      <span style={{ minWidth: 0, display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2, overflow: "hidden", overflowWrap: "anywhere" }}>
-                        {item.text || t("chat.historyImageOnly", { count: item.images.length })}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
           {slashMenuOpen && slashQuery !== null && !extensionUiOpen && (
             <div
               className="native-popover app-menu app-suggestion-menu"
@@ -3225,7 +3159,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
             onChange={(e) => {
               valueRef.current = e.target.value;
               setValue(e.target.value);
-              setHistoryMenuOpen(false);
               updateAtQuery(e.target.value, e.target.selectionStart);
               updateHashQuery(e.target.value, e.target.selectionStart);
             }}

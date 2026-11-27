@@ -142,19 +142,16 @@ test("follow-up shortcuts preserve newline, IME, mobile and completion behavior"
     ["pi's built-in /mcp submits at once, also while streaming", {}, { slashMenuOpen: true, slashQuery: "mcp", value: "/mcp", displayedSlashCommands: [{ name: "mcp", source: "extension", sourceInfo: { path: "builtin:mcp" } }] }, "send"],
     ["another extension's /mcp completes first", {}, { slashMenuOpen: true, slashQuery: "mcp", value: "/mcp", displayedSlashCommands: [{ name: "mcp", source: "extension", sourceInfo: { path: "/ext/mcp.ts" } }] }, "slash"],
     ["file completion takes priority", { altKey: true }, { atMenuOpen: true, atQuery: {} }, "file"],
-    ["history selection takes priority", { altKey: true }, { historyMenuOpen: true }, "history"],
     ["Ctrl+Enter mode: Enter inserts a newline", {}, { enterSendMode: "ctrlEnter", isStreaming: false }, "native"],
     ["Ctrl+Enter mode: Ctrl+Enter sends", { ctrlKey: true }, { enterSendMode: "ctrlEnter", isStreaming: false }, "send"],
     ["Ctrl+Enter mode: Cmd+Enter queues a follow-up", { metaKey: true }, { enterSendMode: "ctrlEnter" }, "followup"],
     ["Ctrl+Enter mode: composition grace blocks the newline", {}, { enterSendMode: "ctrlEnter", lastCompositionEndAtRef: { current: 950 } }, "prevented"],
     ["Ctrl+Enter mode: Enter picks a file", {}, { enterSendMode: "ctrlEnter", atMenuOpen: true, atQuery: {} }, "file"],
-    ["Ctrl+Enter mode: Enter picks from history", {}, { enterSendMode: "ctrlEnter", historyMenuOpen: true }, "history"],
     ["Ctrl+Enter mode: Enter completes an exact slash command instead of sending it", {}, { enterSendMode: "ctrlEnter", isStreaming: false, slashMenuOpen: true, slashQuery: "copy", value: "/copy", displayedSlashCommands: [{ name: "copy", source: "builtin" }] }, "slash"],
     ["Ctrl+Enter mode: Ctrl+Enter sends an exact slash command", { ctrlKey: true }, { enterSendMode: "ctrlEnter", isStreaming: false, slashMenuOpen: true, slashQuery: "copy", value: "/copy", displayedSlashCommands: [{ name: "copy", source: "builtin" }] }, "send"],
     ["mobile ignores Ctrl+Enter mode for plain Enter", {}, { enterSendMode: "ctrlEnter", isMobile: true }, "native"],
     ["an open extension dialog hides slash completion", {}, { isStreaming: false, extensionUiOpen: true, slashMenuOpen: true, slashQuery: "help" }, "send"],
     ["an open extension dialog hides file completion", {}, { isStreaming: false, extensionUiOpen: true, atMenuOpen: true, atQuery: {} }, "send"],
-    ["an open extension dialog hides history selection", {}, { isStreaming: false, extensionUiOpen: true, historyMenuOpen: true }, "send"],
   ];
   for (const [name, keys, state, expected] of cases) {
     let action = "native";
@@ -163,17 +160,18 @@ test("follow-up shortcuts preserve newline, IME, mobile and completion behavior"
       COMPOSITION_END_ENTER_GRACE_MS: 100,
       isMobile: false, isStreaming: true, enterSendMode: "enter",
       isComposingRef: { current: false }, lastCompositionEndAtRef: { current: 0 },
-      historyMenuOpen: false, inputHistory: ["previous"], historyActiveIndex: 0,
+      inputHistory: ["previous"],
       slashMenuOpen: false, slashQuery: null, displayedSlashCommands: [{}], slashActiveIndex: 0,
       atMenuOpen: false, atQuery: null, atMatches: [{}], atActiveIndex: 0,
       hashMenuOpen: false, hashQuery: null, hashMatches: [{}], hashActiveIndex: 0, setHashMenuOpen() {},
       extensionUiOpen: false,
+      historyIndexRef: { current: 0 }, historyDraftRef: { current: null },
+      textareaRef: { current: null }, onHistoryUp() {}, onHistoryDown() {},
       onSteer() {}, onFollowUp() {},
       sendQueued(mode) { action = mode; }, handleSend() { action = "send"; },
       applySlashCommand() { action = "slash"; },
       submitsSlashCommandOnEnter, value: "", setSlashMenuOpen() {},
       applyAtCompletion() { action = "file"; },
-      applyHistoryInput() { action = "history"; },
       ...state,
     });
     handler({
@@ -205,7 +203,9 @@ test("file mention arrows wrap around the match list", () => {
       COMPOSITION_END_ENTER_GRACE_MS: 100,
       isMobile: false, isStreaming: false, enterSendMode: "enter",
       isComposingRef: { current: false }, lastCompositionEndAtRef: { current: 0 },
-      historyMenuOpen: false, inputHistory: [], historyActiveIndex: 0,
+      inputHistory: [],
+      historyIndexRef: { current: 0 }, historyDraftRef: { current: null },
+      textareaRef: { current: null }, onHistoryUp() {}, onHistoryDown() {},
       slashMenuOpen: false, slashQuery: null, displayedSlashCommands: [], slashActiveIndex: 0,
       atMenuOpen: true, atQuery: {}, atMatches: Array.from({ length }, () => ({})), atActiveIndex,
       hashMenuOpen: false, hashQuery: null, hashMatches: Array.from({ length }, () => ({})), hashActiveIndex: 0, setHashMenuOpen() {}, applyHashCompletion() {},
@@ -216,7 +216,6 @@ test("file mention arrows wrap around the match list", () => {
       isExactSlashCommand() { return false; }, value: "@file",
       setSlashMenuOpen() {}, setAtMenuOpen() {},
       applyAtCompletion() {},
-      applyHistoryInput() {},
       cycleListIndex,
       setAtActiveIndex(update) {
         next = typeof update === "function" ? update(atActiveIndex) : update;
@@ -236,6 +235,66 @@ test("file mention arrows wrap around the match list", () => {
   assert.equal(move("ArrowUp", 1, 3), 0);
   assert.equal(move("ArrowDown", 0, 1), 0);
   assert.equal(move("ArrowDown", 0, 0), 0);
+});
+
+test("ISSUE-5: arrow history navigation is direct, draft-aware and menu-aware", () => {
+  const source = ts.createSourceFile("ChatInput.tsx", readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  function findHandler(node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === "handleKeyDown") {
+      return node.initializer.arguments[0];
+    }
+    return ts.forEachChild(node, findHandler);
+  }
+  const script = new Script(ts.transpileModule(findHandler(source).getText(source), {
+    compilerOptions: { target: ts.ScriptTarget.ES2020 },
+  }).outputText);
+
+  function press(key, state) {
+    let action = "native";
+    const handler = script.runInNewContext({
+      Date: { now: () => 1000 },
+      COMPOSITION_END_ENTER_GRACE_MS: 100,
+      isMobile: false, isStreaming: false, enterSendMode: "enter",
+      isComposingRef: { current: false }, lastCompositionEndAtRef: { current: 0 },
+      inputHistory: ["entry-a", "entry-b"],
+      slashMenuOpen: false, slashQuery: null, displayedSlashCommands: [], slashActiveIndex: 0,
+      atMenuOpen: false, atQuery: null, atMatches: [], atActiveIndex: 0,
+      hashMenuOpen: false, hashQuery: null, hashMatches: [], hashActiveIndex: 0, setHashMenuOpen() {},
+      extensionUiOpen: false,
+      historyIndexRef: { current: 0 }, historyDraftRef: { current: null },
+      textareaRef: { current: { selectionStart: 0, value: "" } },
+      onHistoryUp() { action = "history-up"; },
+      onHistoryDown() { action = "history-down"; },
+      onSteer() {}, onFollowUp() {},
+      sendQueued() {}, handleSend() { action = "send"; },
+      applySlashCommand() {}, applyAtCompletion() {},
+      value: "", setSlashMenuOpen() {}, setAtMenuOpen() {},
+      ...state,
+    });
+    handler({
+      key, shiftKey: false, altKey: false, ctrlKey: false, metaKey: false,
+      nativeEvent: { isComposing: false, keyCode: 0 },
+      preventDefault() { action = "prevented"; },
+    });
+    return action;
+  }
+
+  // At the draft position (index 0), ArrowUp with the cursor on the first line engages history.
+  assert.equal(press("ArrowUp", {}), "history-up");
+  // At the draft position, ArrowDown does not engage history (falls through to native).
+  assert.equal(press("ArrowDown", {}), "native");
+  // Cursor not on the first line: ArrowUp leaves cursor movement native (no history).
+  assert.equal(
+    press("ArrowUp", { textareaRef: { current: { selectionStart: 6, value: "hello\nworld" } } }),
+    "native",
+  );
+  // While navigating (index > 0), ArrowUp takes priority over an open slash menu.
+  assert.equal(
+    press("ArrowUp", { historyIndexRef: { current: 1 }, slashMenuOpen: true, slashQuery: "help" }),
+    "history-up",
+  );
+  // While navigating, ArrowDown steps back through history.
+  assert.equal(press("ArrowDown", { historyIndexRef: { current: 1 } }), "history-down");
 });
 
 test("cycleListIndex wraps in both directions", () => {
