@@ -115,7 +115,9 @@ const ROUTE_WAIT_MS = 5_000;
 const VERIFY_WAITS_MS = [0, 2_000, 4_000, 8_000, 15_000];
 /** 最后一次校验的开始时刻不晚于首次之后这个预算。 */
 const VERIFY_BUDGET_MS = 45_000;
-/** 固定域名绑定的轮询预算：预算内没等到「指向本机网关的推送规则」就报超时。 */
+/** 固定域名绑定的轮询预算：预算内没等到「指向本机网关的推送规则」就报超时。
+ *  cc-haha 是无限等待；产品化后给 60s 预算——避免「路由推不下来时设置页永远转圈」。
+ *  超时后状态落 failed(route)，用户可在 Cloudflare 控制台补路由后手动重试。 */
 const DOMAIN_BINDING_BUDGET_MS = 60_000;
 
 /**
@@ -181,7 +183,11 @@ export class PublicAccessManager {
   private retryCount = 0;
   private stopping = 0;
   private stopUnconfirmed = false;
-  /** restore() 发起的启动：connect 消费（一次性），成功 online 后写进状态。 */
+  /** restore() 发起的启动：成功 online 后状态里标注「按自动启动恢复」。
+   *  布尔标记，restore() 设置，connect 的 online 消费；stop / configure /
+   *  start 被拒绝时清。connect 的失败 catch **不**清：network 失败会
+   *  scheduleRetry 重试，重试的 connect 成功 online 时仍需读到它
+   *  （cc-haha 评审遗留 #5）。 */
   private autoStartRestore = false;
 
   constructor(options: PublicAccessManagerOptions = {}) {
@@ -305,6 +311,7 @@ export class PublicAccessManager {
     await stopped;
     if (!this.current(generation)) throw new Error("Public access configuration interrupted");
     if (this.stopUnconfirmed) throw new Error("Remote gateway stop was not confirmed");
+    this.autoStartRestore = false;
     this.settings = writePublicAccessConfig({ ...config, consentVersion: 0, origin: "" }, this.settingsPath());
     this.status = {
       ...this.status,
@@ -330,10 +337,12 @@ export class PublicAccessManager {
       && this.settings.consentVersion === PUBLIC_ACCESS_CONSENT_VERSION
       && this.isConfigured()
       && isWebPasswordSourceActive(this.env().PI_WEB_PASSWORD)) {
-      // 一次性标记：connect 开头同步消费，成功 online 后状态里标注「按自动启动恢复」。
-      // finally 兜底清掉 start 在 connect 之前就被拒绝（stopUnconfirmed 等）时的残留。
+      // 一次性标记：成功 online 后状态里标注「按自动启动恢复」。
+      // start() 被拒绝时由 catch 清；connect 成功 online 时消费；
+      // connect 失败 catch 不清（scheduleRetry 的重试仍需读到它）；
+      // stop / configure 时由对应方法清。
       this.autoStartRestore = true;
-      try { await this.start(); } finally { this.autoStartRestore = false; }
+      try { await this.start(); } catch (error) { this.autoStartRestore = false; throw error; }
     }
     return this.getView();
   }
@@ -345,7 +354,7 @@ export class PublicAccessManager {
   }
 
   start(): Promise<PublicAccessStatus> {
-    if (this.disposed) return Promise.resolve(this.getStatus());
+    if (this.disposed) { this.autoStartRestore = false; return Promise.resolve(this.getStatus()); }
     if (this.stopping || this.stopUnconfirmed) {
       return Promise.reject(new Error("Remote gateway stop must be confirmed before enabling access"));
     }
@@ -357,7 +366,7 @@ export class PublicAccessManager {
       const generation = this.generation;
       return this.pending.then(() => (this.current(generation) ? this.start() : this.getStatus()));
     }
-    if (this.status.state === "online") return Promise.resolve(this.getStatus());
+    if (this.status.state === "online") { this.autoStartRestore = false; return Promise.resolve(this.getStatus()); }
     this.settings = writePublicAccessConfig(
       { ...this.settings, consentVersion: PUBLIC_ACCESS_CONSENT_VERSION },
       this.settingsPath(),
@@ -443,10 +452,9 @@ export class PublicAccessManager {
   }
 
   private async connect(generation: number, onRouteWait: () => void): Promise<PublicAccessStatus> {
-    // 一次性消费 restore() 的标记：成功 online 后状态里标注「按自动启动恢复」。
-    // connect 被 start() 同步调用，消费一定发生在 restore() 的 finally 清理之前。
-    const restoredByAutoStart = this.autoStartRestore;
-    this.autoStartRestore = false;
+    // restore() 的标记不在入口消费，而在 online 时读取：start() 的 pending 复用
+    // 路径不会走到这里，若入口消费会导致 restore 撞上 pending 时标记被 finally
+    // 清掉、pending 的 connect 却读不到（cc-haha 评审遗留 #5）。
     const controller = new AbortController();
     this.controller = controller;
     this.status = {
@@ -565,6 +573,8 @@ export class PublicAccessManager {
         throw new CloudflareTunnelError("network", "The public hostname does not reach this gateway");
       }
       write({ stage: "verifying", outcome: "succeeded", durationMs: Date.now() - verifyStartedAt });
+      const restoredByAutoStart = this.autoStartRestore;
+      this.autoStartRestore = false;
       this.status = {
         state: "online",
         error: null,
@@ -576,6 +586,9 @@ export class PublicAccessManager {
       write({ stage: "online", outcome: "succeeded", durationMs: Date.now() - attemptStartedAt, ...(publicUrl ? { details: { url: publicUrl } } : {}) });
       this.retryCount = 0;
     } catch (error) {
+      // 失败时**不**清 restore 标记：network 失败会 scheduleRetry 重试，重试的
+      // connect 成功 online 时仍需读到它（cc-haha 评审遗留 #5）。标记只在
+      // online（消费）/ stop / configure / start 被拒绝时清。
       if (error instanceof CloudflareTunnelError && error.retryStop) {
         this.pendingStops.add(error.retryStop);
         this.stopUnconfirmed = true;
@@ -659,6 +672,7 @@ export class PublicAccessManager {
   async stop(): Promise<PublicAccessStatus> {
     this.wanted = false;
     const generation = ++this.generation;
+    this.autoStartRestore = false;
     this.controller?.abort();
     this.controller = null;
     this.unsubscribe?.();
