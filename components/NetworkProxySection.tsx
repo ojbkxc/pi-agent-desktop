@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { appNotify } from "@/lib/notification-store";
 import { AppSelect } from "./AppSelect";
 import { ConfigButton } from "./SettingsUi";
 
@@ -25,6 +26,25 @@ interface ProxyStatus {
 }
 
 const MODES: ProxyMode[] = ["direct", "system", "manual"];
+
+/** 手动模式保存请求的最长等待时间（毫秒）。 */
+const SAVE_TIMEOUT_MS = 30_000;
+
+/** 客户端预校验：手动模式的 URL 必须是 http:// 或 https:// 开头。 */
+function isValidProxyUrl(url: string): boolean {
+  const trimmed = url.trim();
+  return trimmed.startsWith("http://") || trimmed.startsWith("https://");
+}
+
+/** 从错误响应 body 中提取服务端返回的 error 字段。 */
+async function readErrorMessage(response: Response): Promise<string | null> {
+  try {
+    const body = (await response.json()) as { error?: unknown };
+    return typeof body.error === "string" && body.error.trim() ? body.error.trim() : null;
+  } catch {
+    return null;
+  }
+}
 
 export function NetworkProxySection() {
   const { t } = useI18n();
@@ -52,25 +72,61 @@ export function NetworkProxySection() {
   }, [load]);
 
   const save = async (mode: ProxyMode, url: string) => {
+    // 客户端预校验：手动模式必须填合法的 http/https 代理地址。
+    if (mode === "manual" && !isValidProxyUrl(url)) {
+      setInvalid(true);
+      appNotify.error({ message: t("settings.networkProxy.invalid") });
+      return;
+    }
+
     setBusy(true);
     setInvalid(false);
+
+    // 30 秒超时：防止弱网环境下请求挂死导致界面无反馈。
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), SAVE_TIMEOUT_MS);
+
     try {
       const response = await fetch("/api/network-proxy", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode, url }),
+        signal: controller.signal,
       });
-      if (response.status === 400 && mode === "manual") {
-        setInvalid(true);
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        // 优先展示服务端返回的具体错误（如 "URL 必须是 http:// 开头"）。
+        const serverError = await readErrorMessage(response);
+        if (response.status === 400) {
+          setInvalid(true);
+          appNotify.error({
+            message: serverError ?? t("settings.networkProxy.invalid"),
+          });
+        } else {
+          setFailed(true);
+          appNotify.error({
+            message: serverError ?? t("settings.networkProxyFailed"),
+          });
+        }
         return;
       }
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
       const data = (await response.json()) as ProxyStatus;
       setStatus(data);
       setUrlDraft(data.url ?? "");
       setFailed(false);
-    } catch {
+      // 保存成功：给出明确反馈，避免用户不确定是否生效。
+      appNotify.success({ message: t("settings.networkProxy.saved") });
+    } catch (error) {
+      clearTimeout(timeoutId);
       setFailed(true);
+      // 区分超时和普通网络错误，给出更准确的提示。
+      if (error instanceof Error && error.name === "AbortError") {
+        appNotify.error({ message: t("settings.networkProxy.timeout") });
+      } else {
+        appNotify.error({ message: t("settings.networkProxyFailed") });
+      }
     } finally {
       setBusy(false);
     }
