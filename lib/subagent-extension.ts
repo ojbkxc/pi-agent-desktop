@@ -392,8 +392,35 @@ export function createSubagentExtension(
               limits,
               ...(signal ? { signal } : {}),
               onEvent: (event) => {
-                if (event.type === "phase") {
-                  onUpdate?.({ content: [{ type: "text", text: `workflow phase: ${event.title}` }], details: undefined });
+                // M3: hooks 发出 4 种 WorkflowEvent（phase/log/agent_start/agent_end），
+                // 旧实现只转发 phase，其余 3 种静默丢弃，UI 在脚本并行起多个节点时完全黑屏。
+                // 全部转成 onUpdate：content 是给模型/人看的进度行，details 带结构化事件
+                // 供 UI 富渲染（与 Agent 工具的 subagentToolDetails 机制同源）。
+                switch (event.type) {
+                  case "phase":
+                    onUpdate?.({
+                      content: [{ type: "text", text: `workflow phase: ${event.title}` }],
+                      details: { kind: "pi-web-workflow-event", event },
+                    });
+                    break;
+                  case "log":
+                    onUpdate?.({
+                      content: [{ type: "text", text: `workflow log: ${event.message}` }],
+                      details: { kind: "pi-web-workflow-event", event },
+                    });
+                    break;
+                  case "agent_start":
+                    onUpdate?.({
+                      content: [{ type: "text", text: `workflow node ${event.index + 1} started: ${event.description}` }],
+                      details: { kind: "pi-web-workflow-event", event },
+                    });
+                    break;
+                  case "agent_end":
+                    onUpdate?.({
+                      content: [{ type: "text", text: `workflow node ${event.index + 1} ${event.ok ? "completed" : "failed"}: ${event.description}` }],
+                      details: { kind: "pi-web-workflow-event", event },
+                    });
+                    break;
                 }
               },
             });
