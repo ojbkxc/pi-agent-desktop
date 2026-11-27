@@ -81,6 +81,7 @@ jobs:
             | node scripts/fork-ownership.mjs classify -
 
       - name: Synchronize released components
+        id: sync
         if: steps.releases.outputs.needs_update == 'true' && steps.pending.outputs.awaiting_review != 'true'
         env:
           PI_VERSION: ${{ steps.releases.outputs.pi_version }}
@@ -99,7 +100,37 @@ jobs:
 
           if [ "$PI_WEB_UPDATE" = "true" ]; then
             # The tag was already fetched by the boundary classification step.
-            git merge --no-edit --no-ff refs/tags/pi-web-release
+            #
+            # The fork can drift far enough from upstream that the mechanical
+            # merge no longer applies (hundreds of conflicting files). That
+            # state is not a code regression: the nightly job must not turn
+            # red over it every night — it would just train everyone to
+            # ignore a real failure. Mark it for a manual upstream-absorb
+            # sprint instead (see docs/merge-history.md) and exit the step
+            # successfully with a clean tree so the downstream verify /
+            # commit / publish / PR steps skip themselves.
+            if ! git merge --no-edit --no-ff refs/tags/pi-web-release; then
+              echo "git merge of refs/tags/pi-web-release failed; aborting and marking manual_absorb_required." >&2
+              git merge --abort || git reset --hard HEAD
+              {
+                echo "## Manual upstream absorb required"
+                echo
+                echo "The mechanical \`git merge refs/tags/pi-web-release\` conflicts"
+                echo "with fork-owned files and cannot be resolved by this job."
+                echo
+                echo "This is not a code failure. It means the fork has drifted"
+                echo "far enough that a nightly sync needs a dedicated"
+                echo "upstream-absorb sprint — see docs/merge-history.md and"
+                echo "docs/ownership-boundaries.md for the merge rules the"
+                echo "sprint has to follow."
+                echo
+                echo "The nightly job will keep reporting this marker until the"
+                echo "absorb lands; it will NOT keep failing."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "manual_absorb_required=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "manual_absorb_required=false" >> "$GITHUB_OUTPUT"
             # globals.css / settings.css must still equal upstream after the
             # merge; this fails if fork rules crept back in, and otherwise moves
             # the hashes checked by scripts/upstream-css-baseline.test.mjs.
@@ -122,7 +153,7 @@ jobs:
       # to be as wide as it can cheaply be. Component tests are included here
       # deliberately: upstream ships them and they cover fork-modified files.
       - name: Verify the merged tree
-        if: steps.releases.outputs.needs_update == 'true' && steps.pending.outputs.awaiting_review != 'true'
+        if: steps.releases.outputs.needs_update == 'true' && steps.pending.outputs.awaiting_review != 'true' && steps.sync.outputs.manual_absorb_required != 'true'
         run: |
           set -euo pipefail
           npm test
@@ -133,7 +164,7 @@ jobs:
           PI_WEB_DESKTOP_BUILD=1 node_modules/.bin/next build --webpack
 
       - name: Commit the sync
-        if: steps.releases.outputs.needs_update == 'true' && steps.pending.outputs.awaiting_review != 'true'
+        if: steps.releases.outputs.needs_update == 'true' && steps.pending.outputs.awaiting_review != 'true' && steps.sync.outputs.manual_absorb_required != 'true'
         run: |
           set -euo pipefail
           git add --all
@@ -143,7 +174,7 @@ jobs:
       # sync may update main and then cut the signed release on its own. The
       # release checks out the exact commit the gate just validated below.
       - name: Publish the verified sync and dispatch the release
-        if: steps.releases.outputs.needs_update == 'true' && steps.pending.outputs.awaiting_review != 'true' && steps.boundary.outputs.review_required != 'true'
+        if: steps.releases.outputs.needs_update == 'true' && steps.pending.outputs.awaiting_review != 'true' && steps.boundary.outputs.review_required != 'true' && steps.sync.outputs.manual_absorb_required != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -161,7 +192,7 @@ jobs:
       # them cleanly and still be wrong, so a human reviews before anything is
       # signed and published.
       - name: Open a review PR
-        if: steps.releases.outputs.needs_update == 'true' && steps.pending.outputs.awaiting_review != 'true' && steps.boundary.outputs.review_required == 'true'
+        if: steps.releases.outputs.needs_update == 'true' && steps.pending.outputs.awaiting_review != 'true' && steps.boundary.outputs.review_required == 'true' && steps.sync.outputs.manual_absorb_required != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PI_WEB_TAG: ${{ steps.releases.outputs.pi_web_tag }}
@@ -192,6 +223,58 @@ jobs:
             --head "$branch" \
             --title "chore: sync pi-web $PI_WEB_TAG (review required: $HIGHEST_RISK risk)" \
             --body-file /tmp/pr-body.md
+
+      # The merge itself did not apply. That is a "needs a human sprint"
+      # state, not a red-CI state — report it once and reuse the same issue
+      # instead of opening a fresh one every night.
+      - name: Report manual absorb requirement
+        if: steps.sync.outputs.manual_absorb_required == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PI_WEB_TAG: ${{ steps.releases.outputs.pi_web_tag }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Manual upstream absorb required"
+            echo
+            echo "[Run log]($RUN_URL)"
+            echo
+            echo "The nightly sync could not apply \`$PI_WEB_TAG\` — the"
+            echo "mechanical \`git merge\` conflicts with fork-owned files."
+            echo
+            echo "This is not a code failure. It needs a dedicated"
+            echo "upstream-absorb sprint; see docs/merge-history.md and"
+            echo "docs/ownership-boundaries.md for the merge rules."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          issues_enabled="$(gh api "repos/$GITHUB_REPOSITORY" --jq .has_issues 2>/dev/null || echo false)"
+          if [ "$issues_enabled" != "true" ]; then
+            echo "Issues are disabled for $GITHUB_REPOSITORY; reported in the job summary only." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" \
+            --state open --label manual-upstream-absorb --limit 1 --json number --jq '.[0].number // empty')"
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
+              --body "Manual absorb still pending for \`$PI_WEB_TAG\`: $RUN_URL"
+          else
+            gh label create manual-upstream-absorb --repo "$GITHUB_REPOSITORY" \
+              --color FBCA04 --description "Nightly pi-web sync needs a manual upstream-absorb sprint" 2>/dev/null || true
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "Manual upstream absorb required ($PI_WEB_TAG)" \
+              --label manual-upstream-absorb \
+              --body "The nightly pi/pi-web sync could not merge \`$PI_WEB_TAG\`: $RUN_URL
+
+          The mechanical \`git merge\` conflicts with fork-owned files and needs a
+          dedicated upstream-absorb sprint. See docs/merge-history.md and
+          docs/ownership-boundaries.md for the merge rules.
+
+          This issue is reused while the absorb is pending — close it once a
+          nightly sync succeeds again."
+          fi
 
       # Without this a failed sync is silent, and the fork quietly falls behind
       # upstream until someone happens to look at the Actions tab.
