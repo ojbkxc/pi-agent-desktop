@@ -4,6 +4,7 @@ import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, use
 import type {
   AgentMessage,
   BlockingExtensionUiRequest,
+  CustomMessage,
   ExtensionUiRequest,
   ExtensionWidgetItem,
   SessionInfo,
@@ -1851,12 +1852,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
         break;
       case "prompt_error":
-        addNotice({ type: "error", message: (event.errorMessage as string | undefined) ?? "Command failed" });
+        addNotice({ type: "error", message: (event.errorMessage as string | undefined) ?? t("chat.commandFailed") });
         break;
       case "extension_error":
         addNotice({
           type: "error",
-          message: (event.error as string | undefined) ?? "Extension command failed",
+          message: (event.error as string | undefined) ?? t("chat.extensionCommandFailed"),
         });
         break;
       case "message_start":
@@ -1901,7 +1902,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       case "message_end": {
         // Same late-event guard: after reconcile finished this run,
         // loadSession already loaded this message from the session file —
-        // appending it again would duplicate it.
+        // appending it again would duplicate it. This also swallows the SDK's
+        // EMPTY aborted shell after Stop: handleAbort has already flushed the
+        // partial reply and cleared agentRunningRef, so the shell lands here
+        // with agentRunningRef false and is dropped instead of duplicating.
         if (!agentRunningRef.current) break;
         if (isSystemMessageEvent(event)) break;
         const completed = event.message as AgentMessage | undefined;
@@ -2262,6 +2266,72 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       return;
     }
+
+    // ── UI reset first, network second (cc-haha stopGeneration pattern) ──
+    // The user explicitly asked to stop. If we wait for the abort round-trip
+    // before touching UI state, a hung POST leaves the composer frozen in the
+    // "running" state forever (audit ISSUE-2). Reset synchronously so the
+    // composer is interactive the moment the request is in flight, then flush
+    // any partial streaming text so the user keeps what the model wrote.
+    const partialStream = streamingStore.getState();
+    const partialMessage = partialStream.streamingMessage;
+    // ISSUE-9: keep EVERY block the partial carries — not just text. A reply
+    // stopped mid-tool-call still owns its thinking and toolCall blocks; the
+    // text-only flush the first pass shipped dropped both, so the persisted
+    // bubble showed nothing of the tool the model was invoking.
+    const partialHasContent = Boolean(
+      partialMessage
+      && partialMessage.content.some((block) =>
+        (block.type === "text" && block.text.trim().length > 0)
+        || (block.type === "thinking" && block.thinking.trim().length > 0)
+        || block.type === "toolCall"),
+    );
+    // A Stop on an already-idle session must not litter the transcript with a
+    // stopped marker; only a run that was actually in flight (or a partial that
+    // outlived its run) earns one.
+    const runWasActive = agentRunningRef.current || partialHasContent;
+
+    agentRunningRef.current = false;
+    setAgentRunning(false);
+    setAgentPhase(null);
+    setRetryInfo(null);
+    setActiveToolResults(new Map());
+    dispatch({ type: "end" });
+
+    // Flush the partial stream into a real assistant message + a system
+    // "generation stopped" marker, mirroring cc-haha's chatStore.stopGeneration
+    // (chatStore.ts:4136-4149). Without this the in-flight text just vanishes.
+    if (partialMessage && partialHasContent) {
+      setMessages((prev) => [
+        ...prev,
+        // normalizeToolCalls freezes the streamed rawInput into `input`, the
+        // shape the transcript and the tool-call cards render from. The
+        // streaming snapshot already carries model/provider from message_start.
+        {
+          ...normalizeToolCalls(partialMessage),
+          stopReason: "aborted",
+          timestamp: partialMessage.timestamp ?? Date.now(),
+        } as AgentMessage,
+      ]);
+    }
+    // ISSUE-10: the system-level stopped marker lands even when nothing had
+    // streamed yet (Stop during thinking or a tool run), so the transcript
+    // always records that this run ended by the user's hand. `generationStopped`
+    // in details keeps the flag machine-readable; the customType follows the
+    // existing snake_case convention of the sibling markers (compaction /
+    // branch_summary) rather than cc-haha's camelCase field name.
+    if (runWasActive) {
+      const stoppedMarker: CustomMessage = {
+        role: "custom",
+        customType: "generation_stopped",
+        content: t("chat.generationStopped"),
+        display: true,
+        details: { generationStopped: true },
+        timestamp: Date.now(),
+      };
+      setMessages((prev) => [...prev, stoppedMarker]);
+    }
+
     try {
       // Stop takes the queued messages back for the composer, as Esc does in pi's TUI,
       // with the prompts parked behind a compaction (and their images), as Recall does.
@@ -2271,8 +2341,30 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       restoreRecalledPrompts(recalled);
     } catch (e) {
       console.error("Failed to abort:", e);
+      // Toast + one automatic retry: the UI has already returned to idle, so a
+      // successful retry cannot leave us stuck; a failed one surfaces the raw
+      // error so the user knows the server may still be running.
+      addNotice({
+        type: "warning",
+        message: t("chat.stopRetrying"),
+        durationMs: 4000,
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+      try {
+        const recalled = await sendAgentCommand<RecalledPrompts | null>(sid, { type: "abort" });
+        if (recalled) setQueuedMessages({ steering: [], followUp: [] });
+        restoreRecalledPrompts(recalled);
+      } catch (retryError) {
+        console.error("Abort retry failed:", retryError);
+        addNotice({
+          type: "error",
+          message: t("chat.stopFailed", {
+            error: retryError instanceof Error ? retryError.message : String(retryError),
+          }),
+        });
+      }
     }
-  }, [restoreRecalledPrompts]);
+  }, [addNotice, dispatch, restoreRecalledPrompts, streamingStore, t]);
 
   const { handleAbortRetry, handleSetAutomation } = useSessionAutomationActions<AgentStateResponse>({
     sessionIdRef, setAutomation, addNotice, resync: syncLiveModel,
@@ -2411,7 +2503,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setCurrentModelOverride(previousOverride);
       addNotice({
         type: "error",
-        message: `Failed to switch model: ${e instanceof Error ? e.message : String(e)}`,
+        message: t("chat.modelSwitchFailed", { error: e instanceof Error ? e.message : String(e) }),
       });
       // A failed response can still follow a server-side write (for example, a
       // dropped connection), so let the server settle the displayed model.
@@ -2545,10 +2637,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     try {
       await saveDefaultPreferences({ provider, modelId });
     } catch (e) {
-      addNotice({ type: "error", message: `Failed to save default model: ${e instanceof Error ? e.message : String(e)}` });
+      addNotice({ type: "error", message: t("chat.defaultModelSaveFailed", { error: e instanceof Error ? e.message : String(e) }) });
       return;
     }
-    addNotice({ type: "success", message: `Default model: ${provider}/${modelId}` });
+    addNotice({ type: "success", message: t("chat.defaultModelSaved", { provider, modelId }) });
     setNewSessionDefaultModel({ provider, modelId });
     if (displayModel?.provider !== provider || displayModel?.modelId !== modelId) {
       await handleModelChange(provider, modelId);
@@ -2570,7 +2662,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         addNotice({ type: "error", message: result.error });
       } else if (!result.action) {
         // A command that opens a panel says nothing: the panel is the answer.
-        addNotice({ type: "success", message: result.message ?? "Command completed" });
+        addNotice({ type: "success", message: result.message ?? t("chat.commandCompleted") });
       }
       return result;
     };
@@ -2578,7 +2670,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     try {
       switch (commandName) {
         case "compact": {
-          if (!sid || isCompacting) return complete({ handled: true, error: "No active session to compact" });
+          if (!sid || isCompacting) return complete({ handled: true, error: t("chat.noActiveSessionToCompact") });
           // Detached on purpose. This must resolve now: runBuiltinCommand holds
           // the composer's fieldset disabled until the command resolves, and the
           // compact POST blocks for the whole compaction, which read as an input
@@ -2594,7 +2686,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
 
         case "auto-compact": {
-          if (!sid) return complete({ handled: true, error: "No active session" });
+          if (!sid) return complete({ handled: true, error: t("chat.noActiveSession") });
           // Read the live wrapper (this POST starts it if idle) so the toggle
           // follows settings.json, not the React default of `true`.
           const liveState = await sendAgentCommand<AgentStateResponse>(sid, { type: "get_state" });
@@ -2607,13 +2699,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           return complete({
             handled: true,
             message: nextEnabled
-              ? "Auto-compaction enabled"
-              : "Auto-compaction disabled",
+              ? t("chat.autoCompactionEnabled")
+              : t("chat.autoCompactionDisabled"),
           });
         }
 
         case "reload": {
-          if (!sid) return complete({ handled: true, error: "No active session to reload" });
+          if (!sid) return complete({ handled: true, error: t("chat.noActiveSessionToReload") });
           await sendAgentCommand(sid, { type: "reload" });
           await Promise.all([
             loadSession(sid, false, true),
@@ -2621,22 +2713,22 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             loadSlashCommands(),
             loadModels(),
           ]);
-          return complete({ handled: true, message: "Reloaded session resources" });
+          return complete({ handled: true, message: t("chat.reloadedSessionResources") });
         }
 
         case "name": {
-          if (!sid) return complete({ handled: true, error: "No active session to name" });
-          if (!args) return complete({ handled: true, error: "Usage: /name <name>" });
+          if (!sid) return complete({ handled: true, error: t("chat.noActiveSessionToName") });
+          if (!args) return complete({ handled: true, error: t("chat.nameUsage") });
           await sendAgentCommand(sid, { type: "set_session_name", name: args });
           // includeState must be true: with the default `false` loadSession returns
           // null on success, so promoteNewSession (draft rekey + AppShell notice)
           // never ran for a freshly-created composer session.
           if (await loadSession(sid, false, true)) promoteNewSession();
-          return complete({ handled: true, message: `Session renamed to ${args}` });
+          return complete({ handled: true, message: t("chat.sessionRenamedTo", { name: args }) });
         }
 
         case "session": {
-          if (!sid) return complete({ handled: true, error: "No active session" });
+          if (!sid) return complete({ handled: true, error: t("chat.noActiveSession") });
           const sessionGeneration = sessionGenerationRef.current;
           const runId = promptRunIdRef.current;
           const stats = await sendAgentCommand<SessionStatsInfo>(sid, { type: "get_session_stats" });
@@ -2668,27 +2760,27 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
 
         case "copy": {
-          if (!sid) return complete({ handled: true, error: "No active session" });
+          if (!sid) return complete({ handled: true, error: t("chat.noActiveSession") });
           const data = await sendAgentCommand<LastAssistantTextResponse>(sid, { type: "get_last_assistant_text" });
           const textToCopy = data?.text ?? "";
-          if (!textToCopy) return complete({ handled: true, error: "No assistant message to copy" });
+          if (!textToCopy) return complete({ handled: true, error: t("chat.noAssistantMessageToCopy") });
           await navigator.clipboard.writeText(textToCopy);
-          return complete({ handled: true, message: "Copied last assistant message" });
+          return complete({ handled: true, message: t("chat.copiedLastAssistantMessage") });
         }
 
         case "clone": {
-          if (!sid) return complete({ handled: true, error: "No active session to clone" });
+          if (!sid) return complete({ handled: true, error: t("chat.noActiveSessionToClone") });
           if (agentRunningRef.current || bashRunningRef.current) {
-            return complete({ handled: true, error: "Cannot clone while the session is running" });
+            return complete({ handled: true, error: t("chat.cannotCloneWhileRunning") });
           }
           const result = await sendAgentCommand<{ cancelled?: boolean; newSessionId?: string }>(sid, {
             type: "clone",
             leafId: activeLeafId,
           });
           if (result?.cancelled || !result?.newSessionId) {
-            return complete({ handled: true, error: "Cannot clone an empty or unsaved session" });
+            return complete({ handled: true, error: t("chat.cannotCloneEmptySession") });
           }
-          const completed = complete({ handled: true, message: "Cloned current session branch" });
+          const completed = complete({ handled: true, message: t("chat.clonedCurrentSessionBranch") });
           // d5-7：clone 同样携带来源会话 id（/clone 即刻返回，守卫通常不触发）。
           onSessionForked?.(result.newSessionId, sid);
           return completed;
@@ -2725,7 +2817,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
     if (!sid) {
       restore();
-      addNotice({ type: "error", message: "No active session for the queued message" });
+      addNotice({ type: "error", message: t("chat.noActiveSessionForQueuedMessage") });
       return;
     }
     const piImages = images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
@@ -2827,7 +2919,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       restoreRecalledPrompts(result);
     } catch (e) {
       console.error("Failed to recall queued messages:", e);
-      addNotice({ type: "error", message: "Failed to recall queued messages" });
+      addNotice({ type: "error", message: t("chat.failedToRecallQueuedMessages") });
     }
   }, [addNotice, restoreRecalledPrompts]);
 
@@ -2862,10 +2954,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     try {
       await saveDefaultPreferences({ thinkingLevel: level });
     } catch (e) {
-      addNotice({ type: "error", message: `Failed to save default reasoning level: ${e instanceof Error ? e.message : String(e)}` });
+      addNotice({ type: "error", message: t("chat.defaultReasoningLevelSaveFailed", { error: e instanceof Error ? e.message : String(e) }) });
       return;
     }
-    addNotice({ type: "success", message: `Default reasoning level: ${level}` });
+    addNotice({ type: "success", message: t("chat.defaultReasoningLevelSaved", { level }) });
     setSavedDefaultThinkingLevel(level);
     if (displayThinkingLevel !== level) await handleThinkingLevelChange(level);
     reloadModelsQuietly();

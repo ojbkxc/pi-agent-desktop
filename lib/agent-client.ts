@@ -25,15 +25,84 @@ export function isPromptRejectedError(error: unknown): error is AgentCommandErro
     && error.accepted === false;
 }
 
+/**
+ * Default deadline for agent commands. 30 s covers a cold server + a slow
+ * model ack while still bounding a true hang — without this, a stuck POST
+ * leaves the composer in a "running" state forever (see audit ISSUE-3).
+ *
+ * Callers may pass their own `signal` (AbortSignal) to cancel earlier; the
+ * helper composes the two so the first of {timeout, signal} wins.
+ */
+export const DEFAULT_AGENT_COMMAND_TIMEOUT_MS = 30_000;
+
+export interface SendAgentCommandOptions {
+  /** Hard deadline in ms; pass `Infinity` to opt out of the built-in timeout. */
+  timeoutMs?: number;
+  /** Caller-owned cancellation. Composed with the internal timeout. */
+  signal?: AbortSignal;
+}
+
+function makeAbortError(): Error {
+  const err = new Error("The operation was aborted.");
+  err.name = "AbortError";
+  return err;
+}
+
+/**
+ * One fetch, bounded by both a timeout and an optional caller AbortSignal.
+ *
+ * We do not reuse `fetchWithDeadline` here because that helper builds its own
+ * AbortController and does not expose it, so a caller-provided signal could
+ * not reach the in-flight fetch. This implementation owns the controller and
+ * fires it from whichever source wins.
+ *
+ * POST bodies are JSON commands; the server is idempotent-unaware, so this
+ * helper deliberately does **not** auto-retry — retries are a per-call-site
+ * decision (handleAbort retries abort explicitly; mutations like fork do not).
+ */
+async function fetchAgentCommand(
+  sessionId: string,
+  command: Record<string, unknown>,
+  timeoutMs: number,
+  callerSignal: AbortSignal | undefined,
+): Promise<Response> {
+  if (callerSignal?.aborted) throw makeAbortError();
+  const controller = new AbortController();
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  if (Number.isFinite(timeoutMs)) {
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+  }
+  const onCallerAbort = () => controller.abort();
+  callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+  try {
+    return await fetch(`/api/agent/${encodeURIComponent(sessionId)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(command),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (timedOut) {
+      throw new Error(`Agent command timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+    callerSignal?.removeEventListener("abort", onCallerAbort);
+  }
+}
+
 export async function sendAgentCommand<T = unknown>(
   sessionId: string,
   command: Record<string, unknown>,
+  options: SendAgentCommandOptions = {},
 ): Promise<T> {
-  const res = await fetch(`/api/agent/${encodeURIComponent(sessionId)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(command),
-  });
+  const { timeoutMs = DEFAULT_AGENT_COMMAND_TIMEOUT_MS, signal } = options;
+  const res = await fetchAgentCommand(sessionId, command, timeoutMs, signal);
   const body = (await res.json().catch(() => ({}))) as {
     success?: boolean;
     data?: T;
