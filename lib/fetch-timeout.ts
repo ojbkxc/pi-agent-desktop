@@ -20,20 +20,47 @@ export async function fetchWithDeadline(
   timeoutMs = DEFAULT_FETCH_TIMEOUT_MS,
   init: RequestInit = {},
 ): Promise<Response> {
-  const controller = new AbortController();
+  const timeoutController = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
-    controller.abort();
+    timeoutController.abort();
   }, timeoutMs);
+  // Merge the caller's signal (e.g. a per-request cancellation controller)
+  // with the internal deadline: the combined signal fires on whichever comes
+  // first. AbortSignal.any is available in Node 20+ and modern browsers; fall
+  // back to manual propagation otherwise.
+  const callerSignal = init.signal ?? null;
+  let signal: AbortSignal = timeoutController.signal;
+  let removeCallerListener: (() => void) | null = null;
+  if (callerSignal) {
+    if (typeof AbortSignal.any === "function") {
+      signal = AbortSignal.any([timeoutController.signal, callerSignal]);
+    } else {
+      const merged = new AbortController();
+      const abort = () => merged.abort();
+      if (callerSignal.aborted || timeoutController.signal.aborted) {
+        abort();
+      } else {
+        callerSignal.addEventListener("abort", abort, { once: true });
+        timeoutController.signal.addEventListener("abort", abort, { once: true });
+        removeCallerListener = () => {
+          callerSignal.removeEventListener("abort", abort);
+          timeoutController.signal.removeEventListener("abort", abort);
+        };
+      }
+      signal = merged.signal;
+    }
+  }
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    return await fetch(url, { ...init, signal });
   } catch (error) {
     // A bare AbortError reads as if the app cancelled the request on purpose.
     if (timedOut) throw new Error(`Request timed out after ${timeoutMs}ms`);
     throw error;
   } finally {
     clearTimeout(timer);
+    removeCallerListener?.();
   }
 }
 

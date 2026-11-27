@@ -27,6 +27,7 @@ import { FrontmatterCard } from "./FrontmatterCard";
 import { parseUnifiedPatch } from "@/lib/patch";
 import type { GitFileDiffResponse } from "@/lib/git-types";
 import { getFileIcon } from "./FileIcons";
+import { fetchWithDeadline } from "@/lib/fetch-timeout";
 import { useI18n } from "@/hooks/useI18n";
 import { formatBytes, formatElapsedClock } from "@/lib/format-units";
 import { getDesktopPlatform } from "@/lib/desktop-window";
@@ -1139,6 +1140,7 @@ function TextFileViewer({
   const [htmlPreviewRevision, setHtmlPreviewRevision] = useState(0);
   const esRef = useRef<EventSource | null>(null);
   const contentRequestRef = useRef(0);
+  const contentAbortRef = useRef<AbortController | null>(null);
   const gitDiffRequestRef = useRef(0);
   // 同步镜像已展示内容：fetchContent 的错误分支据此区分「首读」与「重载/增量」。
   const dataRef = useRef<FileData | null>(null);
@@ -1201,12 +1203,24 @@ function TextFileViewer({
 
   const fetchContent = useCallback((filePath: string, offset = 0) => {
     const requestId = ++contentRequestRef.current;
+    // Abort any in-flight request: the previous result is already discarded by
+    // the requestId check, so letting its body keep downloading only burns
+    // bandwidth (ISSUE-4).
+    contentAbortRef.current?.abort();
+    const controller = new AbortController();
+    contentAbortRef.current = controller;
     // 已有内容（增量读，或后台重载）时，错误只内联提示、保留 data；首读失败才整页报错。
     const keepsContent = () => offset > 0 || dataRef.current !== null;
-    return fetch(getFileApiUrl(filePath, "read", sourceSessionId, { offset: offset || undefined }))
+    const isStale = () =>
+      requestId !== contentRequestRef.current || contentAbortRef.current !== controller;
+    return fetchWithDeadline(
+      getFileApiUrl(filePath, "read", sourceSessionId, { offset: offset || undefined }),
+      30_000,
+      { signal: controller.signal },
+    )
       .then((r) => r.json())
       .then((d: FileData & { error?: string }) => {
-        if (requestId !== contentRequestRef.current) return null;
+        if (isStale()) return null;
         if (d.error) {
           if (keepsContent()) setLoadMoreError({ error: d.error, offset });
           else setError(d.error);
@@ -1220,7 +1234,9 @@ function TextFileViewer({
         return d;
       })
       .catch((e) => {
-        if (requestId !== contentRequestRef.current) return null;
+        if (isStale()) return null;
+        // Aborted by a newer request or unmount: do not surface an error.
+        if (e instanceof Error && e.name === "AbortError") return null;
         if (keepsContent()) setLoadMoreError({ error: String(e), offset });
         else setError(String(e));
         return null;
@@ -1273,6 +1289,14 @@ function TextFileViewer({
       active = false;
     };
   }, [filePath, fetchContent, sourceSessionId]);
+
+  // Abort any in-flight content request when the component unmounts, so the
+  // network layer is cancelled alongside the requestId staleness guard.
+  useEffect(() => {
+    return () => {
+      contentAbortRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     setWatching(false);
