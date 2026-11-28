@@ -103,12 +103,11 @@ export const FINAL_RATE_TTL_MS = 8_000;
  *
  * `usage.output` is the token count the provider actually billed, and `streamingMs` is
  * the wall clock the stream took — dividing them gives the same number DeepSeek Harness
- * prints as `{tps} tok/s`. Only produced when both are usable: a zero duration would
- * otherwise turn into an infinite rate. The gate is `seconds > 0`, the same one dsh's
- * `SessionStats` uses (`decodeMs > 0 ? … : null`) — no 0.2 s floor. This file once added
- * a 0.2 s floor here only, while `sessionTotals` accumulated on `stepDecodeMs > 0`; a
- * sub-200 ms turn then entered the cumulative average but produced no `finalRate`, so
- * the two readouts disagreed. Aligning both on dsh's `> 0` removes the self-invented gap.
+ * prints as `{tps} tok/s`. Only produced when both are usable: a sub-200 ms window would
+ * read as an absurd rate (50 ms × 10 tokens → 10000 tok/s), so a 0.2 s floor guards
+ * against divide-by-near-zero. The same floor gates `sessionTotals` accumulation in the
+ * `end` branch, so the two readouts stay aligned: a sub-200 ms turn neither produces a
+ * `finalRate` nor enters the cumulative average.
  */
 function finishedTurnRate(
   state: StreamingState,
@@ -118,10 +117,10 @@ function finishedTurnRate(
   // 分母优先用 decode 段（首 token → 末 token），与 DeepSeek Harness 同口径；
   // 老路径/重连没有首 token 时刻时退回整段墙钟（宁可略低，也不要凭空编）。
   const seconds = ((state.decodeMs ?? 0) > 0 ? state.decodeMs! : state.streamingMs) / 1000;
-  // 与 dsh 的 `decodeMs > 0` 同闸门：只挡「分母为零/不可用」，不设 0.2s 下限。
-  // `sessionTotals` 累计用同样的 `stepDecodeMs > 0`，两处口径一致，<200ms 的快速
-  // 回答既产生 finalRate 也进累计，不再一个有一个没有。
-  if (output <= 0 || !Number.isFinite(seconds) || seconds <= 0) return undefined;
+  // 0.2s 下限是**除零保护**：50ms 窗口配 10 token 会读成 10000 tok/s，无意义。
+  // `sessionTotals` 累计处用同样的下限（stepDecodeMs >= 200），两处口径一致：
+  // sub-200ms 轮次既不产生 finalRate，也不进累计，避免拉低平均值。
+  if (output <= 0 || !Number.isFinite(seconds) || seconds < 0.2) return undefined;
   const tps = output / seconds;
   if (!Number.isFinite(tps) || tps <= 0) return undefined;
   return { tps, at: Date.now() };
@@ -301,9 +300,10 @@ export function streamReducer(
       const output = typeof settled?.usage?.output === "number" ? settled.usage.output : 0;
       const stepDecodeMs = (state.decodeMs ?? 0) > 0 ? state.decodeMs! : state.streamingMs;
       const previousTotals = state.sessionTotals;
-      // 只在**这一轮真的有 token 与时间**时累计。没有 usage 的轮次（被取消、provider
-      // 不报）不能凭一个虚假的 0 去动分母，否则平均值会被稀释。
-      const sessionTotals = output > 0 && stepDecodeMs > 0
+      // 只在**这一轮真的有 token 与足够长的时间**时累计。没有 usage 的轮次（被取消、
+      // provider 不报）不能凭一个虚假的 0 去动分母；同样，sub-200ms 轮次不进累计
+      // ——与 finishedTurnRate 的除零保护同下限，避免拉低平均值。
+      const sessionTotals = output > 0 && stepDecodeMs >= 200
         ? {
           decodeTokens: (previousTotals?.decodeTokens ?? 0) + output,
           decodeMs: (previousTotals?.decodeMs ?? 0) + stepDecodeMs,

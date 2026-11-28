@@ -44,5 +44,5 @@ test("a completed model switch reloads (idle) or live-syncs (mid-run) and report
     /setCurrentModelOverride\(previousOverride\)[\s\S]*?if \(midRun\) await syncLiveState\(\);\s*else await loadSession\(sid, false, true\)/,
   );
   assert.match(switchSource, /setCurrentModelOverride\(previousOverride\)/);
-  assert.match(switchSource, /Failed to switch model:/);
+  assert.match(switchSource, /chat\.modelSwitchFailed/);
 });

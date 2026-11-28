@@ -58,6 +58,9 @@ function hook() {
       return includeState ? { running: false } : null;
     },
     promoteNewSession: () => { calls.promoted += 1; },
+    // i18n: the handler calls t(key, params); return the key so assertions can
+    // verify which translation key the handler selected.
+    t: (key) => key,
   };
   return { run: runHandler(scope), calls };
 }
@@ -66,7 +69,7 @@ test("/name promotes a freshly created session (loads state so promote runs)", a
   const { run, calls } = hook();
   const result = await run("/name My Rename");
 
-  assert.deepEqual(result, { handled: true, message: "Session renamed to My Rename" });
+  assert.deepEqual(result, { handled: true, message: "chat.sessionRenamedTo" });
   assert.deepEqual(
     calls.requests.map((entry) => entry.command),
     [{ type: "set_session_name", name: "My Rename" }],
@@ -79,7 +82,7 @@ test("/name promotes a freshly created session (loads state so promote runs)", a
 
 test("/name without an argument does not touch the session", async () => {
   const { run, calls } = hook();
-  assert.deepEqual(await run("/name"), { handled: true, error: "Usage: /name <name>" });
+  assert.deepEqual(await run("/name"), { handled: true, error: "chat.nameUsage" });
   assert.equal(calls.requests.length, 0);
   assert.equal(calls.promoted, 0);
 });
