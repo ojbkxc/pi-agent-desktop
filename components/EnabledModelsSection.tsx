@@ -1,5 +1,6 @@
 "use client";
 
+import { ModelContextWindow, type ModelContextSettings } from "./ModelContextWindow";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { EnabledModelsView } from "@/lib/enabled-models";
@@ -389,14 +390,25 @@ function useCatalogRefresh(providerId: string, onChanged: () => void) {
   return { refreshing, note, refresh };
 }
 
+/** A model's saved context-window override in the Models panel's draft, if any (M2). */
+function contextOverride(settings: ModelContextSettings, modelId: string): unknown {
+  const override = settings.overrides?.[modelId];
+  return override && typeof override === "object" && !Array.isArray(override)
+    ? (override as Record<string, unknown>).contextWindow
+    : undefined;
+}
+
 export function EnabledModelsSection({
   providerId,
   controller,
+  contextSettings,
   emptyCatalogHint,
 }: {
   providerId: string;
   controller: EnabledModelsController;
   /** Shown instead of the generic empty line when the provider has no models yet (e.g. llama.cpp before its catalog loads). */
+  /** Built-in providers: each row edits its model's context window (M2). */
+  contextSettings?: ModelContextSettings;
   emptyCatalogHint?: string;
 }) {
   const { t } = useI18n();
@@ -427,6 +439,7 @@ export function EnabledModelsSection({
   const editable = view?.editable === true;
   const scopeNoteId = `${noteId}-scope`;
   const lastModelNoteId = `${noteId}-last`;
+  const contextNoteId = `${noteId}-context`;
   const disableBlockedByLastModel = editable && !bulk.canDisable && bulk.disableRefs.length > 0;
   const showLastModelNote = disableBlockedByLastModel || (editable && shown.some((model) => isLastEnabledModel(view, model)));
   // A provider-wide action is resolved server-side so models the browser has
@@ -488,6 +501,7 @@ export function EnabledModelsSection({
           className="enabled-models-filter"
         />
       )}
+      {contextSettings && provider.models.length > 0 && <div id={contextNoteId} className="enabled-models-note">{t("models.contextOverrideHelp")}</div>}
       <div className="enabled-models-list">
         {shown.length === 0 ? (
           <div className="enabled-models-empty">{(provider.models.length === 0 && emptyCatalogHint) || t("models.enabledNoMatches")}</div>
@@ -503,6 +517,16 @@ export function EnabledModelsSection({
                 <span className="enabled-models-pin" title={t("models.enabledPinHint")}>
                   {model.thinkingPin}
                 </span>
+              )}
+              {contextSettings && (
+                <ModelContextWindow
+                  modelName={model.name}
+                  effective={model.contextWindow}
+                  value={contextOverride(contextSettings, model.id)}
+                  disabled={contextSettings.disabled}
+                  describedBy={contextNoteId}
+                  onChange={(value) => contextSettings.onChange(model.id, value)}
+                />
               )}
               <ConfigSwitch
                 checked={model.enabled}

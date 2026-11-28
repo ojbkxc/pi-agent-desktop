@@ -382,10 +382,10 @@ export function openTestConnection(
 /**
  * Reads a pi provider's token for an entry with `auth.provider`, as a
  * session's MCP extension does (`modelRegistry.getApiKeyForProvider()`), with
- * the providers extensions register: the runtime is built at the first request
- * that asks, once per connection, and asked again on every request, so a
- * provider's refresh applies. Undefined when it cannot be read, as in a
- * session; the server then answers 401.
+ * the providers extensions register: the shared runtime is fetched at the
+ * first request that asks, once per connection, and asked again on every
+ * request, so a provider's refresh applies. Undefined when it cannot be read,
+ * as in a session; the server then answers 401.
  */
 function providerTokenReader(): (provider: string) => Promise<string | undefined> {
   let registry: Promise<ModelRegistry> | undefined;

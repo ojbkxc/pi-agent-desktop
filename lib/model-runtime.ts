@@ -1,11 +1,12 @@
 import {
   createAgentSessionServices,
   getAgentDir,
-  SettingsManager,
   ModelRuntime,
+  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { rememberProviderModels } from "./deferred-provider-models";
 import { serializeByKey } from "./key-serializer";
 import { llamaCppExtension } from "./pi-sdk-internals";
 
@@ -38,6 +39,7 @@ export async function createModelRuntimeWithExtensions(
     modelRuntime: runtime,
     resourceLoaderOptions: { noPromptTemplates: true, noThemes: true, extensionFactories: [llamaCppExtension] },
   });
+  await rememberProviderModels(services.modelRuntime);
   return services.modelRuntime;
 }
 
@@ -93,6 +95,7 @@ export async function getModelRuntimeWithExtensions(): Promise<ModelRuntime> {
   // ago still read as missing.
   return serializeByKey(REFRESH_QUEUE_KEY, entry.queueKey, async () => {
     await shared.refresh({ allowNetwork: false });
+    await rememberProviderModels(shared);
     return shared;
   });
 }

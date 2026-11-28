@@ -22,7 +22,7 @@ function makeSession() {
     sessionId: randomUUID(), sessionFile: '', agent: { state: {} },
     get isStreaming() { return active; }, get isIdle() { return !active; },
     isBashRunning: false, isCompacting: false, extensionRunner: {},
-    settingsManager: { getDefaultTools: () => [] }, sessionManager: { getCwd: () => '/fixture' },
+    settingsManager: { getDefaultTools: () => [] }, sessionManager: { getCwd: () => process.cwd(), getEntries: () => [] },
     getContextUsage: () => null, getSteeringMessages: () => [], getFollowUpMessages: () => [],
     clearQueue: () => ({ steering: [], followUp: [] }),
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }, dispose() {},

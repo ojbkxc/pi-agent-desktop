@@ -34,6 +34,7 @@ import { moveFolderToTrash } from "@/lib/trash";
 import { disposeComposerQueueState } from "@/lib/composer-queue";
 import { replaceFileAtomicStream } from "@/lib/atomic-file";
 import { normalizeSessionName } from "@/lib/session-names";
+import { forgetSessionUiState } from "@/lib/session-ui-state";
 
 export async function GET(
   req: Request,
@@ -477,6 +478,12 @@ export async function DELETE(
       invalidateSessionManagerCache(deletedPath);
       // The session file is gone: no reopen will ever deliver or read its outbox.
       disposeComposerQueueState(deletedId);
+    }
+    // Drop their pins and archive times; best effort, the files are already gone.
+    try {
+      await forgetSessionUiState(deletedSessionIds);
+    } catch (error) {
+      console.warn(`[pi-web] could not clear the sidebar state of deleted session ${id}: ${error instanceof Error ? error.message : String(error)}`);
     }
     invalidateSessionListCache();
     let folderTrashed = false;

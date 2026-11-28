@@ -5,6 +5,7 @@ import test from "node:test";
 const panelSource = (await readFile(new URL("./SettingsPanel.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 const appearanceSource = (await readFile(new URL("./AppearanceSettings.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 const cssSource = (await readFile(new URL("../app/settings.css", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+const nativeThemeSource = (await readFile(new URL("../app/native-theme.css", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 const globalCssSource = (await readFile(new URL("../app/globals.css", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 const shellSource = (await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 const sidebarSource = (await readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
@@ -45,7 +46,7 @@ test("keeps one settings surface per concern — no desktop tab duplicating Gene
   assert.doesNotMatch(panelSource, /id: "desktop"/);
   assert.match(panelSource, /<AppUpdatesSection onBusyChange=/);
   assert.match(panelSource, /<DesktopAppSection \/>/);
-  assert.match(panelSource, /settings-general-overview/);
+  assert.match(panelSource, /settings-general-about/);
   assert.match(panelSource, /PRODUCT_NAME/);
 });
 
@@ -80,7 +81,8 @@ test("restores the settings section and each list detail selection", async () =>
 test("keeps visited settings sections mounted and contains nested Escape handling", async () => {
   const modelsSource = ((await readFile(new URL("./ModelsConfig.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n")).replace(/\r\n/g, "\n");
   assert.match(panelSource, /mountedSections\.has\(id\)/);
-  assert.match(panelSource, /hidden=\{section !== id\}/);
+  // A phone hides every section on its list of sections (P1).
+  assert.match(panelSource, /hidden=\{section !== id \|\| phone\.level === "home"\}/);
   // Settings closes on an Escape nothing nearer handled (lib/stacked-dialog.test.mjs pins the phases).
   assert.match(panelSource, /const requestClose = useCallback\(\(\) => \{\n\s*if \(!busy\) onClose\(\);\n\s*\}, \[busy, onClose\]\);/);
   // The shared hook owns Escape while Settings is the topmost modal, traps Tab
@@ -192,10 +194,11 @@ test("groups chat display controls together without row backgrounds", () => {
 
   assert.doesNotMatch(appearanceSource, /settings-chat-content/);
   assert.match(chatSection, /className="settings-chat-options"/);
-  // The fork's diffViewMode choice rides in the same group after the merged
-  // send-mode radio (thinking, width, font, quote, completion sound, send
-  // mode, diff view). The sound switch moved here from the composer row.
-  assert.equal((chatSection.match(/className="settings-chat-option(?: |")/g) ?? []).length, 7);
+  // The fork's diffViewMode and process-thinking choices ride in the same
+  // group after the merged send-mode radio (thinking, width, font, quote,
+  // completion sound, send mode, diff view, thinking in working steps). The
+  // sound switch moved here from the composer row.
+  assert.equal((chatSection.match(/className="settings-chat-option(?: |")/g) ?? []).length, 8);
   assert.equal((chatSection.match(/<ConfigSwitch/g) ?? []).length, 3);
   for (const key of ["thinkingExpandedDefault", "chatContentWidth", "chatContentFontSize", "quoteSelection", "completionSound", "enterSendMode", "enterSendModeEnter", "enterSendModeCtrlEnter"]) {
     assert.match(chatSection, new RegExp(`t\\("settings\\.${key}"\\)`));
@@ -209,13 +212,14 @@ test("groups chat display controls together without row backgrounds", () => {
 test("keeps General free of divider rows", () => {
   assert.match(panelSource, /className="settings-dialog-header"/);
   assert.match(cssSource, /\.settings-dialog-header \{[\s\S]*?display: flex[\s\S]*?align-items: center[\s\S]*?min-height: 50px/);
-  assert.doesNotMatch(panelSource, /sections\.find\(\(item\) => item\.id === section\)/);
   assert.doesNotMatch(panelSource, /<section style=\{\{[^}]*borderBottom/);
   assert.doesNotMatch(panelSource, /borderLeft: index > 0/);
 });
 
-test("uses top navigation on desktop and one compact section picker on mobile", () => {
-  assert.match(panelSource, /className="settings-mobile-section-picker"/);
+test("uses top navigation on desktop and a drill-down of full-screen levels on a phone (P1)", () => {
+  assert.doesNotMatch(panelSource, /settings-mobile-section-picker/);
+  assert.match(panelSource, /className="settings-phone-home"/);
+  assert.match(panelSource, /className="settings-phone-back"/);
   assert.match(panelSource, /className="settings-section-tabs"/);
   assert.match(panelSource, /className="settings-section-tab"/);
   assert.match(cssSource, /\.settings-section-tab \{[\s\S]*?width: 96px/);
@@ -225,9 +229,10 @@ test("uses top navigation on desktop and one compact section picker on mobile", 
   assert.match(cssSource, /\.settings-section-tab:focus-visible:not\(\[aria-current="page"\]\)/);
   assert.match(cssSource, /\.settings-section-tab:focus-visible\[aria-current="page"\][\s\S]*?outline: none/);
   assert.match(cssSource, /@media \(max-width: 640px\)[\s\S]*?\.settings-section-tabs \{[\s\S]*?display: none/);
-  assert.match(cssSource, /@media \(max-width: 640px\)[\s\S]*?\.settings-mobile-section-picker \{[\s\S]*?display: block/);
+  // The phone header is upstream's Back | title | close grid; the picker's overrides are gone.
+  assert.doesNotMatch(nativeThemeSource, /settings-mobile-section-picker/);
   assert.doesNotMatch(panelSource, /width: isMobile \? "100%" : 188/);
-  assert.match(panelSource, /<main className="settings-dialog-main">/);
+  assert.match(panelSource, /<main ref=\{mainRef\} className="settings-dialog-main">/);
   assert.doesNotMatch(panelSource, /<style>/);
   assert.doesNotMatch(panelSource, /style=\{\{/);
 });
@@ -265,4 +270,26 @@ test("keeps password authentication to password fields only and one settings act
   assert.match(panelSource, /t\("auth\.logOut"\)/);
   assert.match(loginSource, /className="web-login-composer"[\s\S]*?type="password"[\s\S]*?<button type="submit"/);
   assert.match(globalCssSource, /\.web-login-composer \{[\s\S]*?display: flex;[\s\S]*?border-radius: 14px/);
+});
+
+test("a phone's Settings is full screen: the fork's card sizing stops at the phone breakpoint (P1)", () => {
+  assert.match(nativeThemeSource, /@media \(max-width: 640px\) \{\s*\.settings-dialog-backdrop \{\s*background: var\(--bg\);[\s\S]*?\.settings-dialog-surface \{\s*width: 100%;\s*height: 100%;\s*border-radius: 0;/);
+});
+
+test("lists the sections in a left pane on every desktop platform, icons only in a narrow window (#227)", () => {
+  const pane = nativeThemeSource.match(/@media \(min-width: 641px\) \{\n  \.settings-dialog-surface \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+  assert.match(pane, /grid-template-columns: 208px minmax\(0, 1fr\)/);
+  assert.match(pane, /\.settings-dialog-header \{\s*display: contents;/);
+  assert.match(pane, /\.settings-section-tabs \{[\s\S]*?flex-direction: column;[\s\S]*?overflow-y: auto;/);
+  // The layout is no longer keyed to one platform: macOS's header toolbar is gone.
+  assert.doesNotMatch(nativeThemeSource, /:root\[data-platform="macos"\] \.settings-section-tabs/);
+  assert.match(nativeThemeSource, /@media \(min-width: 641px\) and \(max-width: 899px\) \{\s*\.settings-dialog-surface \{\s*grid-template-columns: 56px minmax\(0, 1fr\);/);
+  assert.match(panelSource, /<span className="settings-section-tab-label">\{item\.label\}<\/span>/);
+  // General's two columns follow the section's own width, not the viewport's.
+  assert.match(nativeThemeSource, /\.settings-section-host \{\s*container: settings-section \/ inline-size;/);
+  assert.match(nativeThemeSource, /@container settings-section \(min-width: 760px\) \{\s*\.settings-general \{/);
+  assert.doesNotMatch(nativeThemeSource, /@media \(min-width: 880px\) \{\s*\.settings-general \{/);
+  // One tab stop; arrow keys, Home and End move within the list.
+  assert.match(panelSource, /tabIndex=\{selected \? 0 : -1\}/);
+  assert.match(panelSource, /onKeyDown=\{moveSectionFocus\}/);
 });

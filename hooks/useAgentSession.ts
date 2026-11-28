@@ -54,6 +54,7 @@ import {
 } from "@/lib/chat-lazy-load";
 import { findChatScrollAnchor, type ChatScrollPosition } from "@/lib/chat-scroll-position";
 import { useI18n } from "@/hooks/useI18n";
+import { createSideChat, SIDE_REFUSAL_MESSAGES } from "@/lib/side-chat-client";
 import { branchSummaryHolds, useBranchSummary } from "@/hooks/useBranchSummary";
 import { compactNoopMessage, useCompactNotice } from "@/hooks/useCompactNotice";
 import { useScopeWarningDismissal } from "@/hooks/useScopeWarningDismissal";
@@ -196,7 +197,7 @@ export interface SlashCommandInfo {
 
 export type BuiltinSlashCommandResult =
   | { handled: false }
-  | { handled: true; message?: string; error?: string; action?: "openSessionStats" | "openSettings" | "compact" };
+  | { handled: true; message?: string; error?: string; action?: "openSessionStats" | "openSettings" | "compact" | "openSideChat" };
 
 export interface UseAgentSessionOptions {
   session: SessionInfo | null;
@@ -212,6 +213,9 @@ export interface UseAgentSessionOptions {
   /** sourceSessionId（d5-7）：发起 fork 的会话 id——宿主据此判断 fork 落地时用户
    *  是否已手动切走，切走则放弃就地合并，避免把别的会话身份合并进 fork 会话。 */
   onSessionForked?: (newSessionId: string, sourceSessionId?: string) => void;
+  /** C1 (`/side`, ADR 0007): a side chat was forked from this session; open its tab.
+   *  `prompt` is the first message the tab sends, or null to start empty. */
+  onSideSession?: (session: SessionInfo, prompt: string | null) => void;
   modelsRefreshKey?: number;
   chatInputRef?: React.RefObject<ChatInputHandle | null>;
   onBranchDataChange?: (tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null, options?: LeafChangeOptions) => void, locked: boolean) => void;
@@ -355,7 +359,7 @@ export interface AttachedImage {
 type SelectedModel = { provider: string; modelId: string };
 /** `clear_queue` and `abort`: queued texts, plus the images of prompts parked behind a compaction. */
 type RecalledPrompts = { steering?: string[]; followUp?: string[]; images?: Array<{ data: string; mimeType: string }> };
-type ModelEntry = { id: string; name: string; provider: string };
+type ModelEntry = { id: string; name: string; provider: string; providerName?: string };
 type ModelsResponse = {
   models: Record<string, string>;
   modelList?: ModelEntry[];
@@ -386,7 +390,7 @@ export interface AgentEndInfo {
 
 export function useAgentSession(opts: UseAgentSessionOptions) {
   const {
-    session, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked,
+    session, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onSideSession,
     modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsPanelOpen,
     onOpenSettings, chatWorkspace = false,
   } = opts;
@@ -477,6 +481,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // straggler async refresh from the first A load cannot overwrite state
   // written after the second A load landed.
   const sessionGenerationRef = useRef(0);
+  // Size of the run in flight, reported with onAgentEnd (the star prompt's "complex task").
+  const runStatsRef = useRef<{ startedAt: number; toolCalls: number } | null>(null);
   const pendingInitialScrollTopRef = useRef<number | null>(null);
   const sessionPropIdRef = useRef<string | null>(session?.id ?? null);
   // False while the session carries no tool selection of its own, so its loadout
@@ -634,6 +640,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const previousIdentity = appliedIdentity;
     setAppliedIdentity(sessionIdentity);
     sessionGenerationRef.current += 1;
+    runStatsRef.current = null;
     if (previousIdentity && scrollContainerRef.current) {
       const container = scrollContainerRef.current;
       rememberScrollPosition(previousIdentity, container);
@@ -1760,6 +1767,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         break;
       }
       case "agent_start":
+        runStatsRef.current ??= { startedAt: Date.now(), toolCalls: 0 };
         cancelEventStreamGrace();
         sdkAgentActiveRef.current = true;
         agentRunningRef.current = true;
@@ -1944,6 +1952,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // parent's card; listed here it would show as a top-level running tool,
         // and a call cut off by its script can end after the parent did.
         if (isNestedToolExecutionEvent(event)) break;
+        if (runStatsRef.current) runStatsRef.current.toolCalls += 1;
         const id = event.toolCallId as string;
         const name = event.toolName as string;
         setAgentPhase((prev) => {
@@ -2119,6 +2128,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setMessages((prev) => [...prev, userMsg]);
     optimisticUserMessageKeyRef.current = userMessageKey(userMsg);
     promptRunIdRef.current = promptRunId;
+    runStatsRef.current = { startedAt: Date.now(), toolCalls: 0 };
     agentRunningRef.current = true;
     setAgentRunning(true);
     setAgentPhase(isSlashCommandPrompt ? { kind: "running_command" } : { kind: "waiting_model" });
@@ -2651,6 +2661,25 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     reloadModelsQuietly();
   }, [addNotice, displayModel, handleModelChange, reloadModelsQuietly, saveDefaultPreferences]);
 
+  /**
+   * Fork this session into a side chat and open its tab: `/side`, the Agents
+   * switcher and the selected-text popover (C1). `prompt` is its first message,
+   * `name` what to call it instead of that message's first line. Answers the
+   * refusal to show, or null.
+   */
+  const startSideChat = useCallback(async (prompt: string | null, name?: string): Promise<string | null> => {
+    // The route refuses these too; a tab has nowhere to open another tab from.
+    const relationKind = opts.session?.relation?.kind;
+    if (relationKind === "side" || relationKind === "subagent") return t(SIDE_REFUSAL_MESSAGES[relationKind]);
+    // No ensureNewSession(): forking a session that does not exist yet has nothing to inherit.
+    const sourceId = sessionIdRef.current;
+    if (!sourceId) return t("sideChat.error.noSession");
+    const result = await createSideChat(sourceId, t, name);
+    if ("error" in result) return result.error;
+    onSideSession?.(result.session, prompt);
+    return null;
+  }, [onSideSession, opts.session?.relation?.kind, t]);
+
   const handleBuiltinSlashCommand = useCallback(async (text: string): Promise<BuiltinSlashCommandResult> => {
     if (!text.startsWith("/")) return { handled: false };
     const match = text.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/);
@@ -2658,6 +2687,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
     const [, commandName, rawArgs = ""] = match;
     const args = rawArgs.trim();
+    if (commandName === "side") {
+      // Before ensureNewSession(): a fresh composer has nothing to fork.
+      const error = await startSideChat(args || null);
+      if (error) addNotice({ type: "error", message: error });
+      return error ? { handled: true, error } : { handled: true, action: "openSideChat" };
+    }
     const sid = sessionIdRef.current ?? await ensureNewSession();
     const complete = (result: BuiltinSlashCommandResult): BuiltinSlashCommandResult => {
       if (!result.handled) return result;
@@ -2801,7 +2836,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       return complete({ handled: true, error: message });
     }
-  }, [activeLeafId, addNotice, handleCompact, reportCompactFailure, ensureNewSession, isCompacting, loadModels, loadSession, loadSlashCommands, loadTools, promoteNewSession, onOpenSettings, onSessionForked, onSessionStatsPanelOpen, opts.chatInputRef, slashCommandsForMcp, setAutomation]);
+  }, [activeLeafId, addNotice, handleCompact, reportCompactFailure, ensureNewSession, startSideChat, isCompacting, loadModels, loadSession, loadSlashCommands, loadTools, promoteNewSession, onOpenSettings, onSessionForked, onSessionStatsPanelOpen, opts.chatInputRef, slashCommandsForMcp, setAutomation, setCompactNotice]);
 
   // Let AgentSession.prompt decide atomically whether to queue against the
   // current run or start a new turn if it settled while the request was in
@@ -3431,7 +3466,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     lastUserMsgRef, pendingScrollToUserRef, initialScrollDoneRef,
     // Actions
     branchSummaryPending, handleAbortBranchSummary, routedModel,
-    handleSend, handleAbort, handleAbortRetry, handleFork, handleNavigate, handleModelChange,
+    handleSend, handleAbort, handleAbortRetry, startSideChat, handleFork, handleNavigate, handleModelChange,
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction, handleQueuedMessageAction,
     handleRecallQueue,
     handleBuiltinSlashCommand,

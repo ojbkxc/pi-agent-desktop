@@ -29,7 +29,10 @@ const THINKING_LEVEL_SUFFIXES = new Set<ThinkingLevel>([
  * fuzzy matching for non-glob patterns, plus an optional `:thinkingLevel` suffix
  * (`anthropic/*:high`). Exact string comparison silently drops every model
  * behind a pattern like `my-gateway/*` (#307), so delegate to pi's own resolver
- * instead of reimplementing the matching rules here.
+ * instead of reimplementing the matching rules here. That includes a bare id
+ * several providers offer (`claude-sonnet-5` on anthropic and a gateway): since
+ * pi 1.3 the resolver scopes every one of them and warns that the entry is
+ * ambiguous, so pi-web shows that warning instead of refusing the entry.
  */
 
 export interface ModelScopeResult {
@@ -83,6 +86,8 @@ export interface InitialModelScopeOptions {
   requestedModel?: { provider: string; modelId: string };
   defaultModel?: { provider: string; modelId: string };
   thinkingLevel?: ThinkingLevel;
+  /** Every available model: an explicit choice may lie outside the scope, as pi's --model. */
+  availableModels?: readonly Model<Api>[];
 }
 
 export interface InitialModelScopeResult {
@@ -220,7 +225,7 @@ export async function resolveVisibleModels(
     };
   }
 
-  assertNoAmbiguousExactPatterns(cleaned, available);
+assertNoAmbiguousExactPatterns(cleaned, available);
   const snapshotRuntime = {
     getAvailable: async () => available,
   } as ModelRuntime;
@@ -264,6 +269,20 @@ export async function resolveVisibleModels(
 }
 
 /**
+ * The model selector's order, as in pi's `/model` (the TUI's
+ * ModelSelectorComponent): a scope keeps its `enabledModels` order; the full
+ * list is sorted by provider id only, so each provider keeps its registry
+ * order, which for a models.json provider is the file's order (#783). The TUI
+ * also lifts the current and default models to the top; the web selector marks
+ * them in place instead.
+ */
+export function orderSelectorModels(scope: ModelScopeResult): Model<Api>[] {
+  if (scope.scopedModels.length > 0) return [...scope.visible];
+  // Array.prototype.sort is stable: models of one provider keep their order.
+  return [...scope.visible].sort((a, b) => a.provider.localeCompare(b.provider));
+}
+
+/**
  * Select the model and thinking level used to create a new AgentSession.
  *
  * This mirrors pi's startup rule: prefer an explicit selection, otherwise use
@@ -279,10 +298,11 @@ export function selectInitialModelScope(
   const defaultRef = options.defaultModel;
   const requested = requestedRef
     ? scope.visible.find((model) => matchesModel(model, requestedRef))
+      ?? options.availableModels?.find((model) => matchesModel(model, requestedRef))
     : undefined;
   if (requestedRef && !requested) {
     throw new Error(
-      `Model is not available in the enabled scope: ${requestedRef.provider}/${requestedRef.modelId}`,
+      `Model is not available${options.availableModels ? "" : " in the enabled scope"}: ${requestedRef.provider}/${requestedRef.modelId}`,
     );
   }
 

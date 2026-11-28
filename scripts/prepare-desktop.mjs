@@ -1,21 +1,21 @@
-import { access, chmod, copyFile, cp, mkdir, readdir, rm } from "node:fs/promises";
-import { constants } from "node:fs";
+import { access, chmod, copyFile, cp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { constants, existsSync, rmSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { desktopTargetTriple } from "./desktop-platform.mjs";
-import { assertPayloadClean, pruneLocalConfig } from "./packaged-payload.mjs";
+import { assertPayloadClean, findLocalConfigDirs, pruneLocalConfig } from "./packaged-payload.mjs";
 import { piPackageDirNames } from "./pi-packages.mjs";
 import { dedupeNestedPackages, externalPackageSpecifiers, findNestedPiScopePackages, stageCompletePackage, stageResolvedClosure } from "./stage-package.mjs";
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const desktopBuildDir = join(rootDir, ".next-desktop");
 const standaloneDir = join(desktopBuildDir, "standalone");
+const tauriTargetDir = join(rootDir, "src-tauri", "target");
 const serverResourcesDir = join(rootDir, "src-tauri", "resources", "server");
 const serverHelperDir = join(rootDir, "src-tauri", "resources", "Pi Agent Server.app");
 const nodeResourcesDir = join(rootDir, "src-tauri", "resources", "node");
-const tauriTargetDir = join(rootDir, "src-tauri", "target");
 
 /**
  * 打包前清掉上一次构建留下的 payload 副本。
@@ -79,6 +79,60 @@ async function clearTracedBuildOutput() {
   }
 
   console.log(`Cleared previous build output: ${removed.length} path(s)`);
+}
+
+/**
+ * CI canary for the payload assertion.
+ *
+ * A clean CI checkout has no `.pi/` (it is gitignored), so "the payload must not
+ * carry a `.pi/`" would pass vacuously. With `PAYLOAD_CANARY=1` this script
+ * plants a `.pi/mcp.json` holding a fake `Bearer ak_` token before the build,
+ * reports whether the tracer picked it up, and fails if it survives into the
+ * payload. A checkout that already has `.pi/mcp.json` is left alone. On exit
+ * (including SIGINT/SIGTERM) only what this script created is removed: the file,
+ * and the `.pi/` directory only if it did not exist before.
+ */
+const CANARY_DIR = join(rootDir, ".pi");
+const CANARY_FILE = join(CANARY_DIR, "mcp.json");
+const CANARY_TOKEN = "Bearer ak_PAYLOADCANARYNOTAREALKEY000000";
+
+async function plantPayloadCanary() {
+  if (process.env.PAYLOAD_CANARY !== "1") return false;
+  if (existsSync(CANARY_FILE)) {
+    console.log("Payload canary: this checkout already has .pi/mcp.json; scanning that instead of planting one");
+    return false;
+  }
+  const createdDir = !existsSync(CANARY_DIR);
+  await mkdir(CANARY_DIR, { recursive: true });
+  await writeFile(
+    CANARY_FILE,
+    `${JSON.stringify(
+      { mcpServers: { canary: { url: "http://127.0.0.1:1/entity/mcp", headers: { Authorization: CANARY_TOKEN } } } },
+      null,
+      2,
+    )}\n`,
+  );
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    try {
+      if (createdDir) rmSync(CANARY_DIR, { recursive: true, force: true });
+      else rmSync(CANARY_FILE, { force: true });
+    } catch {
+      // Best effort; the file holds no real credential.
+    }
+  };
+  process.once("exit", cleanup);
+  // Node does not emit `exit` for a default SIGINT/SIGTERM.
+  for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143]]) {
+    process.once(signal, () => {
+      cleanup();
+      process.exit(code);
+    });
+  }
+  console.log("Payload canary: planted .pi/mcp.json (fake token) so the payload assertion has something to catch");
+  return true;
 }
 
 async function runNextBuild() {
@@ -368,12 +422,23 @@ async function bundleNodeRuntime() {
 }
 
 await clearTracedBuildOutput();
+await clearTracedBuildOutput();
+await plantPayloadCanary();
 await runNextBuild();
 
 // tracer 不可信（DEFECT-000089）：pi SDK 以 `join(cwd, ".pi", "mcp.json")` 解析项目配置，
 // 而 nft 按构建目录求值这个默认值，于是每个 import SDK 的路由都会把本 checkout 的
 // `.pi/mcp.json`（含真实 Bearer key）trace 进来。Windows 上没法用 exclude 排除，只能
 // 追踪后删除，再断言——这样任何**其它**方式混进 payload 的东西仍然会让构建失败。
+// CI canary（PAYLOAD_CANARY=1）顺带报告 tracer 到底有没有把 .pi/ 拉进 standalone。
+if (process.env.PAYLOAD_CANARY === "1") {
+  const traced = await findLocalConfigDirs(standaloneDir);
+  console.log(
+    traced.length > 0
+      ? `Payload canary: the tracer DID pull .pi/ into the standalone (${traced.join(", ")}) — the prune below is what keeps it out of the package`
+      : "Payload canary: the tracer no longer pulls .pi/ into the standalone (the assertion stays as belt-and-braces)",
+  );
+}
 const pruned = await pruneLocalConfig(standaloneDir);
 if (pruned.length > 0) {
   console.log(`Dropped ${pruned.length} traced local-config director${pruned.length === 1 ? "y" : "ies"}: ${pruned.join(", ")}`);
@@ -416,6 +481,5 @@ const { binaryPath: nodeBinary, triple } = await bundleNodeRuntime();
 
 // `tauri build` 之前的最后一道闸：staged payload 里不能带本 checkout 自己的配置或凭据。
 await assertPayloadClean(join(rootDir, "src-tauri", "resources"), { label: "src-tauri/resources" });
-
 console.log(`Desktop server staged at ${serverResourcesDir}`);
 console.log(`Node runtime staged at ${nodeBinary} (${triple})`);

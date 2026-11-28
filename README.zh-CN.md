@@ -34,12 +34,12 @@
 
 发布版本可从 [GitHub Releases](https://github.com/ojbkxc/pi-agent-desktop/releases) 下载：
 
-- Apple Silicon Mac：下载 `aarch64.dmg`，打开后将 App 拖入 `Applications`。正式 Release 不构建 Intel Mac 版本。
-- 使用 [Homebrew](https://brew.sh) 的 Apple Silicon Mac：本 fork **不提供 Homebrew tap** —— 发布流程里的 tap job 有意只在上游跑，所以在这里 `brew tap` 会装成另一份构建。请用 `.dmg`，或 App 自身的更新功能。
+- Mac：Apple Silicon 下载 `aarch64.dmg`，Intel 芯片下载 `x64.dmg`，打开后将 App 拖入 `Applications`。Intel 版从本次吸收起提供（上游 0.8.5 起就有）。
+- 使用 [Homebrew](https://brew.sh) 的 Mac：本 fork **不提供 Homebrew tap** —— 发布流程里的 tap job 有意只在上游跑（`if: github.repository == 'abcwyc/pi-agent-desktop'`），所以在这里 `brew tap` 会装成另一份构建。请用 `.dmg`，或 App 自身的更新功能。
 - Linux x64：下载 `.deb` 包，用发行版自带的包管理器安装。社区还维护了一个 [flatpark.org](https://flatpark.org/apps/io.github.abcwyc.pi-agent-desktop/) 上的 Flatpak 版本——不是官方发布，但 Flatpak 兼容大多数发行版，也会帮你处理更新。
 - Windows x64：下载名称以 `x64-setup.exe` 结尾的安装程序并运行。安装器会在需要时安装 Microsoft WebView2。
 
-正式 Release 支持运行 macOS 11 或更高版本的 Apple Silicon Mac、Windows 10/11 x64，以及使用 WebKitGTK 4.1 和 GTK 3 的 Linux x64 发行版。桌面包内包含运行 Pi Agent 所需的 Next.js 服务、Node.js runtime 和当前版本的 Pi SDK，打开 App 时会自动启动本地服务，不需要用户另开终端、安装 Node.js 或单独启动 Web Server。
+正式 Release 支持运行 macOS 11 或更高版本的 Mac（Apple Silicon 或 Intel）、Windows 10/11 x64，以及使用 WebKitGTK 4.1 和 GTK 3 的 Linux x64 发行版。桌面包内包含运行 Pi Agent 所需的 Next.js 服务、Node.js runtime 和当前版本的 Pi SDK，打开 App 时会自动启动本地服务，不需要用户另开终端、安装 Node.js 或单独启动 Web Server。
 
 > 安装 Pi Agent 后，可以直接使用 App 中的 Pi Agent 功能；但它不会在系统全局安装 `pi` 命令。如果还需要在终端中使用 Pi CLI，请按照 [pi 项目](https://github.com/earendil-works/pi) 的说明单独安装。
 
@@ -89,7 +89,9 @@ Pi Agent 最多每七天检查一次 `ojbkxc/pi-agent-desktop` 的最新稳定 R
 
 ## HTTP 代理
 
-Pi Agent 的服务端模型和 API 请求支持标准的 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY` 环境变量。例如从终端启动开发服务时：
+在 **设置 › 常规 › 网络代理** 中打开开关，填入 `http://127.0.0.1:7890` 这样的地址，本应用的出站请求就会经由 HTTP(S) 代理发出：模型 API、模型列表、登录鉴权、更新检查，以及之后由 Agent 或终端启动的命令。其他软件保持直连，不需要开启 TUN 模式。修改立即生效；`localhost` 和 `127.0.0.1` 始终不走代理；**测试连接** 会直接告诉你代理是否可用。设置保存在 `~/.pi/agent/pi-web/settings.json` 的 `networkProxy` 中。
+
+开关关闭时，仍然使用标准的 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY` 环境变量，其次是 pi `settings.json` 里的 `httpProxy`。例如从终端启动开发服务时：
 
 ```bash
 HTTP_PROXY=http://127.0.0.1:7890 \
@@ -109,7 +111,7 @@ PI_WEB_HTTP_IDLE_TIMEOUT_MS=disabled npm run dev  # 不设空闲超时
 
 ### 环境要求
 
-- macOS 11+（Apple Silicon）、Windows 10/11 x64，或使用 WebKitGTK 4.1 与 GTK 3 的 Linux x64 发行版
+- macOS 11+（Apple Silicon 或 Intel）、Windows 10/11 x64，或使用 WebKitGTK 4.1 与 GTK 3 的 Linux x64 发行版
 - Node.js 22（推荐）
 - npm
 - Rust 1.85+
@@ -182,7 +184,7 @@ npm run desktop:build
 1. 在隔离目录中生成 Next.js standalone 服务。
 2. 打包当前架构的 Node.js runtime。
 3. 将服务和运行时作为 Tauri Resources 放入 App。
-4. 在 Apple Silicon Mac 上生成 `.app`、`.dmg` 和 updater 产物；在 Windows x64 上生成 NSIS `-setup.exe` 和 updater 产物；在 Linux x64 上生成 `.deb` 和 updater 产物。
+4. 为 Apple Silicon 和 Intel Mac 生成 `.app`、`.dmg` 和 updater 产物；在 Windows x64 上生成 NSIS `-setup.exe` 和 updater 产物；在 Linux x64 上生成 `.deb` 和 updater 产物。
 
 本地构建默认不注册生产 updater，不能接受正式更新。正式 Release 必须通过 GitHub Actions 注入 updater 公钥，并使用对应私钥签名。
 
@@ -193,7 +195,7 @@ npm run desktop:build
 - [`component-updates.yml`](./.github/workflows/component-updates.yml)：每天检查 `pi` 和 `pi-web` 的稳定 Release。发现新版后，**先**把上游改动集与 [`scripts/fork-ownership.json`](./scripts/fork-ownership.json) 记录的「本仓库改过的上游文件」求交集，再合并 Tag、更新依赖和组件清单，并运行完整门禁（`npm test`、`tsc`、`lint`、真实 standalone 构建）。
   - 交集为空 → 直接提交 `main` 并触发发布；
   - 命中高/中风险文件 → 推送 `sync/pi-web-<tag>` 分支并开 PR，附上边界报告，**不**触发发布。合并该 PR 才会发版。
-- [`release.yml`](./.github/workflows/release.yml)：收到组件同步工作流的显式触发后，串行构建 Apple Silicon (`aarch64`) DMG、Windows x64 NSIS `-setup.exe` 和 Linux x64 `.deb`，不构建 Intel Mac 版本。Release 在所有平台的 updater 签名文件、`latest.json` 和组件清单全部上传完成前保持草稿状态 —— `manifest` job 依赖**整个**构建矩阵，任一平台失败就不会转正。构建失败会创建/更新 `release-failure` Issue。
+- [`release.yml`](./.github/workflows/release.yml)：收到组件同步工作流的显式触发后，串行构建 Apple Silicon (`aarch64`) DMG、Intel Mac (`x64`) DMG（在 Apple Silicon runner 上用 x64 Node 交叉编译）、Linux x64 `.deb` 和 Windows x64 NSIS `-setup.exe`。Release 在所有平台的 updater 签名文件、`latest.json` 和组件清单全部上传完成前保持草稿状态 —— `manifest` job 依赖**整个**构建矩阵，任一平台失败就不会转正。构建失败会创建/更新 `release-failure` Issue。
 
 上游同步使用 Git 合并，因此本仓库维护的 Pi Agent 品牌、设置入口和升级逻辑会作为本地修改保留。合并冲突会让工作流停止——这是安全的失败方式。真正危险的是**无冲突但语义错误**的合并：上游改了本仓库也改过的区域，Git 干净地合上了，测试也全绿。上面的边界求交就是为此设置的，规则见 [维护边界说明](./docs/ownership-boundaries.md)。
 

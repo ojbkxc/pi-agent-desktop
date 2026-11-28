@@ -13,6 +13,7 @@ import {
 } from "@/lib/app-updates";
 import type {
   AppComponentReleaseInfo,
+  AppReleaseHighlights,
   AppUpdateInfo,
   AppUpdateProjectId,
   AppUpdatesResponse,
@@ -33,7 +34,7 @@ interface UpdateCheckState {
 type UpdateProject = (typeof APP_UPDATE_PROJECTS)[number];
 
 declare global {
-  var __piWebAppUpdateCheck: Promise<AppUpdatesResponse> | undefined;
+  var __piWebAppUpdateCheck: { promise: Promise<AppUpdatesResponse>; forced: boolean } | undefined;
 }
 
 function statePath(): string {
@@ -42,6 +43,18 @@ function statePath(): string {
 
 function emptyState(): UpdateCheckState {
   return { version: STATE_VERSION, lastCheckedAt: {}, releases: {} };
+}
+
+function restoreHighlights(value: unknown): { highlights: AppReleaseHighlights } | null {
+  if (!value || typeof value !== "object") return null;
+  const { en, zh } = value as Partial<Record<keyof AppReleaseHighlights, unknown>>;
+  const strings = (list: unknown): string[] | null => (
+    Array.isArray(list) && list.every((item) => typeof item === "string") ? list as string[] : null
+  );
+  const restoredEn = strings(en);
+  const restoredZh = strings(zh);
+  if (!restoredEn || !restoredZh) return null;
+  return { highlights: { en: restoredEn.slice(0, 8), zh: restoredZh.slice(0, 8) } };
 }
 
 function restoreCachedRelease(
@@ -73,6 +86,7 @@ function restoreCachedRelease(
       releaseUrl: releaseUrl.toString(),
       updateAvailable: compareAppVersions(raw.latestVersion, base.currentVersion) > 0,
       releaseStatus: "available",
+      ...(restoreHighlights(raw.highlights) ?? {}),
     };
   } catch {
     return null;
@@ -129,11 +143,21 @@ async function writeState(state: UpdateCheckState): Promise<void> {
   }
 }
 
+function isCachedReleaseBehindInstalled(release: AppComponentReleaseInfo | undefined): boolean {
+  return release?.releaseStatus === "available"
+    && typeof release.latestVersion === "string"
+    && compareAppVersions(release.latestVersion, release.currentVersion) < 0;
+}
+
 async function performUpdateCheck(forceRefresh = false): Promise<AppUpdatesResponse> {
   const now = Date.now();
   const state = await readState();
   const dueProjects = APP_UPDATE_PROJECTS.filter((project) => (
-    forceRefresh || isAppUpdateDue(state.lastCheckedAt[project.id], now)
+    forceRefresh
+    || isAppUpdateDue(state.lastCheckedAt[project.id], now)
+    // A cached "latest" older than the running app means the app was updated
+    // by hand since that check: the cache can only be stale (#257).
+    || isCachedReleaseBehindInstalled(state.releases[project.id])
   ));
 
   const settled = await Promise.allSettled(dueProjects.map(async (project) => ({
@@ -187,29 +211,25 @@ async function performUpdateCheck(forceRefresh = false): Promise<AppUpdatesRespo
 
 export async function GET(request: Request) {
   const forceRefresh = new URL(request.url).searchParams.get("refresh") === "1";
-  if (!globalThis.__piWebAppUpdateCheck) {
-    globalThis.__piWebAppUpdateCheck = performUpdateCheck(forceRefresh)
-      .finally(() => {
-        globalThis.__piWebAppUpdateCheck = undefined;
-      });
-  } else if (forceRefresh) {
-    // A manual refresh that arrives while a scheduled check is in flight must
-    // not silently degrade to joining it: that check only queries components
-    // whose interval is due, so the forced one would return stale release info.
-    // Wait for the in-flight check, then run the forced one.
-    try {
-      await globalThis.__piWebAppUpdateCheck;
-    } catch {
-      // The in-flight check's errors are reported through its own response.
-    }
-    globalThis.__piWebAppUpdateCheck = performUpdateCheck(true)
-      .finally(() => {
-        globalThis.__piWebAppUpdateCheck = undefined;
-      });
+  // A forced check (Settings) must not settle for a background check that
+  // may answer from the cache; it waits for that one and then asks GitHub.
+  let check = globalThis.__piWebAppUpdateCheck;
+  if (!check || (forceRefresh && !check.forced)) {
+    const previous = check?.promise.catch(() => undefined);
+    const started = {
+      forced: forceRefresh,
+      promise: (previous ?? Promise.resolve())
+        .then(() => performUpdateCheck(forceRefresh))
+        .finally(() => {
+          if (globalThis.__piWebAppUpdateCheck === started) globalThis.__piWebAppUpdateCheck = undefined;
+        }),
+    };
+    globalThis.__piWebAppUpdateCheck = started;
+    check = started;
   }
 
   try {
-    return Response.json(await globalThis.__piWebAppUpdateCheck);
+    return Response.json(await check.promise);
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : String(error) },

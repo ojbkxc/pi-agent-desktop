@@ -47,19 +47,37 @@ export const APP_PREF_KEYS = {
   agentTeamsGuideSeen: "pi-agent-teams-guide-seen",
   /** Agent Team 一次性发现引导：`"1"` = 用户主动关闭 / 拒绝过这份引导。 */
   agentTeamsGuideDismissed: "pi-agent-teams-guide-dismissed",
+  /** Session ids whose subagent / side chat rows the user unfolded (folded by default, #237). */
+  expandedSubagentRows: "pi-web:expanded-subagent-rows",
+  /** Projects header fold; independent of individual project/archive folds. */
+  collapsedProjectsSection: "pi-web:collapsed-projects-section",
   /** Additional five-chat pages shown past the Chats preview cap. */
   chatSessionPages: "pi-web:chat-session-pages",
   /** Chat session ids pinned to the top of the Chats section. */
   pinnedChats: "pi-web:pinned-chats",
+  pinnedSessions: "pi-web:pinned-sessions",
+  pinnedProjects: "pi-web:pinned-projects",
+  /** "tree" shows the Git changes as folders (F2); anything else is the flat list. */
+  changesViewMode: "pi-web:sidebar-changes-view-mode",
   /** Chat session ids hidden from the Chats section until "Show archived". */
   archivedChats: "pi-web:archived-chats",
   /** Project session ids hidden from their project until "Show archived" (#200). */
   archivedSessions: "pi-web:archived-sessions",
   updateSnooze: "pi-web:update-snooze",
+  /** First-seen time and outcome of the one-time "star us on GitHub" prompt. */
+  starPrompt: "pi-web:star-prompt",
   closeQuits: "pi-desktop-close-quits",
   notifyOnComplete: "pi-desktop-notify-on-complete",
   chatDrafts: "pi-chat-drafts-v1",
   diffViewMode: "pi-diff-view-mode",
+  /** Thinking in a turn's working steps: "show", or hidden (anything else). */
+  processThinking: "pi-web:process-thinking",
+  /** Tasks page layout: "calendar" or the list (anything else). */
+  tasksMode: "pi-web:tasks-mode",
+  /** Tasks calendar range: "week" or "month". */
+  tasksCalendarView: "pi-web:tasks-calendar-view",
+  /** Tasks calendar filter: project keys and `type:*` keys switched off. */
+  tasksCalendarHidden: "pi-web:tasks-calendar-hidden",
   /** Last open session / cwd / file tabs for desktop cold-start restore. */
   workspace: "pi-workspace-v1",
 } as const;

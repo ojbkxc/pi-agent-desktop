@@ -11,11 +11,13 @@ import { fenceFilePaths, inlineCodeFilePath } from "@/lib/file-context-menu";
 import { parsePdfPageFragment, resolveLocalFileHref, shouldOpenLocalFileInApp } from "@/lib/file-links";
 import { encodeFilePathForApi } from "@/lib/file-paths";
 import { isAudioPath, isVideoPath } from "@/lib/file-types";
-import { markdownRehypePlugins, markdownRemarkPlugins, markdownUrlTransform, markdownUserRemarkPlugins, normalizeDisplayMath } from "@/lib/markdown";
+import { isExternalMarkdownHref, markdownAppUrlTransform, markdownDocumentRehypePlugins, markdownRehypePlugins, markdownRemarkPlugins, markdownTextLayoutRemarkPlugins, markdownUrlTransform, markdownUserRemarkPlugins, normalizeDisplayMath } from "@/lib/markdown";
 import { ImagePreview } from "./ImagePreview";
 import { MermaidBlock, CodeBlock } from "./MermaidBlock";
 import { SvgBlock } from "./SvgBlock";
 import { HtmlPreviewBlock } from "./HtmlPreviewBlock";
+import { ChartBlock } from "./ChartBlock";
+import { CHART_FENCE_LANGS } from "@/lib/chart-spec";
 import { htmlPreviewKind } from "@/lib/html-preview";
 import { ArtifactCard } from "./ArtifactCard";
 import { ARTIFACT_FENCE_LANG, decodeArtifactFence, encodeArtifactsForMarkdown } from "@/lib/artifacts";
@@ -35,6 +37,10 @@ interface MarkdownBodyProps {
   onOpenFile?: (filePath: string, page?: number) => void;
   /** Render every line ending as a line break, for text the user typed. */
   keepLineBreaks?: boolean;
+  /** An extension's custom message: keepLineBreaks, plus each paragraph line's indent, as in pi's TUI. */
+  keepTextLayout?: boolean;
+  /** A document reader (a skill's instructions): relative links call this instead of leaving the app; headings get anchors. */
+  onNavigateLink?: (href: string) => void;
   /** Render `:::artifact{...}` blocks as artifact cards (assistant text only). */
   artifacts?: boolean;
 }
@@ -71,14 +77,14 @@ function MarkdownImage({
     ? `/api/files/${encodeFilePathForApi(filePath)}?type=read`
     : href;
   // `![](take.wav)` is how a model shows a sound or clip it made, and an <img>
-  // cannot play it. The file API already streams both with range requests.
+  // cannot play it (C9). The file API already streams both with range requests.
   const mediaPath = filePath ?? href?.split(/[?#]/, 1)[0] ?? "";
   const label = alt?.trim() ? alt : undefined;
   if (isAudioPath(mediaPath)) {
-    return <audio controls preload="metadata" src={mediaSrc} aria-label={label} />;
+    return <audio className="markdown-media" controls preload="metadata" src={mediaSrc} aria-label={label} />;
   }
   if (isVideoPath(mediaPath)) {
-    return <video controls playsInline preload="metadata" src={mediaSrc} aria-label={label} />;
+    return <video className="markdown-media" controls playsInline preload="metadata" src={mediaSrc} aria-label={label} />;
   }
   // Dynamic local paths are served directly by the file API.
   // eslint-disable-next-line @next/next/no-img-element
@@ -194,6 +200,8 @@ function buildComponents(
   cwd: string | undefined,
   onOpenFile: ((filePath: string, page?: number) => void) | undefined,
   fenceFiles: Map<number, string>,
+  onNavigateLink?: (href: string) => void,
+  assistantText?: boolean,
 ): Components {
   return {
     code({ className, children, node, ...props }) {
@@ -211,11 +219,15 @@ function buildComponents(
               code={raw.replace(/\n$/, "")}
               isStreaming={isStreaming}
               defaultPreview
+              fixable={assistantText}
             />
           );
         }
         if (lang === "svg") {
           return <SvgBlock code={raw.replace(/\n$/, "")} isStreaming={isStreaming} />;
+        }
+        if (CHART_FENCE_LANGS.has(lang)) {
+          return <ChartBlock code={raw.replace(/\n$/, "")} isStreaming={isStreaming} fixable={assistantText} />;
         }
         const previewKind = htmlPreviewKind(lang, raw);
         if (previewKind) {
@@ -251,6 +263,17 @@ function buildComponents(
     a({ href, children, ...props }) {
       // `node` is react-markdown metadata, not a DOM attribute.
       delete props.node;
+      if (onNavigateLink && href && !isExternalMarkdownHref(href)) {
+        // No href: a middle-click or "Open in new tab" would load the path on the app's own URL (M7).
+        const navigate = () => onNavigateLink(href);
+        return (
+          <MarkdownLinkContext.Provider value={true}>
+            <a {...props} role="link" tabIndex={0} onClick={navigate} onKeyDown={(event) => { if (event.key === "Enter") navigate(); }}>
+              {children}
+            </a>
+          </MarkdownLinkContext.Provider>
+        );
+      }
       const filePath = onOpenFile ? resolveLocalFileHref(href, cwd) : null;
       const openFile = onOpenFile;
       if (!filePath || !openFile) {
@@ -301,7 +324,7 @@ function buildComponents(
 
 // Memoized: markdown parsing + highlighting is the most expensive render work
 // in the app, so parent re-renders with identical props must be free.
-export const MarkdownBody = memo(function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile, keepLineBreaks, artifacts }: MarkdownBodyProps) {
+export const MarkdownBody = memo(function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile, onNavigateLink, keepLineBreaks, keepTextLayout, artifacts }: MarkdownBodyProps) {
   const markdown = useStreamingMarkdownText(children, Boolean(isStreaming));
   const normalizedMarkdown = useMemo(
     () => normalizeDisplayMath(artifacts && markdown.includes(":::artifact") ? encodeArtifactsForMarkdown(markdown) : markdown),
@@ -313,21 +336,21 @@ export const MarkdownBody = memo(function MarkdownBody({ children, className, is
     [normalizedMarkdown, cwd, trackFences],
   );
   const components = useMemo(
-    () => buildComponents(isStreaming, cwd, onOpenFile, fenceFiles),
-    [isStreaming, cwd, onOpenFile, fenceFiles],
+    () => buildComponents(isStreaming, cwd, onOpenFile, fenceFiles, onNavigateLink, artifacts),
+    [isStreaming, cwd, onOpenFile, fenceFiles, onNavigateLink, artifacts],
   );
   // Reuse the element when a new network delta has not published a snapshot.
   const body = useMemo(() => (
     <StreamingMarkdown
       isStreaming={isStreaming}
-      remarkPlugins={keepLineBreaks ? markdownUserRemarkPlugins : markdownRemarkPlugins}
-      rehypePlugins={markdownRehypePlugins}
-      urlTransform={onOpenFile ? markdownUrlTransform : undefined}
+      remarkPlugins={keepTextLayout ? markdownTextLayoutRemarkPlugins : keepLineBreaks ? markdownUserRemarkPlugins : markdownRemarkPlugins}
+      rehypePlugins={onNavigateLink ? markdownDocumentRehypePlugins : markdownRehypePlugins}
+      urlTransform={onOpenFile ? markdownUrlTransform : onNavigateLink ? markdownAppUrlTransform : undefined}
       components={components}
     >
       {normalizedMarkdown}
     </StreamingMarkdown>
-  ), [normalizedMarkdown, components, onOpenFile, keepLineBreaks, isStreaming]);
+  ), [normalizedMarkdown, components, onOpenFile, onNavigateLink, keepLineBreaks, keepTextLayout, isStreaming]);
 
   return (
     <div className={["markdown-body", className].filter(Boolean).join(" ")}>

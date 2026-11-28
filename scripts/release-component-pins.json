@@ -1,10 +1,10 @@
 {
   "pi": {
     "version": "1.5.2",
-    "reason": "Upgrade the bundled SDK to pi 1.5.2; checked against its changelog (pi-schema tool validation, TypeBox no longer re-exported from pi-ai)."
+"reason": "Upgrade the bundled SDK to pi 1.5.2; checked against its changelog (pi-schema tool validation, TypeBox no longer re-exported from pi-ai)."
   },
   "pi-web": {
-    "version": "0.10.0",
-    "reason": "Merged upstream pi-web through main@6fcd7d4 (segments A-G); fork adaptations documented in AGENTS.md."
+    "version": "0.15.0",
+    "reason": "Absorbed abcwyc/pi-agent-desktop upstream/main (desktop 0.8.x), which tracks pi-web 0.15.0 (merge-base was 0.10.0); upstream pi-web 0.16.0 will be merged separately after its UI changes are reviewed."
   }
 }

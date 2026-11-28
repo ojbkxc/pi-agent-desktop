@@ -423,6 +423,7 @@ test("the provider's Display name sets or removes its models.json name and keeps
   }
   assert.deepEqual(setProviderDisplayName({ baseUrl: "u" }, ""), { baseUrl: "u" });
 });
+
 test("a cleared provider name is not brought back by the runtime name pi read from it", () => {
   const saved = savedProviderNames({ providers: {
     "3-ikun-plus": { name: "5-IKUN-Codex-025", baseUrl: "u" },

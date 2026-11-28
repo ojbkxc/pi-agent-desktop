@@ -31,6 +31,7 @@ const data = {
   '/api/models/enabled':{error:'No model calls in UI tests'},
   '/api/skills':{skills:['Review','Design','Test'].map(name=>({name,description:'Test skill',filePath:'D:/fixture/'+name+'/SKILL.md',
     baseDir:'D:/fixture/'+name,disableModelInvocation:false,sourceInfo:{source:'user',scope:'user'}})),diagnostics:[],projectResourcesLoaded:true},
+  '/api/plugins/search':{packages:[],nextOffset:null},
   '/api/plugins':{packages:[],standaloneExtensions:['First extension','Second extension','Third extension'].map(name=>({
     name,kind:'extension',scope:'global',path:'D:/fixture/'+name+'.ts',relativePath:name+'.ts',enabled:true})),
     totals:counts,diagnostics:[],projectResourcesLoaded:true},
@@ -65,7 +66,7 @@ const server = createServer((req,res)=>{
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const base = 'http://127.0.0.1:'+server.address().port;
-const browser = await chromium.launch();
+const browser = await chromium.launch({channel:process.env.E2E_BROWSER_CHANNEL});
 const results = [];
 const near = (actual,expected,label)=>assert.ok(Math.abs(actual-expected)<0.6,`${label}: ${actual}, expected ${expected}`);
 async function segments(page, group) {
@@ -142,6 +143,12 @@ try {
       } else {
         const list = host.locator('.config-sidebar-list'); const rows=list.locator('.config-sidebar-item');
         await rows.nth(2).waitFor();await rows.nth(1).click();
+        // A phone opens the row's detail as its own level (P1); Back returns to the list, selection kept.
+        if(width<=640){
+          await host.locator('.config-split-view[data-pane="detail"]').waitFor();
+          await page.locator('.settings-phone-back').click();
+          await host.locator('.config-split-view[data-pane="list"]').waitFor();
+        }
         await page.mouse.move(0,0);
         const selectedFill=await rows.nth(1).evaluate(el=>getComputedStyle(el).backgroundColor);
         await rows.nth(1).hover();
@@ -150,8 +157,10 @@ try {
         const geometry=await rows.evaluateAll(rows=>rows.map(el=>{const b=el.getBoundingClientRect(),p=el.closest('.config-sidebar-list').getBoundingClientRect(),s=getComputedStyle(el);return {
           x:b.x,y:b.y,bottom:b.bottom,leftInset:b.left-p.left,rightInset:p.right-b.right,fill:s.backgroundColor,
           adjacent:el.previousElementSibling?.matches('.config-sidebar-item'),
+          // Models' "+ Model" shares its row with the A–Z sort button (M5): the footer, not the item, reaches the trailing inset.
+          footerRightInset:el.closest('.models-sidebar-model-footer')?(p.right-el.closest('.models-sidebar-model-footer').getBoundingClientRect().right):null,
           selected:el.getAttribute('aria-current')==='page',hovered:el.matches(':hover'),pill:getComputedStyle(el,'::before').width};}));
-        for(const row of geometry){near(row.leftInset,8,section+' leading inset');near(row.rightInset,8,section+' trailing inset');}
+        for(const row of geometry){near(row.leftInset,8,section+' leading inset');near(row.footerRightInset??row.rightInset,8,section+' trailing inset');}
         for(let i=1;i<geometry.length;i++)if(geometry[i].adjacent)near(geometry[i].y-geometry[i-1].bottom,4,section+' adjacent rows');
         assert.ok(geometry[1].selected&&geometry[2].hovered);
         assert.ok(geometry.slice(1,3).every(row=>row.fill!=='rgba(0, 0, 0, 0)'));

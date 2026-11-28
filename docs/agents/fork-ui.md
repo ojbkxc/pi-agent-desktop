@@ -56,6 +56,17 @@ optimistic/delivered/history updates, real ChatInput text/attachment admission,
 cancel, edit drafts and resend without a model call.
 This is a MessageView integration replay, not a full authenticated SSE round trip.
 
+## Composer input history (↑)
+
+`lib/composer-history.ts` builds the ↑ menu from the transcript. Each entry keeps
+the prompt text **and** its images, so selecting an earlier image question
+restores the attachments instead of dropping them. It reuses the same image-note
+projection as the message bubble, so an SDK resize note never returns as typed
+text, and image-only prompts appear (labelled by image count). Selection follows
+the same admission rule as history editing: a non-empty draft or pending
+attachment is left untouched. Chat file chips come back through
+`splitMessageForComposer`. Tests: `node --test lib/composer-history.test.mjs`.
+
 ## Composer clearing and history-edit admission
 
 `ChatInput.replaceMessage()` returns whether it actually restored history. A
@@ -136,10 +147,26 @@ shared radius, spacing and semantic colors in both themes.
 
 ## Keyboard shortcuts
 `hooks/useKeyboardShortcuts.ts` owns app-level shortcuts. Cmd/Ctrl+\ closes the right workspace (never bare `\`), Cmd/Ctrl+/ opens the shortcut reference dialog, Cmd/Ctrl+B toggles the sidebar, and Cmd/Ctrl+L focuses the composer. Browser-reserved variants may not fire in the web build; the desktop shell receives them. Help must not layer over Settings or let another global shortcut fire through it: pass the other callbacks as `undefined` while it is open, then focus the dialog, capture Escape (so closing it does not also stop a run), and keep Tab inside the dialog.
+The sidebar project tree nests only subagent runs and side chats under the session that started them (`buildSessionTree()` in `lib/sidebar-session-nodes.ts`); a fork (`relation.kind: "fork"`) is a row of its own beside its source, with the fork glyph and "Forked from …" in its tooltip, so it keeps its own pin / archive / Fork menu and is never hidden by folding its source. A fork's own subagents nest under the fork. Children start folded: the row's toggle shows their count, the folded row still carries their running and selected state, and the ids of rows the user unfolded live in localStorage (`pi-web:expanded-subagent-rows`, newest 300; `lib/sidebar-subagent-expansion.ts`, read through `useSyncExternalStore` so the first render matches the server's all-folded HTML). A selected child unfolds the rows above it (#237).
+
 The sidebar project tree is a keyboard `tree`: rows move focus with Up/Down/Home/End, project and subagent groups expand/collapse with Right/Left, Enter/Space activates, F2 starts rename, and Delete opens the same shared confirmation dialog as the row menu. Roving-tabindex extraction is intentionally not used yet because timeline rows and future non-session tree rows still need one shared focus model.
 
 ## Projects pane views
 The Projects header's hover-only `…` menu switches between `grouped` (project rows with nested session families) and `timeline` (all top-level session families sorted by the root session's `modified` time, with each row's project name after the title). The choice persists in `APP_PREF_KEYS.projectViewMode`. Collapse/expand-all remain grouped-view actions; switching modes never rewrites the stored `collapsedProjects` set. The old Recent section is intentionally gone — the timeline replaces it. Desktop uses `showNativeMenu` check items, while the web build renders `ProjectViewMenu` as a DOM popover. In grouped view, "Show more" reveals five additional session rows per click; collapsing and reopening a project clears that page state so it starts from the latest five (`APP_PREF_KEYS.expandedProjects` stores root → extra pages).
+
+## Projects section fold and count
+
+The Projects heading shows the number of active project groups, not the session
+count and not archived projects. Its button folds both the active list (including
+the timeline view) and the Archive group. This section preference is independent
+of per-project folds, per-session archives and the Archive group's own state.
+`APP_PREF_KEYS.collapsedProjectsSection` is read with the same server-safe
+`useSyncExternalStore` pattern as Chats; restoring a stored fold must not change
+the initial hydration markup. The store keeps an in-memory snapshot after the
+first read and updates it before writing, so quota/private-mode failures still
+let the button fold for the session. Searching temporarily reveals the section
+and its archived matches without changing the stored preference. The add/menu controls
+remain available while folded and reuse the existing header styling.
 
 ## Project archive
 A project row's menu (its `…` or a right-click on the row) offers "Move to archive"; the project leaves the list for the Archive group at the bottom of the Projects pane (`components/ArchivedProjectsSection.tsx`), folded by default (`APP_PREF_KEYS.archiveExpanded`). The archive is the old "Remove project" set (`APP_PREF_KEYS.archivedProjects`, keyed by project root, so all worktrees go together), now held by the `lib/archived-projects.ts` store that both `SessionSidebar` and `AppShell` read. Archived projects unfold to show their sessions, which stay readable and can be continued, but there is no new session in one: the row has no `+`, and every new-session entry point (sidebar "New session", the row `+`, Ctrl+Alt+N, the native app menu) refuses with a notice instead of silently restoring. Restoring is explicit: the archived row's menu ("Restore to projects") or picking the folder again through "Add project" / the composer's folder picker. Archiving the selected project moves the selection to the most recent listed project. Unfolding an archived project never selects it, since selecting a project opens a new-session composer there. A search looks inside the archive and unfolds it.
@@ -168,6 +195,7 @@ Single project sessions archive the same way chats do (#200): the session row's 
 ## Settings dialog: one tab per concern
 - The sidebar gear opens Settings directly through `openSettingsAtLastSection`, the same entry used by the keyboard shortcut. First use opens General; subsequent visits restore the last available section. Category navigation lives inside Settings; do not restore an intermediate section menu.
 - The settings sections are `general`, `appearance`, `models`, `skills`, `agents`, `plugins`, `mcp` (`SETTINGS_SECTION_VALUES`). Appearance is available without a project and owns mode, background and the custom stylesheet through `AppearanceSettings.tsx`. General keeps language, chat controls, product/version information and the self-hiding desktop window/tray switches (`components/desktop/DesktopAppSection.tsx`). Do not duplicate appearance controls in General or reintroduce the former Desktop tab. `components/AppUpdatesSection.tsx` owns the update check and its chips.
+- Navigation (#227): on every desktop platform the sections are a pane on the left under the dialog's title, the content beside it (the header is `display: contents` on the surface's grid). Between 641px and 899px the pane is an icon rail (labels stay as `.settings-section-tab-label`, visually hidden, plus the `title` tooltip); at 640px and below the phone drill-down is unchanged. Windows keeps its Fluent accent bar and caption close, GNOME its round close. The list is one tab stop (`tabIndex` only on the selected row) and arrow keys / Home / End move within it. General's two columns are a container query on `.settings-section-host` (760px of section width), not a viewport breakpoint, since the pane takes 208px. Rules live in `app/native-theme.css`; `app/settings.css` stays upstream's.
 - A signed desktop update installs and relaunches the app, so `AppUpdatesSection` reports `busy` up to `SettingsPanel`, which keeps backdrop clicks and Escape from dismissing the dialog mid-upgrade. That is the reason for the `onBusyChange` prop; don't drop it when refactoring the panel.
 - `UpdateReminder` opens the panel at `general`, where the update status now lives. `components/fork-extractions.test.mjs` pins that the update/desktop code stays in those fork-owned files instead of being regrouped into `SettingsPanel.tsx`.
 

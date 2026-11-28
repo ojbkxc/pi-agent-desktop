@@ -93,6 +93,7 @@ export function ChatsSettingsSection() {
   return (
     <section className="settings-general-section">
       <h3 className="settings-general-heading">{t("settings.chats")}</h3>
+      <p className="settings-general-description">{t("settings.chatsDescription")}</p>
       <div className="settings-chat-options">
         <div className="settings-chat-option settings-chats-field">
           <label htmlFor="settings-chats-model">{t("settings.chatsModel")}</label>
@@ -176,6 +177,11 @@ export function ChatsSettingsSection() {
           <span id={`${hintId}-tools`} className="settings-chats-hint" role="status">
             {toolsDirty ? t("settings.unsaved") : savedField === "tools" ? t("settings.saved") : t("settings.chatsToolsHint")}
           </span>
+          {/* The full capability and safety note stays one click away instead of a paragraph under the box. */}
+          <details className="settings-chats-details">
+            <summary>{t("settings.chatsToolsMore")}</summary>
+            <p>{t("settings.chatsToolsDetails")}</p>
+          </details>
         </div>
       </div>
     </section>

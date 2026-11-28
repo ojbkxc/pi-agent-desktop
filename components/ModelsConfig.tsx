@@ -1,9 +1,13 @@
 "use client";
 
+import type { ModelContextSettings } from "./ModelContextWindow";
+import { withContextWindowOverride } from "@/lib/model-context";
 import { AppSelect } from "./AppSelect";
+import { ThinkingLevelProbe } from "./ThinkingLevelProbe";
+import { BuiltinModelNotice, BuiltinProviderNotice } from "./BuiltinMatchNotice";
 
 import { LLAMA_CPP_PROVIDER_ID } from "@/lib/provider-listing";
-import { useState, useEffect, useCallback, useId, useRef } from "react";
+import { useState, useEffect, useCallback, useId, useRef, type ButtonHTMLAttributes, type DragEvent } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
 import { useModalDismiss } from "@/hooks/useModalDismiss";
@@ -36,6 +40,10 @@ import {
   type ModelSpecField,
   type ModelCostDraft,
   type ModelCostKey,
+  moveModelEntry,
+  modelDropIndex,
+  sortModelEntries,
+  type ModelOrderChange,
 } from "./models-config-helpers";
 import {
   ConfigButton,
@@ -107,6 +115,8 @@ interface ModelEntry {
   id: string;
   name?: string;
   api?: string;
+  /** pi's per-model endpoint; absent inherits the provider's (upstream #1288). */
+  baseUrl?: string;
   reasoning?: boolean;
   thinkingLevelMap?: Record<string, string | null>;
   input?: string[];
@@ -130,6 +140,16 @@ interface ProviderEntry {
 
 interface ModelsJson {
   providers?: Record<string, ProviderEntry>;
+}
+
+/**
+ * An entry holding only model overrides belongs to its built-in provider (a
+ * context-window override, M2). An empty `modelOverrides` overrides nothing
+ * and pi refuses it, so that entry stays a listed custom provider Save can
+ * select to be deleted (upstream #1353).
+ */
+function isOverridesOnly(entry: ProviderEntry): boolean {
+  return Object.keys(entry).length === 1 && Object.keys(entry.modelOverrides ?? {}).length > 0;
 }
 
 type ModelTestState =
@@ -168,6 +188,12 @@ function readRememberedSelection(): Selection | null {
     if (selection.type === "provider" && typeof selection.name === "string") {
       return { type: "provider", name: selection.name };
     }
+    // A chat error's "Model settings" names the model by id; the load resolves its slot.
+    if (selection.type === "model"
+      && typeof selection.providerName === "string"
+      && typeof selection.modelId === "string") {
+      return { type: "provider", name: selection.providerName };
+    }
     if (selection.type === "model"
       && typeof selection.providerName === "string"
       && typeof selection.index === "number"
@@ -184,6 +210,20 @@ function readRememberedSelection(): Selection | null {
     // Ignore malformed browser state.
   }
   return null;
+}
+
+/** The model a chat error asked to open, by provider and id (see rememberModelSettingsFocus). */
+function readRememberedModelFocus(): { providerName: string; modelId: string } | null {
+  const raw = getLastSettingsSelection("models");
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown> | null;
+    return value && value.type === "model" && typeof value.providerName === "string" && typeof value.modelId === "string"
+      ? { providerName: value.providerName, modelId: value.modelId }
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function customSelectionExists(config: ModelsJson, selection: Selection): boolean {
@@ -324,11 +364,13 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 // ── Provider detail ───────────────────────────────────────────────────────────
 
-function ProviderDetail({ name, editingName, fallbackLabel, provider, onChange, onEditingNameChange, onRename, onDelete, onAddModels, enabledModels }: {
+function ProviderDetail({ name, editingName, fallbackLabel, provider, onChange, onEditingNameChange, onRename, onDelete, onAddModels, enabledModels, builtinProviderIds, onOpenBuiltinProvider }: {
   name: string; editingName: string; fallbackLabel: string; provider: ProviderEntry;
   onChange: (p: ProviderEntry) => void; onEditingNameChange: (n: string) => void;
   onRename: (n: string) => void; onDelete: () => void;
   onAddModels: (models: DiscoveredModel[]) => void; enabledModels: EnabledModelsController;
+  /** Built-in API-key providers the panel can open, for the "same endpoint" notice. */
+  builtinProviderIds: ReadonlySet<string>; onOpenBuiltinProvider: (id: string) => void;
 }) {
   const { t } = useI18n();
   const [discoveryState, setDiscoveryState] = useState<ModelDiscoveryState>({ phase: "idle" });
@@ -338,11 +380,6 @@ function ProviderDetail({ name, editingName, fallbackLabel, provider, onChange, 
   const selectShownRef = useRef<HTMLInputElement>(null);
   const switchNoteId = useId();
   const set = <K extends keyof ProviderEntry>(k: K, v: ProviderEntry[K]) => onChange({ ...provider, [k]: v });
-
-  useEffect(() => {
-    if (!provider.api) onChange({ ...provider, api: "openai-completions" });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider.api]);
 
   useEffect(() => {
     discoveryRequestIdRef.current += 1;
@@ -455,6 +492,7 @@ function ProviderDetail({ name, editingName, fallbackLabel, provider, onChange, 
         <span style={{ fontSize: "var(--fs-micro)", color: "var(--text-dim)", marginTop: 2 }}>
           {t("models.baseUrlHint")}
         </span>
+        <BuiltinProviderNotice baseUrl={provider.baseUrl} openableIds={builtinProviderIds} onOpen={onOpenBuiltinProvider} />
       </Field>
 
       <Field label={t("models.fieldApiKey")}>
@@ -980,18 +1018,20 @@ function ModelDetail({
 
   const testGuardRef = useRef<ReturnType<typeof createGenerationGuard> | null>(null);
   testGuardRef.current ??= createGenerationGuard();
+  // The endpoint this model is tested and looked up at: its own override, else the provider's.
+  const effectiveBaseUrl = model.baseUrl ?? provider.baseUrl;
 
   useEffect(() => {
     // d5-16：配置一变即作废在途的 Test——迟到响应不得把旧配置的徽章盖到新配置旁。
     testGuardRef.current?.invalidate();
     setTestState({ phase: "idle" });
-  }, [providerName, provider.baseUrl, provider.api, provider.apiKey, model.id, model.api]);
+  }, [providerName, effectiveBaseUrl, provider.api, provider.apiKey, model.id, model.api]);
 
   useEffect(() => {
     catalogRequestIdRef.current += 1;
     setCatalogState({ phase: "idle" });
     catalogUndoRef.current = null;
-  }, [providerName, provider.baseUrl, model.id]);
+  }, [providerName, effectiveBaseUrl, model.id]);
 
   const handleTest = useCallback(async () => {
     if (!model.id.trim() || testState.phase === "testing") return;
@@ -1042,7 +1082,7 @@ function ModelDetail({
     setCatalogState({ phase: "loading" });
     try {
       const params = new URLSearchParams({ q: query, provider: providerName, limit: "50" });
-      if (provider.baseUrl?.trim()) params.set("baseUrl", provider.baseUrl.trim());
+      if (effectiveBaseUrl?.trim()) params.set("baseUrl", effectiveBaseUrl.trim());
       const res = await fetch(`/api/models-config/catalog?${params}`);
       const data = await res.json() as { recommendation?: ModelCatalogRecommendation; error?: string };
       if (requestId !== catalogRequestIdRef.current) return;
@@ -1065,7 +1105,7 @@ function ModelDetail({
       if (requestId !== catalogRequestIdRef.current) return;
       setCatalogState({ phase: "error", message: error instanceof Error ? error.message : String(error) });
     }
-  }, [catalogState.phase, model, onChange, provider.baseUrl, providerName]);
+  }, [catalogState.phase, model, onChange, effectiveBaseUrl, providerName]);
 
   const undoCatalogFill = () => {
     const previous = catalogUndoRef.current;
@@ -1128,6 +1168,7 @@ function ModelDetail({
   }
   compatibilityOverrideCount += remainingCompatKeys.size;
   const advancedSummaryParts = [
+    model.baseUrl ? t("models.baseUrlOverride") : null,
     model.api ? `API: ${model.api}` : null,
     Object.keys(model.headers ?? {}).length
       ? t("models.headersSummary", { count: Object.keys(model.headers ?? {}).length })
@@ -1191,6 +1232,13 @@ function ModelDetail({
           <ConfigButton variant="danger" size="small" onClick={onDelete}>{t("i18n.remove")}</ConfigButton>
         </ConfigDetailActions>
       </ConfigDetailHeader>
+
+      <BuiltinModelNotice
+        baseUrl={effectiveBaseUrl}
+        model={model}
+        effectiveCompat={effectiveCompat(provider, model)}
+        onApply={onChange}
+      />
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         <Field label={`${t("models.fieldId")} *`}><TextInput value={model.id} onChange={(v) => set("id", v)} placeholder="model-id" mono /></Field>
@@ -1352,6 +1400,14 @@ function ModelDetail({
 
         {advancedOpen && (
           <div id="model-advanced-settings" style={{ display: "flex", flexDirection: "column", gap: 14, padding: "4px 0 16px" }}>
+            <Field label={t("models.baseUrlOverride")}>
+              <TextInput value={model.baseUrl ?? ""} onChange={(v) => set("baseUrl", v.trim() || undefined)}
+                placeholder={provider.baseUrl ?? t("models.providerDefaults")} mono />
+              <span style={{ fontSize: "var(--fs-micro)", color: "var(--text-dim)", marginTop: 2 }}>
+                {t("models.baseUrlHelp")}
+              </span>
+            </Field>
+
             <Field label={t("models.apiOverride")}>
               <Select label={t("models.apiOverride")} value={model.api ?? ""} onChange={(v) => set("api", v || undefined)} options={API_OPTIONS} />
             </Field>
@@ -1397,6 +1453,12 @@ function ModelDetail({
                   <div style={{ fontSize: "var(--fs-micro)", color: "var(--text-dim)", marginBottom: 8 }}>
                     {t("models.thinkingLevelMapHelp")}
                   </div>
+                  <ThinkingLevelProbe
+                    providerName={providerName}
+                    provider={provider}
+                    model={model}
+                    onApply={(v) => set("thinkingLevelMap", v)}
+                  />
                   <ThinkingLevelMapEditor
                     value={model.thinkingLevelMap}
                     onChange={(v) => set("thinkingLevelMap", v)}
@@ -1413,8 +1475,8 @@ function ModelDetail({
 
 // ── OAuth detail ──────────────────────────────────────────────────────────────
 
-function OAuthDetail({ provider, onRefresh, enabledModels }: {
-  provider: OAuthProvider; onRefresh: () => void; enabledModels: EnabledModelsController;
+function OAuthDetail({ provider, onRefresh, enabledModels, contextSettings }: {
+  provider: OAuthProvider; onRefresh: () => void; enabledModels: EnabledModelsController; contextSettings: ModelContextSettings;
 }) {
   const [loginState, setLoginState] = useState<OAuthLoginState>({ phase: "idle" });
   const { t } = useI18n();
@@ -1680,7 +1742,7 @@ function OAuthDetail({ provider, onRefresh, enabledModels }: {
 
       <ProviderUsageSummary providerId={provider.id} enabled={provider.loggedIn} />
 
-      {provider.loggedIn && <EnabledModelsSection providerId={provider.id} controller={enabledModels} />}
+      {provider.loggedIn && <EnabledModelsSection providerId={provider.id} controller={enabledModels} contextSettings={contextSettings} />}
     </div>
   );
 }
@@ -1690,8 +1752,8 @@ function OAuthDetail({ provider, onRefresh, enabledModels }: {
 // pi's default router address (`/login llama.cpp`, docs/llama-cpp.md).
 const DEFAULT_LLAMA_ROUTER_URL = "http://127.0.0.1:8080";
 
-function ApiKeyDetail({ provider, onRefresh, enabledModels }: {
-  provider: ApiKeyProvider; onRefresh: () => void; enabledModels: EnabledModelsController;
+function ApiKeyDetail({ provider, onRefresh, enabledModels, contextSettings }: {
+  provider: ApiKeyProvider; onRefresh: () => void; enabledModels: EnabledModelsController; contextSettings: ModelContextSettings;
 }) {
   const llama = provider.id === LLAMA_CPP_PROVIDER_ID;
   const [serverUrl, setServerUrl] = useState(llama && !provider.configured ? DEFAULT_LLAMA_ROUTER_URL : "");
@@ -1797,7 +1859,7 @@ function ApiKeyDetail({ provider, onRefresh, enabledModels }: {
           value={apiKey}
           onChange={setApiKey}
           onKeyDown={(e) => { if (e.key === "Enter" && canSave && !saving && !savedOk) handleSave(); }}
-          placeholder={llama ? t("models.optionalApiKey") : provider.configured ? "Enter new key to replace…" : "sk-…"}
+          placeholder={llama ? t("models.optionalApiKey") : provider.configured ? t("models.replaceApiKey") : "sk-…"}
           style={{ flex: 1 }}
           autoComplete="off"
           spellCheck={false}
@@ -1833,6 +1895,7 @@ function ApiKeyDetail({ provider, onRefresh, enabledModels }: {
         <EnabledModelsSection
           providerId={provider.id}
           controller={enabledModels}
+          contextSettings={contextSettings}
           emptyCatalogHint={llama ? t("models.llamaEmptyCatalog") : undefined}
         />
       )}
@@ -2018,6 +2081,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [savedOk, setSavedOk] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(readRememberedSelection);
+  const modelFocusRef = useRef(readRememberedModelFocus());
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([]);
   const [apiKeyProviders, setApiKeyProviders] = useState<ApiKeyProvider[]>([]);
   /** Runtime display names of every provider, including ones with no chat models. */
@@ -2036,6 +2100,11 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
    * from an unrelated edit without guessing.
    */
   const savedModelIdsRef = useRef<Map<string, (string | null)[]>>(new Map());
+  // M5: the row a dragged model would land on, and a stable key per model entry across reorders.
+  const draggedModelRef = useRef<{ providerName: string; index: number } | null>(null);
+  const [modelDrop, setModelDrop] = useState<{ providerName: string; index: number; after: boolean } | null>(null);
+  const modelKeysRef = useRef(new WeakMap<object, string>());
+  const modelKeySequenceRef = useRef(0);
   /** models.json as last read or saved, so the model form can tell saved values from edits. */
   const [savedConfig, setSavedConfig] = useState<ModelsJson>({ providers: {} });
   /**
@@ -2071,6 +2140,15 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
         savedModelIdsRef.current = savedModelIds(normalized);
         setSavedNames(savedProviderNames(normalized));
         const keys = Object.keys(normalized.providers ?? {});
+        const focus = modelFocusRef.current;
+        modelFocusRef.current = null;
+        const focusIndex = focus
+          ? normalized.providers?.[focus.providerName]?.models?.findIndex((entry) => entry.id === focus.modelId) ?? -1
+          : -1;
+        if (focus && focusIndex >= 0) {
+          setSelection({ type: "model", providerName: focus.providerName, index: focusIndex });
+          return;
+        }
         setSelection((current) => current && customSelectionExists(normalized, current)
           ? current
           : keys[0]
@@ -2085,6 +2163,19 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
   useEffect(() => {
     if (selection) setLastSettingsSelection("models", JSON.stringify(selection));
   }, [selection]);
+
+  // An overrides-only entry belongs to its built-in provider, not a duplicate custom provider.
+  useEffect(() => {
+    if (selection?.type !== "provider") return;
+    const entry = config.providers?.[selection.name];
+    // Clearing a saved display name leaves only overrides: keep the panel until the name is saved away.
+    if (!entry || !isOverridesOnly(entry) || savedNames.has(selection.name)) return;
+    if (oauthProviders.some((provider) => provider.id === selection.name)) {
+      setSelection({ type: "oauth", providerId: selection.name });
+    } else if (apiKeyProviders.some((provider) => provider.id === selection.name)) {
+      setSelection({ type: "apikey", providerId: selection.name });
+    }
+  }, [apiKeyProviders, config.providers, oauthProviders, savedNames, selection]);
 
   const addCustomProvider = useCallback(() => {
     let finalName = "new-provider";
@@ -2181,6 +2272,73 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
     });
   }, []);
 
+  const applyModelOrder = useCallback((change: ModelOrderChange<ModelsJson> | null) => {
+    if (!change) return;
+    setConfig(change.config);
+    setSavedOk(false);
+    setSaveError(null);
+    setSelection((current) => current?.type === "model" && current.providerName === change.providerName
+      ? { ...current, index: change.order.indexOf(current.index) }
+      : current);
+  }, []);
+
+  const moveModel = useCallback((providerName: string, from: number, to: number) => {
+    if (saving || loadError) return;
+    applyModelOrder(moveModelEntry(config, savedModelIdsRef.current, providerName, from, to));
+  }, [applyModelOrder, config, loadError, saving]);
+
+  /**
+   * Native drag and drop of a model row within its provider (upstream 6386fa4):
+   * desktop only (iOS never starts it from a touch); Alt+Up/Down moves it from the keyboard.
+   */
+  const modelDragProps = (providerName: string, index: number, modelId: string): ButtonHTMLAttributes<HTMLButtonElement> => {
+    const target = (event: DragEvent<HTMLButtonElement>) => {
+      const dragged = draggedModelRef.current;
+      if (dragged?.providerName !== providerName) return null;
+      const rect = event.currentTarget.getBoundingClientRect();
+      const after = event.clientY >= rect.top + rect.height / 2;
+      return { from: dragged.index, to: modelDropIndex(dragged.index, index, after), after };
+    };
+    const endDrag = () => {
+      draggedModelRef.current = null;
+      setModelDrop(null);
+    };
+    return {
+      draggable: !saving && !loadError,
+      onDragStart: (event) => {
+        draggedModelRef.current = { providerName, index };
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", modelId);
+      },
+      onDragOver: (event) => {
+        const drop = target(event);
+        if (!drop) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        // No line where the drop would leave the order as it is.
+        const next = drop.to === drop.from ? null : { providerName, index, after: drop.after };
+        setModelDrop((prev) => prev?.providerName === next?.providerName && prev?.index === next?.index && prev?.after === next?.after ? prev : next);
+      },
+      onDragLeave: (event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        setModelDrop((prev) => prev?.providerName === providerName && prev.index === index ? null : prev);
+      },
+      onDrop: (event) => {
+        const drop = target(event);
+        if (!drop) return;
+        event.preventDefault();
+        moveModel(providerName, drop.from, drop.to);
+        endDrag();
+      },
+      onDragEnd: endDrag,
+    };
+  };
+
+  const sortModels = useCallback((providerName: string) => {
+    if (saving || loadError) return;
+    applyModelOrder(sortModelEntries(config, savedModelIdsRef.current, providerName));
+  }, [applyModelOrder, config, loadError, saving]);
+
   const removeModel = useCallback((providerName: string, index: number) => {
     savedModelIdsRef.current.get(providerName)?.splice(index, 1);
     setConfig((prev) => {
@@ -2243,7 +2401,26 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
     }
   }, [applyProviderRename, config, enabledModels, loadError, providerNameDraft, refreshAuthProviders, t]);
 
-  const providers = Object.entries(config.providers ?? {});
+  // A built-in provider's overrides-only entry shows on that provider's page, not as a custom one.
+  const providers = Object.entries(config.providers ?? {}).filter(([id, entry]) => {
+    if (!isOverridesOnly(entry) || savedNames.has(id)) return true;
+    const managed = oauthProviders.some((provider) => provider.id === id) || apiKeyProviders.some((provider) => provider.id === id);
+    return authListed && !managed;
+  });
+
+  const contextSettings = (providerId: string): ModelContextSettings => ({
+    overrides: config.providers?.[providerId]?.modelOverrides,
+    disabled: loading || saving || loadError !== null,
+    onChange: (modelId, value) => {
+      try {
+        setConfig(withContextWindowOverride(config, providerId, modelId, value));
+        setSavedOk(false);
+        setSaveError(null);
+      } catch (error) {
+        setSaveError(String(error));
+      }
+    },
+  });
   const customProviderLabel = (providerId: string, entry: ProviderEntry) => providerSidebarLabel(
     providerId,
     entry,
@@ -2259,6 +2436,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
   };
   const activeOAuth = oauthProviders.filter((p) => p.loggedIn);
   const activeApiKey = apiKeyProviders.filter((p) => p.configured);
+  const builtinApiKeyIds = new Set(apiKeyProviders.map((p) => p.id));
 
   // Resolve current detail
   const detailContent = (() => {
@@ -2267,12 +2445,12 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
     if (selection.type === "oauth") {
       const p = oauthProviders.find((p) => p.id === selection.providerId);
       if (!p) return null;
-      return <OAuthDetail key={p.id} provider={p} onRefresh={refreshAuthProviders} enabledModels={enabledModels} />;
+      return <OAuthDetail key={p.id} provider={p} onRefresh={refreshAuthProviders} enabledModels={enabledModels} contextSettings={contextSettings(p.id)} />;
     }
     if (selection.type === "apikey") {
       const p = apiKeyProviders.find((p) => p.id === selection.providerId);
       if (!p) return null;
-      return <ApiKeyDetail key={p.id} provider={p} onRefresh={refreshAuthProviders} enabledModels={enabledModels} />;
+      return <ApiKeyDetail key={p.id} provider={p} onRefresh={refreshAuthProviders} enabledModels={enabledModels} contextSettings={contextSettings(p.id)} />;
     }
     if (selection.type === "provider") {
       const provider = config.providers?.[selection.name];
@@ -2290,6 +2468,8 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
           onDelete={() => deleteProvider(selection.name)}
           onAddModels={(models) => addDiscoveredModels(selection.name, models)}
           enabledModels={enabledModels}
+          builtinProviderIds={builtinApiKeyIds}
+          onOpenBuiltinProvider={(id) => setSelection({ type: "apikey", providerId: id })}
         />
       );
     }
@@ -2399,12 +2579,28 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
                         身份，不要顺手换。 */}
                     {models.map((m, i) => {
                       const isModelSelected = selection?.type === "model" && selection.providerName === pName && selection.index === i;
+                      let modelKey = modelKeysRef.current.get(m);
+                      if (!modelKey) {
+                        modelKey = `model-${++modelKeySequenceRef.current}`;
+                        modelKeysRef.current.set(m, modelKey);
+                      }
+                      const drop = modelDrop?.providerName === pName && modelDrop.index === i ? modelDrop : null;
                       return (
                         <ConfigSidebarItem
-                          key={i}
+                          key={modelKey}
                           active={isModelSelected}
                           className="models-sidebar-indented-item"
+                          data-drop={drop ? (drop.after ? "after" : "before") : undefined}
+                          aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
                           onClick={() => setSelection({ type: "model", providerName: pName, index: i })}
+                          onKeyDown={(event) => {
+                            if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+                            const direction = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : null;
+                            if (direction === null) return;
+                            event.preventDefault();
+                            moveModel(pName, i, i + direction);
+                          }}
+                          {...modelDragProps(pName, i, m.id)}
                         >
                           <ConfigSidebarText className="is-grow" style={{ color: m.id ? "var(--text-muted)" : "var(--text-dim)" }}>
                              {m.id || t("i18n.newModel")}
@@ -2419,13 +2615,25 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenMcp 
                       );
                     })}
 
-                    {/* Add model button */}
-                    <ConfigSidebarItem
-                      className="models-sidebar-indented-item models-sidebar-add-item"
-                      onClick={(e) => { e.stopPropagation(); addModel(pName); }}
-                    >
-                       <ConfigSidebarText>+ {t("i18n.model")}</ConfigSidebarText>
-                    </ConfigSidebarItem>
+                    {/* Add model button, and A–Z once */}
+                    <div className="models-sidebar-model-footer">
+                      <ConfigSidebarItem
+                        className="models-sidebar-indented-item models-sidebar-add-item"
+                        onClick={(e) => { e.stopPropagation(); addModel(pName); }}
+                      >
+                        <ConfigSidebarText>+ {t("i18n.model")}</ConfigSidebarText>
+                      </ConfigSidebarItem>
+                      <button
+                        type="button"
+                        className="models-sidebar-sort-button"
+                        aria-label={t("models.sortByName")}
+                        title={t("models.sortByName")}
+                        disabled={saving || loadError !== null || models.length < 2}
+                        onClick={() => sortModels(pName)}
+                      >
+                        A–Z
+                      </button>
+                    </div>
                   </div>
                 );
               })}

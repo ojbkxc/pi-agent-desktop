@@ -7,6 +7,9 @@ import { useTheme } from "@/hooks/useTheme";
 import { useI18n } from "@/hooks/useI18n";
 import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import { isImeComposing } from "@/lib/ime";
+import { getActiveArtifactSession, requestArtifactFix, useActiveArtifactSession, useArtifactFixSessionId } from "@/lib/artifact-store";
+import { formatPreviewErrors } from "./HtmlPreviewErrorBar";
+import { isLoadFailure } from "@/lib/chunk-load-error";
 
 interface MermaidBlockProps {
   code: string;
@@ -21,6 +24,14 @@ interface MermaidBlockProps {
   fit?: boolean;
   /** An artifact action shown beside the preview/source toggle. */
   headerAction?: ReactNode;
+  /**
+   * Offer "Ask to fix" when the diagram does not render. `true` sends the
+   * generic request to the conversation on screen (assistant text, inline
+   * artifacts); a function gets the parse error and sends its own request,
+   * returning whether it went out. Leave it out where no reply wrote the
+   * diagram (files, user text, the Artifacts page).
+   */
+  fixable?: boolean | ((error: string) => boolean);
 }
 
 // Without a readable viewBox the variable stays unset and the CSS falls back
@@ -220,10 +231,19 @@ export function DiagramZoomDialog({ title, label, onClose, children }: {
 
 type RenderState =
   | { key: string; status: "loading" }
-  | { key: string; status: "error" }
+  | { key: string; status: "error"; message: string; loadFailed: boolean }
   | { key: string; status: "ready"; svg: string };
 
-/** Renders a diagram to an SVG string (strict security level); rejects on invalid input. */
+const MERMAID_ERROR_MAX_LENGTH = 1000;
+
+/** Mermaid's parse error as text a person (or the model) can act on. */
+export function mermaidErrorText(error: unknown): string {
+  const raw = error && typeof error === "object" && "message" in error ? String((error as { message: unknown }).message) : String(error ?? "");
+  const text = raw.replace(/\r\n?/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return text.length > MERMAID_ERROR_MAX_LENGTH ? `${text.slice(0, MERMAID_ERROR_MAX_LENGTH)}…` : text;
+}
+
+/** Renders a diagram to an SVG string (strict security level); rejects with Mermaid's own parse error on invalid input. */
 export async function renderMermaidSvg(code: string, isDark: boolean): Promise<string> {
   const { default: mermaid } = await import("mermaid");
   mermaid.initialize({
@@ -233,8 +253,8 @@ export async function renderMermaidSvg(code: string, isDark: boolean): Promise<s
     theme: isDark ? "dark" : "default",
   });
 
-  const parsed = await mermaid.parse(code, { suppressErrors: true });
-  if (!parsed) throw new Error("Invalid Mermaid diagram");
+  // Without suppressErrors, parse throws the error that says where and why.
+  await mermaid.parse(code);
 
   const id =
     typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -243,7 +263,22 @@ export async function renderMermaidSvg(code: string, isDark: boolean): Promise<s
   return (await mermaid.render(id, code)).svg;
 }
 
-export function MermaidBlock({ code, isStreaming, defaultPreview = false, fit = false, headerAction }: MermaidBlockProps) {
+const warmedTypes = new Set<string>();
+/**
+ * Loads Mermaid and the chunk of one diagram type (Mermaid fetches it inside
+ * `parse`), once per type, from the first word of a fence that is still
+ * streaming. Measured with 150 ms per request: a flowchart showed 1.4 s after
+ * its message ended without this, 0.66 s with Mermaid alone warmed.
+ */
+function warmMermaid(firstWord: string): void {
+  if (warmedTypes.has(firstWord)) return;
+  warmedTypes.add(firstWord);
+  import("mermaid")
+    .then(({ default: mermaid }) => mermaid.parse(`${firstWord}\n`, { suppressErrors: true }))
+    .catch(() => { warmedTypes.delete(firstWord); });
+}
+
+export function MermaidBlock({ code, isStreaming, defaultPreview = false, fit = false, headerAction, fixable }: MermaidBlockProps) {
   const { isDark } = useTheme();
   const { t } = useI18n();
   const [showPreview, setShowPreview] = useState(defaultPreview);
@@ -251,6 +286,8 @@ export function MermaidBlock({ code, isStreaming, defaultPreview = false, fit = 
   const [zoomOpen, setZoomOpen] = useState(false);
   const previewRef = useRef<HTMLButtonElement>(null);
   const [previewZoom, setPreviewZoom] = useState(1);
+  // Bumped by Retry after the renderer failed to load.
+  const [attempt, setAttempt] = useState(0);
   const currentKey = `${isDark ? "dark" : "light"}\n${code}`;
   const previewVisible = showPreview && !isStreaming;
 
@@ -279,6 +316,14 @@ export function MermaidBlock({ code, isStreaming, defaultPreview = false, fit = 
     return () => preview.removeEventListener("wheel", onWheel);
   }, [previewMounted, updatePreviewZoom]);
 
+  // Warm Mermaid while the fence streams: the finished message is a component
+  // of its own and renders the diagram as soon as it mounts.
+  // Only once the first line is complete: "gra" while it arrives is no type.
+  const diagramType = isStreaming ? /^\s*(\S+)[^\n]*\n/.exec(code)?.[1] ?? null : null;
+  useEffect(() => {
+    if (diagramType) warmMermaid(diagramType);
+  }, [diagramType]);
+
   useEffect(() => {
     if (!previewVisible) return;
 
@@ -287,14 +332,14 @@ export function MermaidBlock({ code, isStreaming, defaultPreview = false, fit = 
 
     renderMermaidSvg(code, isDark).then((svg) => {
       if (!cancelled) setRenderState({ key: currentKey, status: "ready", svg });
-    }).catch(() => {
-      if (!cancelled) setRenderState({ key: currentKey, status: "error" });
+    }).catch((error: unknown) => {
+      if (!cancelled) setRenderState({ key: currentKey, status: "error", message: mermaidErrorText(error), loadFailed: isLoadFailure(error) });
     });
 
     return () => {
       cancelled = true;
     };
-  }, [code, currentKey, isDark, previewVisible]);
+  }, [code, currentKey, isDark, previewVisible, attempt]);
 
   const previewButton = useMemo(() => (
     <button
@@ -312,8 +357,13 @@ export function MermaidBlock({ code, isStreaming, defaultPreview = false, fit = 
     return <CodeBlock code={code} lang="mermaid" headerAction={previewButton} isStreaming={isStreaming} />;
   }
 
-  const body = renderState?.key === currentKey && renderState.status === "error" ? (
-      <div className="mermaid-block mermaid-block-error">{t("i18n.invalidMermaid")}</div>
+  const failure = renderState?.key === currentKey && renderState.status === "error" ? renderState.message : null;
+  const loadFailed = renderState?.key === currentKey && renderState.status === "error" && renderState.loadFailed;
+  const body = failure !== null ? (
+      <div className="mermaid-block mermaid-block-error" role="alert">
+        <div className="mermaid-error-title">{loadFailed ? t("diagram.loadFailed") : t("i18n.invalidMermaid")}</div>
+        {failure && <pre className="mermaid-error-detail">{failure}</pre>}
+      </div>
     ) : renderState?.key !== currentKey || renderState.status !== "ready" ? (
       <div className="mermaid-block mermaid-block-loading" aria-label={t("i18n.renderingMermaid")} />
     ) : (
@@ -366,6 +416,12 @@ export function MermaidBlock({ code, isStreaming, defaultPreview = false, fit = 
         <span className="markdown-code-lang">mermaid</span>
         <div className="markdown-code-actions">
           {headerAction}
+          {loadFailed && (
+            <button type="button" className="markdown-code-action" onClick={() => setAttempt((value) => value + 1)}>
+              {t("common.retry")}
+            </button>
+          )}
+          {failure !== null && !loadFailed && fixable && <DiagramFixButton error={failure || t("i18n.invalidMermaid")} fixable={fixable} promptKey="preview.fixPromptMermaid" />}
           {renderState?.key === currentKey && renderState.status === "ready" && (
             <button
               type="button"
@@ -385,6 +441,36 @@ export function MermaidBlock({ code, isStreaming, defaultPreview = false, fit = 
       </div>
       {body}
     </div>
+  );
+}
+
+/**
+ * "Ask to fix" for a diagram or chart that does not render. The generic
+ * request (`promptKey`, with `{errors}`) goes only to the conversation that
+ * registered a fix handler, like an HTML preview's; after one request the
+ * button stays away for that error. Shared with ChartBlock.
+ */
+export function DiagramFixButton({ error, fixable, promptKey }: {
+  error: string;
+  fixable: true | ((error: string) => boolean);
+  promptKey: "preview.fixPromptMermaid" | "preview.fixPromptChart";
+}) {
+  const { t } = useI18n();
+  const activeSessionId = useActiveArtifactSession();
+  const fixSessionId = useArtifactFixSessionId();
+  const [sentFor, setSentFor] = useState<string | null>(null);
+  if (sentFor === error) return null;
+  if (fixable === true && !(activeSessionId && fixSessionId === activeSessionId)) return null;
+  const fix = () => {
+    const sent = fixable === true
+      ? requestArtifactFix(getActiveArtifactSession(), t(promptKey, { errors: formatPreviewErrors([error]) }))
+      : fixable(error);
+    if (sent) setSentFor(error);
+  };
+  return (
+    <button type="button" className="markdown-code-action mermaid-fix" onClick={fix}>
+      {t("preview.fix")}
+    </button>
   );
 }
 
@@ -414,7 +500,8 @@ interface CodeBlockProps {
  */
 export const CodeBlock = memo(function CodeBlock({ code, lang, headerAction, isStreaming }: CodeBlockProps) {
   const { t } = useI18n();
-  const [wrap, setWrap] = useState(false);
+  // Long lines wrap by default, as pi's TUI shows them (C10, upstream #1369).
+  const [wrap, setWrap] = useState(true);
   const [expanded, setExpanded] = useState(false);
   // 复制反馈走共享 hook：失败有提示、计时器有主（连点不会提前复位），与 ArtifactView 一致。
   const { copied, failed: copyFailed, copy: copyFeedback } = useCopyFeedback();

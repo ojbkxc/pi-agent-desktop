@@ -133,7 +133,7 @@ try{
   await page.getByRole('button',{name:/更换模型|Change model/}).click();await assertRowGaps(page.getByRole('listbox').locator('.app-option-row'),'actual model choices');
   await assertChoiceGeometry(page.getByRole('listbox'),page.getByRole('listbox').locator('.app-option-row'),'actual models');await page.keyboard.press('Escape');
   const input=page.locator('textarea');await input.fill('');await input.press('ArrowUp');
-  // ISSUE-5：↑ 直接把最近一条历史填入输入框（不再弹 .app-suggestion-menu 历史菜单）。
+// ISSUE-5：↑ 直接把最近一条历史填入输入框（不再弹 .app-suggestion-menu 历史菜单）。
   // 断言 textarea 被历史直填，再用 ↓ 越过最新一条恢复空草稿。
   await page.waitForFunction(()=>{const el=document.querySelector('textarea');return el&&el.value.length>0;});
   assert.equal(await input.inputValue(),'First prompt','↑ fills the most recent history entry');
@@ -173,9 +173,13 @@ try{
    await rows.nth(1).hover();
    await tabs.screenshot({path:`test-results/ui-send/settings-choice-geometry-${theme}-${width}.png`});
   }else{
-   await page.locator('.settings-mobile-section-picker').click();
-   await assertChoiceGeometry(page.getByRole('listbox'),page.getByRole('listbox').locator('.app-select-option'),'mobile Settings categories');
-   await page.keyboard.press('Escape');
+   // A phone shows Settings full screen, one level at a time (P1): this fixture opens on a
+   // section, whose Back leads to the list of sections; a row drills in again and Back returns.
+   const home=page.locator('.settings-phone-home');
+   await page.locator('.settings-phone-back').click();await home.waitFor();
+   const box=await surface.boundingBox();assert.ok(box&&box.x===0&&Math.round(box.width)===width,'phone Settings is full screen');
+   await home.locator('.settings-phone-home-item').first().click();
+   await page.locator('.settings-phone-back').click();await home.waitFor();
   }
   await surface.locator('.settings-dialog-close').click();await surface.waitFor({state:'hidden'});
   assert.deepEqual(errors,[]);results.push({theme,width,options:5,mcpOptions:labels.length,geometry,colors,ratios,toolGaps,states});await page.close();

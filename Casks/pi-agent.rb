@@ -1,8 +1,11 @@
 cask "pi-agent" do
-  version "0.8.2"
-  sha256 "9415df10f3d2d0e2dbdbb924c7867ccc0b02fe0124600f4564e2c38f4cf1937f"
+  arch arm: "aarch64", intel: "x64"
 
-  url "https://github.com/abcwyc/pi-agent-desktop/releases/download/v#{version}/Pi.Agent_#{version}_aarch64.dmg"
+  version "0.8.7"
+  sha256 arm:   "50ade76f02f604d695afc24e95497da0e1381728b9102c385a3132cb1d909cf6",
+         intel: "303d0e164fdefbbe7737da17d716cd7d50c224c3fe21b35b03b29cfa061f6e21"
+
+  url "https://github.com/abcwyc/pi-agent-desktop/releases/download/v#{version}/Pi.Agent_#{version}_macOS_#{arch}.dmg"
   name "Pi Agent"
   desc "Local AI agent desktop app built on pi"
   homepage "https://github.com/abcwyc/pi-agent-desktop"
@@ -14,7 +17,6 @@ cask "pi-agent" do
 
   # The app upgrades itself from Settings with signed updater builds.
   auto_updates true
-  depends_on arch: :arm64
   # The app builds against macOS 11 (Tauri `minimumSystemVersion`), which is also
   # Homebrew's own floor, so a bare `depends_on :macos` is the whole requirement.
   depends_on :macos

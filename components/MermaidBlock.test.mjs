@@ -8,7 +8,7 @@ const jiti = createJiti(import.meta.url, {
 });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
-const { MermaidBlock, CodeBlock, downloadMermaidSvg, mermaidNaturalWidth } = await jiti.import("./MermaidBlock.tsx");
+const { MermaidBlock, CodeBlock, downloadMermaidSvg, mermaidNaturalWidth, mermaidErrorText } = await jiti.import("./MermaidBlock.tsx");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 
 // Simple sequenceDiagram for testing
@@ -112,9 +112,10 @@ test("CodeBlock folds a long block behind an expand button once complete", () =>
   assert.doesNotMatch(short, /markdown-code-fold/);
 });
 
-test("CodeBlock offers a wrap switch", () => {
+test("CodeBlock wraps long lines by default and offers to turn it off (C10)", () => {
   const html = renderCode({ code: "x", lang: "text" });
-  assert.match(html, /aria-pressed="false"[^>]*>Wrap</);
+  assert.match(html, /aria-pressed="true"[^>]*>No wrap</);
+  assert.match(html, /markdown-code-body[^"]* is-wrapped/);
 });
 
 test("MermaidBlock handles Chinese characters in diagram", () => {
@@ -215,4 +216,40 @@ test("code-block copy failure is caught and surfaced, never an unhandled rejecti
   for (const [name, locale] of [["en", enLocale], ["zh-CN", zhCNLocale], ["zh-TW", zhTWLocale]]) {
     assert.equal(typeof locale.messages["i18n.copyFailed"], "string", `${name} is missing i18n.copyFailed`);
   }
+});
+test("keeps Mermaid's parse error for the block and the fix request", async () => {
+  const parseError = new Error("Parse error on line 2:\r\n...A -->\r\n-----^\r\n\r\n\r\n\r\nExpecting 'SEMI', got 'EOF'");
+  assert.equal(mermaidErrorText(parseError), "Parse error on line 2:\n...A -->\n-----^\n\nExpecting 'SEMI', got 'EOF'");
+  assert.equal(mermaidErrorText("plain"), "plain");
+  assert.equal(mermaidErrorText(null), "");
+  const long = mermaidErrorText(new Error("x".repeat(5000)));
+  assert.equal(long.length, 1001);
+  assert.ok(long.endsWith("…"));
+  // The error has to come from parse itself; suppressing it leaves only "invalid".
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("./MermaidBlock.tsx", import.meta.url), "utf8");
+  // Only the render path; the streaming warm-up parses a first word and ignores errors.
+  const render = source.slice(source.indexOf("export async function renderMermaidSvg"), source.indexOf("const warmedTypes"));
+  assert.match(render, /await mermaid\.parse\(code\);/);
+  assert.doesNotMatch(render, /suppressErrors: true \}\)/);
+});
+
+test("offers no fix button before a diagram has failed", () => {
+  const html = renderMermaid({ code: mermaidSrc, defaultPreview: true, fixable: true });
+  assert.doesNotMatch(html, /mermaid-fix/);
+});
+
+test("a chunk that failed to load is not a syntax error", async () => {
+  const { isLoadFailure } = await jiti.import("@/lib/chunk-load-error");
+  // The message the dev server gave when it went away mid-render.
+  assert.equal(isLoadFailure(new Error("Failed to load chunk /_next/static/chunks/node_modules_1rpy-c1dcp_8y._.js from module [project]/node_modules/mermaid/dist/chunks/mermaid.core/flowDiagram-HODETNUW.mjs [app-client] (ecmascript, async loader)")), true);
+  assert.equal(isLoadFailure(Object.assign(new Error("x"), { name: "ChunkLoadError" })), true);
+  assert.equal(isLoadFailure(new TypeError("Failed to fetch dynamically imported module: http://x/a.js")), true);
+  assert.equal(isLoadFailure(new TypeError("Importing a module script failed.")), true);
+  assert.equal(isLoadFailure(new Error("Parse error on line 3:\n...")), false);
+  assert.equal(isLoadFailure("Failed to load chunk"), false);
+  // Only a parse error offers the fix; a load failure offers Retry.
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("./MermaidBlock.tsx", import.meta.url), "utf8");
+  assert.match(source, /failure !== null && !loadFailed && fixable && <DiagramFixButton/);
 });

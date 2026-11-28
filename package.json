@@ -1,6 +1,6 @@
 {
   "name": "@agegr/pi-web",
-  "version": "0.10.0",
+"version": "0.15.0",
   "private": true,
   "description": "Web UI for the pi coding agent",
   "homepage": "https://github.com/agegr/pi-web#readme",
@@ -51,6 +51,7 @@
     "release:verify": "node scripts/verify-release-components.mjs",
     "drift": "node scripts/measure-fork-drift.mjs",
     "preview-runtime": "node scripts/build-preview-runtime.mjs",
+    "desktop:check-payload": "node scripts/check-packaged-payload.mjs",
     "desktop:verify": "node scripts/verify-packaged-codemode.mjs && node scripts/verify-packaged-terminal.mjs",
     "test:release-tools": "node --test scripts/*.test.mjs",
     "check:deps": "node scripts/check-installed-deps.mjs",
@@ -62,7 +63,7 @@
     "release": "node -e \"console.error('This fork ships through GitHub Releases (see docs/desktop-updates.md and .github/workflows/release.yml), not npm. Use: node scripts/verify-release-components.mjs && dispatch the release workflow.'); process.exit(1)\"",
     "postinstall": "node bin/prepare-terminal.js",
     "test:terminal": "node e2e/terminal.mjs",
-    "test:e2e": "node e2e/conversation-navigator.mjs && node e2e/chat-prompt-anchor.mjs && node e2e/composer-outbox.mjs && node e2e/option-controls.mjs && node e2e/appearance.mjs && node e2e/settings-controls.mjs && node e2e/fonts.mjs && node e2e/terminal-theme.mjs && node e2e/terminal-settings.mjs && node e2e/session-delete.mjs && node e2e/sidebar-menu-placement.mjs && node e2e/streaming-markdown.mjs && node e2e/title-feedback.mjs && node e2e/run.mjs",
+"test:e2e": "node e2e/conversation-navigator.mjs && node e2e/chat-prompt-anchor.mjs && node e2e/composer-outbox.mjs && node e2e/option-controls.mjs && node e2e/appearance.mjs && node e2e/settings-controls.mjs && node e2e/plugin-discovery.mjs && node e2e/fonts.mjs && node e2e/terminal-theme.mjs && node e2e/terminal-settings.mjs && node e2e/session-delete.mjs && node e2e/sidebar-menu-placement.mjs && node e2e/streaming-markdown.mjs && node e2e/stream-preview.mjs && node e2e/title-feedback.mjs && node e2e/run.mjs",
     "prepare:cloudflared": "node scripts/prepare-cloudflared.mjs"
   },
   "dependencies": {
@@ -86,6 +87,7 @@
     "@xterm/xterm": "6.0.0",
     "acorn": "^8.15.0",
     "croner": "^10.0.1",
+    "diagrammatic": "0.0.4",
     "js-yaml": "^5.4.2",
     "lsp-mcp": "git+https://github.com/ojbkxc/lsp-mcp.git#main",
     "mammoth": "^1.12.0",
@@ -99,7 +101,7 @@
     "react-dom": "^19.2.4",
     "semver": "7.8.5",
     "typebox": "1.3.27",
-    "undici": "8.12.3",
+"undici": "8.12.4",
     "web-push": "^3.6.7"
   },
   "devDependencies": {
@@ -130,10 +132,11 @@
     "rehype-katex": "^7.0.1",
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",
+    "remark-cjk-friendly": "^2.3.2",
     "remark-frontmatter": "^5.0.0",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
-    "sucrase": "3.35.0",
+    "sucrase": "3.35.1",
     "tailwindcss": "^4.2.2",
     "typescript": "^5",
     "ws": "8.22.0"
