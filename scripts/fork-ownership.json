@@ -24,9 +24,9 @@
   },
   "driftedUpstreamFiles": {
     "components/MarkdownBody.tsx": {
-      "risk": "medium",
-      "drift": 173,
-      "structuralDrift": 171,
+      "risk": "high",
+      "drift": 303,
+      "structuralDrift": 293,
       "disposition": "accepted",
       "reason": "Uses the fork's headless streaming adapter and coalesced preprocessing while preserving Pi's plugins and widget mapping. Incoming markdown changes must retain the static/safety fallbacks, immediate completion and stream replacement behavior."
     },
@@ -45,10 +45,10 @@
       "disposition": "accepted"
     },
     "components/FileExplorer.tsx": {
-      "risk": "medium",
-      "drift": 82,
+      "risk": "high",
+      "drift": 695,
       "reason": "Fork interaction changes in an upstream-owned tree: touch/keyboard-reachable row actions, visible action feedback, upload affordances, and the two-step confirmation for linked directories that enclose the project/home. Incoming tree changes require review.",
-      "structuralDrift": 49,
+      "structuralDrift": 536,
       "disposition": "accepted"
     },
     "components/TabBar.tsx": {
