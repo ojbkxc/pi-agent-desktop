@@ -54,7 +54,6 @@ import { ToolApprovalSettings } from "./ToolApprovalSettings";
 import { OutageSettings } from "./OutageSettings";
 import { PinnedSessionsSettings } from "./PinnedSessionsSettings";
 import { RelaySection } from "./RelaySection";
-import { NetworkProxySection } from "./NetworkProxySection";
 import { ChatsSettingsSection } from "./ChatsSettingsSection";
 import { CompactionSettingsSection } from "./CompactionSettingsSection";
 import { AppearanceSettings } from "./AppearanceSettings";
@@ -464,56 +463,6 @@ function GeneralSettings({
         </div>
       </div>
 
-      {/* Low-traffic network and power-user options, grouped after the everyday ones. */}
-      <div className="settings-general-group">
-        <h3 className="settings-general-group-title">{t("settings.advancedGroup")}</h3>
-        <div className="settings-general-columns">
-          <div className="settings-general-col">
-            <NetworkProxySection />
-
-            <TerminalSettingsSection />
-
-            {shellSettings?.isWindows && (
-              <section className="settings-general-section">
-                <h3 className="settings-general-heading">{t("settings.shellTool")}</h3>
-                <p className="settings-general-description">{t("settings.shellToolDescription")}</p>
-                <div className="settings-shell-option">
-                  <span>{t("settings.usePowerShell")}</span>
-                  <ConfigSwitch
-                    checked={shellSettings.powerShellEnabled}
-                    loading={shellSaving}
-                    label={t("settings.usePowerShell")}
-                    onChange={(enabled) => void togglePowerShell(enabled)}
-                  />
-                </div>
-                {shellError && <p role="alert" className="settings-general-error">{shellError}</p>}
-              </section>
-            )}
-          </div>
-
-          <div className="settings-general-col">
-            <RelaySection />
-
-            <RemoteAccessSection />
-          </div>
-        </div>
-      </div>
-
-      {webAuthEnabled && (
-        <section className="settings-general-section">
-          <ConfigButton variant="secondary" disabled={loggingOut} onClick={() => void logOut()}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M10 17l5-5-5-5M15 12H3M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
-            </svg>
-            {loggingOut ? t("auth.loggingOut") : t("auth.logOut")}
-          </ConfigButton>
-          {logoutError && <p role="alert" className="settings-general-error">{logoutError}</p>}
-        </section>
-      )}
-
-      <footer className="settings-general-intro settings-general-about">
-        <p className="settings-general-tagline">{t("appSettings.tagline", { product: PRODUCT_NAME })}</p>
-      </footer>
     </div>
   );
 }

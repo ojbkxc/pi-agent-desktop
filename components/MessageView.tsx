@@ -33,7 +33,6 @@ import { SavedFileCard, isSavedFileInfo } from "./SavedFileCard";
 import type { SubagentToolDetails } from "@/lib/subagent-extension";
 import { CODEMODE_TOOL_NAME, codemodeCalls, codemodeScript, codemodeScriptPreview, stripCodemodeHeader } from "@/lib/codemode-view";
 import { CodemodeCallList } from "./CodemodeToolView";
-import { toolFieldsOfInput, type ToolField } from "@/lib/tool-fields";
 import { parseStreamingJson } from "@earendil-works/pi-ai/utils/json-parse";
 import { imageSource, resultImageFileName } from "@/lib/result-image";
 import { mcpToolLabel, prettyMcpResultText } from "@/lib/mcp-tool-display";
@@ -2596,53 +2595,6 @@ function getWrittenFileText(block: ToolCallContent): string | null {
   const path = block.input[paths[0]];
   if (typeof path !== "string" || path.length > 120) return null;
   return Object.keys(block.input).every((key) => WRITE_VIEW_KEYS.has(key)) ? content : null;
-}
-
-const TOOL_FIELD_LABEL: CSSProperties = {
-  padding: "4px 12px 4px 0",
-  color: "var(--text-dim)",
-  fontSize: "calc(11px + var(--chat-font-size-offset, 0px))",
-  whiteSpace: "nowrap",
-  verticalAlign: "top",
-};
-
-const TOOL_FIELD_VALUE: CSSProperties = {
-  padding: "4px 0",
-  color: "var(--text-muted)",
-  fontSize: "calc(12px + var(--chat-font-size-offset, 0px))",
-  fontFamily: "var(--font-mono)",
-  overflowWrap: "anywhere",
-};
-
-// A value with newlines of its own keeps them, scrolled in place.
-const TOOL_FIELD_BLOCK: CSSProperties = {
-  margin: 0,
-  padding: "8px 10px",
-  maxHeight: 260,
-  overflow: "auto",
-  border: "1px solid var(--border)",
-  borderRadius: 6,
-  background: "var(--bg)",
-  font: "inherit",
-  lineHeight: 1.5,
-  whiteSpace: "pre-wrap",
-};
-
-function ToolFieldRows({ fields }: { fields: ToolField[] }) {
-  return (
-    <table style={{ borderCollapse: "collapse" }}>
-      <tbody>
-        {fields.map((field) => (
-          <tr key={field.key}>
-            <td style={TOOL_FIELD_LABEL}>{field.key}</td>
-            <td style={TOOL_FIELD_VALUE}>
-              {field.multiline ? <pre style={TOOL_FIELD_BLOCK}>{field.value}</pre> : field.value}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
 }
 
 function formatCustomType(type: string): string {
