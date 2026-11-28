@@ -44,7 +44,8 @@ import { appendSubagentInputFiles, loadSubagentInputFiles, subagentInputLimits }
 import { getProjectTrustStatus, projectTrustReloadOptions } from "./project-trust";
 import { createSubagentSkillsBinding } from "./subagent-skills";
 import { createSubagentCodemodeExtension, createSubagentMcpExtensions } from "./builtin-extensions";
-import { createSubagentMcpPolicyExtension } from "./mcp-read-only-policy";
+import { createSubagentMcpPolicyExtension, READ_ONLY_MCP_POLICY_EXTENSION_NAME } from "./mcp-read-only-policy";
+import { MCP_HOST_EXTENSION_NAME } from "./mcp-host";
 import { resolveShellTools } from "./powershell-settings";
 import { isBuiltInSubagentsEnabled, readSubagentSettings } from "./subagent-settings";
 import { additionalForkSkillPaths } from "./fork-skill-paths";
@@ -130,6 +131,13 @@ declare global {
 const SUBAGENT_CONTEXT_LIMIT = 50_000;
 const PARENT_IDLE_POLL_MS = 200;
 const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+// 合并冲突修复：`mcp: on` 时上游 createSubagentMcpExtensions 是唯一 MCP 来源，成员内置里
+// 与它重叠的扩展（自带的 MCP host、通用只读 MCP 策略）必须让位，否则两个 host 抢注同一批
+// 服务器、deferred 服务器连不上（真实退化），且通用策略会盖掉按 profile 的专用报错。
+const MEMBER_MCP_OVERLAP_EXTENSION_NAMES = new Set<string>([
+  MCP_HOST_EXTENSION_NAME,
+  READ_ONLY_MCP_POLICY_EXTENSION_NAME,
+]);
 
 const TURN_LIMIT_INSTRUCTION = "You have reached your turn limit. Wrap up immediately and provide your final answer now.";
 
@@ -565,6 +573,33 @@ export function createSubagentController(
           ? { teamIdentity: { agentName: request.agentName, teamName: request.teamName } }
           : {}),
       });
+      // 合并冲突修复（fork × 上游重叠）：成员内置扩展与上游按 profile 的 MCP 路径各带一套
+      // codemode / tool-search / mcp / 只读 MCP 策略，合并后两套并存导致真实退化与越权：
+      //  1) `mcp: on` 时上游的 createSubagentMcpExtensions 才是唯一 MCP 来源（它按 profile.codemode
+      //     把 codemode 服务器降级为 deferred）。成员内置再挂一个 pi-web-mcp-host，两个 host 抢注
+      //     同一批服务器 → deferred 服务器连不上、tool_search 找不到（真实功能退化）。
+      //  2) 成员内置的通用只读 MCP 策略先于上游按 profile 的专用策略触发，把报错换成泛化文案。
+      //  3) 成员内置无条件注入的 `mcp__*` 会让上游「白名单没点名 MCP 即排除 mcp__*」的闸门失效，
+      //     于是 ext: 未选中的扩展里叫 `mcp__xxx` 的工具从 codemode 脚本可达（实测可执行，越权）。
+      // 就地改写（而非新建变量）以保留 rpc-manager.test.mjs 钉住的源码形状。
+      if (mcpEnabled) {
+        memberBuiltins.extensions = memberBuiltins.extensions.filter((extension) => (
+          typeof extension === "function" || !MEMBER_MCP_OVERLAP_EXTENSION_NAMES.has(extension.name)
+        ));
+        // 让包装器改用上游的 host 做 prompt 前的等待。
+        memberBuiltins.mcpHost = undefined;
+      }
+      // 成员内置无条件注入的 tool_search / mcp__* 与上游的按 profile 计算冲突：
+      //  - tool_search 只在「没有 codemode」时才有意义（上游 subagentToolOptions 的 discovery
+      //    规则同理：codemode 脚本本就直达 deferred 工具）。codemode 档下不注入，避免模型同时
+      //    看到两条通往同一批工具的路径。
+      //  - mcp__* 只在 `mcp: on` 时注入；否则上游「白名单没点名 MCP 即排除 mcp__*」的闸门会因
+      //    这条通配而失效，使 ext: 未选中的扩展里叫 mcp__xxx 的工具从 codemode 脚本可达（实测
+      //    可执行，越权）。mcp 档下上游 subagentToolOptions 自己会补 MCP_TOOL_PATTERNS。
+      memberBuiltins.toolNames = memberBuiltins.toolNames.filter((name) => (
+        !(name === "tool_search" && codemodeEnabled)
+        && !(name === "mcp__*" && !mcpEnabled)
+      ));
       // v0.8.2 压缩策略：极简档按「不加载扩展」整体收窄，chat-only 子会话与 rpc-manager
       // 的 chatOnly 分支一致地不装配；其余成员（含 loadExtensions=false 的普通子代理）都装配。
       // 与恢复路径 lib/rpc-manager.ts 的 compactionEnabled 必须同规则。
@@ -623,7 +658,11 @@ export function createSubagentController(
             : {}),
         },
         ...((profile.loadExtensions || profile.loadSkills || codemodeEnabled || mcpEnabled)
-          ? { resourceLoaderReloadOptions: projectTrustReloadOptions(childCwd, agentDir) }
+          // 隔离工作树没有自己的信任决定：它随其所属仓库受信（fork 既定规则）。上游的
+          // projectTrustReloadOptions 会按 childCwd 重新解析信任，工作树本身从未被信任过，
+          // 于是把父会话已判定的 projectTrusted 覆盖回 false。改按 parent.cwd（仓库根）解析，
+          // 与上面 projectTrusted 的取值口径一致；非隔离时 parent.cwd === childCwd。
+          ? { resourceLoaderReloadOptions: projectTrustReloadOptions(isolatedWorktree ? parent.cwd : childCwd, agentDir) }
           : {}),
       });
 
@@ -636,7 +675,10 @@ export function createSubagentController(
       // 内置扩展的工具名不随 profile.loadExtensions 开关（那是给文件系统扩展用的），
       // 否则 MCP / codemode 注册了也不会被激活 —— 子会话的工具白名单是静态算出来的。
       const extensionToolNames = [
-        ...memberBuiltins.toolNames,
+        // `codemode` rides the switch (line below pushes it when enabled), not the always-on
+        // built-in list — a snapshot naming it without the `codemode` switch is rejected by
+        // readSubagentSessionResources, so the writer must match that gate.
+        ...memberBuiltins.toolNames.filter((name) => name !== "codemode"),
         ...(profile.loadExtensions
           ? profile.extensionTools !== undefined
             ? selectSubagentExtensionTools(

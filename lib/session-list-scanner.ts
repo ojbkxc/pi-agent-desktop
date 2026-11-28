@@ -281,7 +281,11 @@ function foldEntry(totals: ScanTotals, entry: RawEntry): void {
 	// turn it is armed for (same tags as cc-haha). The title must read what the
 	// user actually typed, not that block — otherwise every team session shows
 	// the identical English instruction. A block-only message keeps the raw text.
-	const asked = stripAgentTeamRequest(textContent).content.trim() || textContent.trim();
+	// Only a message that actually carried the block is rewritten: any other keeps
+	// its raw text, so a whitespace-only first message stays non-empty and the
+	// row/fork id fallback still applies instead of reading as "(no messages)".
+	const stripped = stripAgentTeamRequest(textContent);
+	const asked = stripped.requested ? (stripped.content.trim() || textContent.trim()) : textContent;
 	totals.firstMessage = attachmentAwareTitle(
 		userImageDisplayText(asked, userMessageImageCount(message.content)),
 	);

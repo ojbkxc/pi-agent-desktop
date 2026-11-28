@@ -174,10 +174,6 @@ const BUILTIN_TOOLS = new Set(DEFAULT_TOOLS);
 const SNAPSHOT_BUILTIN_TOOLS = new Set([
   ...BUILTIN_TOOLS,
   "powershell",
-  // The fork writes `codemode` into activeTools whenever it is enabled for the run, and
-  // records the `codemode` switch separately; a snapshot may name the tool even when the
-  // switch field is absent (older writer), so accept it here rather than gating on the switch.
-  "codemode",
   "tool_search",
   "lsp",
   "team_message",

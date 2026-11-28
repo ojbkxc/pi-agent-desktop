@@ -168,10 +168,13 @@ test("renders completed write tool content as readable file text, including alia
   }
 });
 
-test("shows every flat argument as a row when the file-text view does not apply, and keeps JSON only for streamed input", () => {
+test("shows every flat argument as a row when the file-text view does not apply; a parseable streamed input becomes rows too", () => {
   // Upstream #1324: a write with another argument, an empty value, an oversized
   // path or a non-string path loses the file-text view, and its flat arguments
-  // become rows. Only input still streaming keeps the raw JSON.
+  // become rows. Upstream #1396: input still streaming goes through pi's own
+  // partial parse, so a stream whose parsed prefix is a flat object shows those
+  // rows (a stream that has parsed nothing, or a nested argument, keeps JSON —
+  // covered by the streaming test below).
   const rowsCases = [
     { input: { path: "notes.md", content: "text", mode: "append" }, expect: "append" },
     { input: { path: "empty.txt", content: "" }, expect: "(empty)" },
@@ -197,13 +200,16 @@ test("shows every flat argument as a row when the file-text view does not apply,
     }
   }
 
+  // Upstream #1396: a streamed write whose parsed prefix is a flat object shows
+  // those rows (here just `path`), not the raw JSON. The dedicated streaming test
+  // covers a stream that has parsed nothing yet or begun a nested argument.
   const streaming = { type: "toolCall", toolCallId: "call-write-fallback-streaming", toolName: "write", input: { path: "a.ts", content: "partial" }, rawInput: '{"path":"a.ts","content":"one\\ntwo' };
   clearExpandedToolCalls();
   setToolCallExpanded(streaming.toolCallId, true);
   try {
     const html = renderMessage({ role: "assistant", content: [streaming] });
-    assert.ok(!html.includes("<table"));
-    assert.ok(textOf(html).includes(getToolCallInputText(streaming)));
+    assert.ok(html.includes("<table"));
+    assert.ok(textOf(html).includes("path"));
   } finally {
     clearExpandedToolCalls();
   }

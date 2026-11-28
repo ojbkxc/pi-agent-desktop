@@ -4135,6 +4135,12 @@ export async function startRpcSession(
     failLock = reject;
   });
   locks.set(sessionId, lockTicket);
+  // A concurrent start shares this ticket by awaiting it, but the common single-caller
+  // path never does: a failure then rejects a promise with no handler, which Node
+  // reports as an unhandledRejection (it can crash the process, and it made the
+  // `assert.rejects(startRpcSession(...))` cases surface the error out of band). The
+  // waiters still receive the rejection — this handler only marks it observed.
+  lockTicket.catch(() => {});
   /** Only the owner of the current slot may clear it (a later start can have replaced it). */
   const releaseLock = () => {
     if (locks.get(sessionId) === lockTicket) locks.delete(sessionId);

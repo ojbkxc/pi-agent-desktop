@@ -114,43 +114,6 @@ function isSuppressibleUnmatchedGlob(pattern: string): boolean {
     || THINKING_LEVEL_SUFFIXES.has(pattern.slice(colonIndex + 1) as ThinkingLevel);
 }
 
-function exactReferenceMatches(pattern: string, models: readonly Model<Api>[]): Model<Api>[] {
-  const normalized = pattern.toLowerCase();
-  const canonical = models.filter(
-    (model) => `${model.provider}/${model.id}`.toLowerCase() === normalized,
-  );
-  if (canonical.length > 0) return canonical;
-  return models.filter((model) => model.id.toLowerCase() === normalized);
-}
-
-function assertNoAmbiguousExactPatterns(
-  patterns: readonly string[],
-  models: readonly Model<Api>[],
-): void {
-  for (const pattern of patterns) {
-    if (hasGlob(pattern)) continue;
-
-    let matches = exactReferenceMatches(pattern, models);
-    if (matches.length === 0) {
-      const colonIndex = pattern.lastIndexOf(":");
-      const suffix = colonIndex >= 0 ? pattern.slice(colonIndex + 1) : "";
-      if (THINKING_LEVEL_SUFFIXES.has(suffix as ThinkingLevel)) {
-        matches = exactReferenceMatches(pattern.slice(0, colonIndex), models);
-      }
-    }
-
-    if (matches.length > 1) {
-      const references = matches
-        .map((model) => `${model.provider}/${model.id}`)
-        .sort()
-        .join(", ");
-      throw new Error(
-        `Ambiguous enabledModels entry "${pattern}" matches multiple models: ${references}. Use provider/modelId.`,
-      );
-    }
-  }
-}
-
 /**
  * Providers whose models stay out of pi-web's listings until the user has a
  * *stored* credential for them.
@@ -225,7 +188,6 @@ export async function resolveVisibleModels(
     };
   }
 
-assertNoAmbiguousExactPatterns(cleaned, available);
   const snapshotRuntime = {
     getAvailable: async () => available,
   } as ModelRuntime;
