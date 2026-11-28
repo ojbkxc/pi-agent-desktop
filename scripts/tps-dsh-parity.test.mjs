@@ -67,10 +67,13 @@ async function turn(store, { output }) {
   store.dispatch({ type: "start" });
   store.dispatch({ type: "snapshot", message: emptyAssistant() });
   store.dispatch({ type: "delta", event: { type: "text_start", contentIndex: 0 } });
-  // 等一下，让 start 重置后的时钟与第一个 delta 拉开，decodeMs 才可能有值。
-  await sleep(40);
+  // L1（f0501a0f）给 sessionTotals 累计加了 `stepDecodeMs >= 200` 的除零保护下限，
+  // 与 finishedTurnRate 同口径：sub-200ms 的轮次既不出 finalRate，也不进累计。
+  // 注意 decodeMs 只在每个 delta 上推进（`Math.max(decodeMs, now − firstTokenAt)`），
+  // `end` 不再更新它——所以窗口必须撑在 text_start（记 firstTokenAt）与
+  // 最后一个 delta 之间，end 前的 sleep 不算进 decodeMs。
+  await sleep(250);
   store.dispatch({ type: "delta", event: { type: "text_delta", contentIndex: 0, delta: "x" } });
-  await sleep(40);
   store.dispatch({
     type: "end",
     message: { role: "assistant", content: [{ type: "text", text: "x" }], model: "m", provider: "p", usage: usage(output) },
