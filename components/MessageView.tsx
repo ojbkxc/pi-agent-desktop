@@ -198,6 +198,10 @@ interface Props {
   message: AgentMessage;
   isStreaming?: boolean;
   toolResults?: Map<string, ToolResultMessage>;
+  /** All toolCallIds present in committed assistant messages. An orphaned
+   * tool_result (no matching toolCall — e.g. a late arrival after abort) has no
+   * inline home and renders its own standalone card instead of vanishing. */
+  knownToolCallIds?: Set<string>;
   modelNames?: Record<string, string>;
   cwd?: string;
   onOpenFile?: (filePath: string, page?: number) => void;
@@ -296,7 +300,7 @@ function haveSameRelevantToolResults(
   return true;
 }
 
-export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, onOpenSession, entryId, searchBlock, onFork, forking, onEditContent, editDisabled, onCancelEdit, isEditing, showTimestamp, prevTimestamp, sessionId, writtenFiles, turnDurationMs, onCompact, isCompacting, compactError }: Props) {
+export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, knownToolCallIds, modelNames, cwd, onOpenFile, onOpenSession, entryId, searchBlock, onFork, forking, onEditContent, editDisabled, onCancelEdit, isEditing, showTimestamp, prevTimestamp, sessionId, writtenFiles, turnDurationMs, onCompact, isCompacting, compactError }: Props) {
   if (message.role === "user") {
     return <UserMessageView message={message as UserMessage} cwd={cwd} onOpenFile={onOpenFile} entryId={entryId} onFork={onFork} forking={forking} onEditContent={onEditContent} editDisabled={editDisabled} onCancelEdit={onCancelEdit} isEditing={isEditing} />;
   }
@@ -304,7 +308,14 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
     return <AssistantMessageView message={message as AssistantMessage} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} onOpenSession={onOpenSession} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} sessionId={sessionId} entryId={entryId} searchBlock={searchBlock} writtenFiles={writtenFiles} turnDurationMs={turnDurationMs} onCompact={onCompact} isCompacting={isCompacting} compactError={compactError} />;
   }
   if (message.role === "toolResult") {
-    // Rendered inline under its toolCall — skip standalone rendering if paired
+    // Paired tool_results render inline under their toolCall — skip standalone
+    // rendering. An orphaned result (no assistant toolCall references its
+    // toolCallId, e.g. a late arrival after abort) has no inline home, so render
+    // a standalone collapsed card instead of vanishing (ISSUE-13).
+    const result = message as ToolResultMessage;
+    if (knownToolCallIds && result.toolCallId && !knownToolCallIds.has(result.toolCallId)) {
+      return <StandaloneToolResultCard message={result} />;
+    }
     return null;
   }
   if (message.role === "custom") {
@@ -324,6 +335,7 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
   return prev.message === next.message
     && prev.isStreaming === next.isStreaming
     && haveSameRelevantToolResults(prev.message, prev.toolResults, next.toolResults)
+    && prev.knownToolCallIds === next.knownToolCallIds
     && prev.modelNames === next.modelNames
     && prev.cwd === next.cwd
     && prev.onOpenFile === next.onOpenFile
@@ -2005,6 +2017,131 @@ function PairedResult({ text, isEmpty, isError }: {
       >
         {isEmpty ? t("i18n.noOutput") : text}
       </pre>
+    </div>
+  );
+}
+
+/**
+ * A tool_result that arrived without a matching tool_call (orphaned — e.g. a
+ * late arrival after an abort). Renders its own collapsed card, mirroring
+ * cc-haha's standalone ToolResultBlock: a header row with the tool name (or a
+ * generic label) and a failed badge on error, expandable to show the result
+ * text, plus any returned images. (ISSUE-13)
+ */
+function StandaloneToolResultCard({ message }: { message: ToolResultMessage }) {
+  const { t } = useI18n();
+  const [expanded, setExpanded] = useState(false);
+  const isError = message.isError ?? false;
+  const resultText = message.content
+    .filter((b): b is TextContent => b.type === "text")
+    .map((b) => b.text)
+    .join("\n");
+  const resultImages = getMessageImages(message.content);
+  const trimmed = resultText.trim();
+  const isEmpty = trimmed === "" || trimmed === t("i18n.noOutput");
+  const headerLabel = message.toolName
+    ? t("chat.toolResultStandalone", { toolName: message.toolName })
+    : t("chat.toolResultStandaloneGeneric");
+
+  return (
+    <div
+      data-tool-result-standalone={isError ? "true" : undefined}
+      style={{
+        borderRadius: "var(--radius-md)",
+        overflow: "hidden",
+        fontSize: "var(--fs-caption)",
+        border: isError ? "1px solid rgba(248,113,113,0.45)" : "1px solid var(--border)",
+        background: isError ? "rgba(248,113,113,0.05)" : "transparent",
+        marginBottom: 8,
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setExpanded((prev) => !prev)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 7,
+          width: "100%",
+          padding: "6px 10px",
+          background: "none",
+          border: "none",
+          color: "var(--text-muted)",
+          cursor: "pointer",
+          fontSize: "var(--fs-caption)",
+          textAlign: "left",
+        }}
+      >
+        <span
+          style={{
+            color: isError ? "var(--danger)" : "var(--text-muted)",
+            fontFamily: "var(--font-mono)",
+            fontWeight: "var(--fw-semibold)",
+            fontSize: "var(--fs-micro)",
+            flexShrink: 0,
+          }}
+        >
+          {headerLabel}
+        </span>
+        {isError && (
+          <span
+            style={{
+              flexShrink: 0,
+              fontSize: "var(--fs-micro)",
+              color: "var(--danger)",
+              border: "var(--hairline) solid rgba(248,113,113,0.4)",
+              borderRadius: "var(--radius-xs)",
+              padding: "1px 5px",
+            }}
+          >
+            {t("chat.toolResultStandaloneError")}
+          </span>
+        )}
+        {!isEmpty && (
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 10 10"
+            fill="none"
+            stroke="var(--text-dim)"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ marginLeft: "auto", flexShrink: 0, transform: expanded ? "rotate(180deg)" : "none", transition: "transform var(--dur-base) var(--ease-native)" }}
+          >
+            <polyline points="2 3.5 5 6.5 8 3.5" />
+          </svg>
+        )}
+      </button>
+
+      {/* Result images — always visible, independent of the collapsed details */}
+      {resultImages.length > 0 && <ResultImages images={resultImages} isError={isError} />}
+
+      {/* Expanded: the result text */}
+      {expanded && !isEmpty && (
+        <div
+          style={{
+            borderTop: `1px solid ${isError ? "rgba(248,113,113,0.3)" : "var(--border)"}`,
+            background: isError ? "rgba(248,113,113,0.04)" : "var(--bg-subtle)",
+          }}
+        >
+          <pre
+            style={{
+              margin: 0,
+              padding: "8px 10px",
+              color: isError ? "var(--danger)" : "var(--text-muted)",
+              fontSize: "calc(12px + var(--chat-font-size-offset, 0px))",
+              lineHeight: 1.5,
+              overflow: "auto",
+              maxHeight: 400,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-all",
+            }}
+          >
+            {resultText}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }

@@ -998,6 +998,23 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
     }
     return map;
   }, [activeToolResults, messages]);
+  // ISSUE-13: every toolCallId that a committed assistant message carries. A
+  // tool_result whose toolCallId is absent here is orphaned (no inline home —
+  // e.g. a late arrival after abort) and MessageView renders it standalone.
+  const knownToolCallIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const msg of messages) {
+      if (msg.role !== "assistant") continue;
+      const content = (msg as { content?: unknown }).content;
+      if (!Array.isArray(content)) continue;
+      for (const block of content) {
+        if ((block as { type?: string }).type === "toolCall" && (block as { toolCallId?: string }).toolCallId) {
+          set.add((block as { toolCallId: string }).toolCallId);
+        }
+      }
+    }
+    return set;
+  }, [messages]);
   const sessionHistory = useMemo(() => buildComposerHistory(messages), [messages]);
   // ISSUE-11：↑/↓ 历史来源从「仅当前会话消息」扩展为「跨会话历史 hook + 当前会话」。
   // 新会话（无 sessionId）按项目拉取同 project 其他会话的历史，按 ↑ 即可召回。
@@ -1516,7 +1533,14 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
               {t(chatOnly ? "chat.dropImagesHint" : "chat.dropFilesHint")}
             </div>
             <div style={{ maxWidth: 360, color: "var(--text-muted)", fontSize: "var(--fs-caption)", lineHeight: 1.4 }}>
-              {t(chatOnly ? "chat.dropImagesDetail" : "chat.dropFilesDetail")}
+              {(() => {
+                // ISSUE-17: show how many attachments are already pending so the
+                // user knows the drop will add to, not replace, them.
+                const count = chatInputRef?.current?.getAttachmentCount() ?? 0;
+                return count > 0
+                  ? t("chat.dropAttachedCount", { count })
+                  : t(chatOnly ? "chat.dropImagesDetail" : "chat.dropFilesDetail");
+              })()}
             </div>
           </div>
         </div>
@@ -1645,6 +1669,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
                     key={`${keyPrefix}-view-${messageKey}`}
                     message={msg}
                     toolResults={toolResultsMap}
+                    knownToolCallIds={knownToolCallIds}
                     modelNames={modelNames}
                     cwd={messageCwd}
                     onOpenFile={openFile}

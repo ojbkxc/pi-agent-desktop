@@ -231,6 +231,9 @@ export interface ChatInputHandle {
   replaceMessage: (message: UserMessage) => boolean;
   prependText: (text: string) => void;
   addImages: (files: File[]) => void;
+  /** ISSUE-17: current number of attached images + text files, for the drop
+   * overlay to show how many are already attached. */
+  getAttachmentCount: () => number;
   /** Chats only: read text files into chips that travel inside the next message. */
   addTextFiles: (files: File[]) => Promise<ChatAttachmentRejection[]>;
   focus: () => void;
@@ -1364,6 +1367,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     },
     addImages(files: File[]) {
       processImageFiles(files);
+    },
+    getAttachmentCount() {
+      return attachedImagesRef.current.length + attachedFilesRef.current.length;
     },
     async addTextFiles(files: File[]) {
       // Reading a Word file asks the server, so the user may have moved to another chat by
