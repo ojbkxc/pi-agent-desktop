@@ -92,9 +92,17 @@ export function proxy(request: NextRequest) {
       });
     }
     if (!isApiRequest) {
-      return new NextResponse("Untrusted request", { status: 403 });
+      // cc-haha 评审遗留 #3：403 不只由密码缺失触发——公网访问未配置、隧道
+      // 离线、域名绑定未生效、请求来自未信任的 Host 都会走到这里。文案覆盖
+      // 多种可能原因，指引用户到正确的设置页排查，而不是只提密码。
+      return new NextResponse(
+        "Access denied: this address is not trusted by this server. If you expected to reach the public site, check the Cloudflare tunnel status and hostname binding in Settings › General › Server.",
+        { status: 403 },
+      );
     }
-    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+    return NextResponse.json({
+      error: "Access denied: this API request is not trusted by this server. If you expected to call the API remotely, check the Cloudflare tunnel status and hostname binding in Settings › General › Server.",
+    }, { status: 403 });
   }
 
   if (!isWebPasswordEnabled()) {

@@ -12,6 +12,15 @@
  * **脱敏是硬要求**：这些事件会进日志与前端。Tunnel Token 是 base64 的 JSON
  * 凭据，代理 URL 里可能带口令，错误对象可能把两者都塞进 message —— 所有字符串
  * 先过 `sanitizeDiagnosticText` 再落。
+ *
+ * cc-haha 评审遗留 #2（诊断体系评估结论）：pi 的公网访问模块**已具备完整诊断
+ * 能力**，无需补端点或展示。三层齐备：
+ *   - 事件层：本文件的环形缓冲 + 脱敏，覆盖 start/stop 全流程的 stage/outcome；
+ *   - 端点层：`POST /api/public-access/diagnose`（app/api/public-access/diagnose/
+ *     route.ts）跑五项只读检查（binary / proxy / token / dns / origin）；
+ *   - 展示层：ServerSection 的「连接诊断」折叠面板（事件时间线）+「检查配置」
+ *     按钮（检查结果列表），均容忍服务端未返回字段时不渲染。
+ * 与 cc-haha 的 publicAccessDiagnostics.ts 同源移植，能力对齐，无缺口。
  */
 
 export type PublicAccessDiagnosticOutcome = "started" | "succeeded" | "failed" | "cancelled" | "retrying";
