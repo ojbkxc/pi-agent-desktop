@@ -149,6 +149,8 @@ export interface StartSubagentRequest {
   description: string;
   runInBackground?: boolean;
   model?: string;
+  /** 是否继承父会话的活跃对话上下文（缺省不继承，保持既有行为）。 */
+  inheritContext?: boolean;
   isolation?: "worktree";
   /**
    * 能力覆盖：缺省时用 profile 的值（保持既有行为）。团队派发的成员用它们把能力开到最大

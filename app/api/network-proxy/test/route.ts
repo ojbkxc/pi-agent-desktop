@@ -28,6 +28,6 @@ export async function POST(req: Request) {
   const raw = (body as { url?: unknown } | null)?.url;
   if (typeof raw !== "string") return NextResponse.json({ error: "url must be a string" }, { status: 400 });
   const normalized = normalizeProxyUrl(raw);
-  if (!normalized.ok) return NextResponse.json({ error: normalized.error }, { status: 400 });
-  return NextResponse.json(await testNetworkProxy(normalized.url), { headers: { "Cache-Control": "no-store" } });
+  if (!normalized) return NextResponse.json({ error: "Invalid proxy URL" }, { status: 400 });
+  return NextResponse.json(await testNetworkProxy(normalized), { headers: { "Cache-Control": "no-store" } });
 }
