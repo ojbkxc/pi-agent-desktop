@@ -8,6 +8,8 @@ import { normalizeCustomPanelLines } from "@/lib/ansi";
 import { asBracketedPaste, toTerminalKeyData } from "@/lib/terminal-input";
 import { countToolCallBlocks, getAssistantErrorMessage, getDisplayableAssistantBlocks, hasAssistantAnswer, isAssistantTruncated, isMessageGroupAnchor, splitFinalAssistantBlocks } from "@/lib/message-display";
 import { buildComposerHistory } from "@/lib/composer-history";
+import { appendPromptHistory } from "@/lib/prompt-history-api";
+import { usePromptHistory } from "@/hooks/usePromptHistory";
 import { formatToolSummary, summarizeToolCalls, type ToolSummaryInput, type ToolSummarySegment } from "@/lib/tool-groups";
 import { ConversationFind } from "./ConversationFind";
 import { extractTurnWrittenFiles, type WrittenFile } from "@/lib/turn-written-files";
@@ -996,7 +998,25 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
     }
     return map;
   }, [activeToolResults, messages]);
-  const inputHistory = useMemo(() => buildComposerHistory(messages), [messages]);
+  const sessionHistory = useMemo(() => buildComposerHistory(messages), [messages]);
+  // ISSUE-11：↑/↓ 历史来源从「仅当前会话消息」扩展为「跨会话历史 hook + 当前会话」。
+  // 新会话（无 sessionId）按项目拉取同 project 其他会话的历史，按 ↑ 即可召回。
+  const promptHistoryProjectPath = chatOnly ? undefined : session?.projectRoot ?? session?.cwd ?? newSessionCwd;
+  const inputHistory = usePromptHistory({
+    sessionId: session?.id ?? null,
+    projectPath: promptHistoryProjectPath,
+    projectRoot: promptHistoryProjectPath,
+    sessionEntries: sessionHistory,
+    includeProjectHistory: !chatOnly && session?.relation?.kind !== "subagent",
+  });
+  // ISSUE-11：提交即落盘一条跨会话 prompt 历史（fire-and-forget，不阻塞发送）。
+  const handlePromptSubmitted = useCallback((text: string) => {
+    void appendPromptHistory({
+      display: text,
+      ...(promptHistoryProjectPath ? { project: promptHistoryProjectPath } : {}),
+      ...(session?.id ? { sessionId: session.id } : {}),
+    });
+  }, [promptHistoryProjectPath, session?.id]);
 
   const isEmptyNew = isNew && !loading && !error && messages.length === 0 && !isStreaming && !sessionBusy;
   useScrollbarVisibility(scrollContainerRef, Boolean(session?.id) || !isEmptyNew);
@@ -1370,6 +1390,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
       queuedMessages={queuedMessages}
       onQueuedMessageAction={handleQueuedMessageAction}
       inputHistory={inputHistory}
+      onPromptSubmitted={handlePromptSubmitted}
       onRecallQueue={handleRecallQueue}
       slashCommands={slashCommands}
       slashCommandsLoading={slashCommandsLoading}

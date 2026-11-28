@@ -164,6 +164,12 @@ interface Props {
   onQueuedMessageAction?: (id: string, action: ComposerQueueAction) => Promise<void>;
   /** Previous prompts (text only) — the composer restores their images too. */
   inputHistory?: ComposerHistoryEntry[];
+  /**
+   * Fired when the user submits a prompt (the typed display text, before
+   * session-mention resolution) so the caller can persist it to cross-session
+   * prompt history (ISSUE-11). Not fired for handled built-in commands.
+   */
+  onPromptSubmitted?: (text: string) => void;
   onRecallQueue?: () => void;
   slashCommands?: SlashCommandInfo[];
   slashCommandsLoading?: boolean;
@@ -925,7 +931,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   streamingStore,
   thinkingLevel, isAutoThinkingSelection = false, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   savedDefaultThinkingLevel, onSetDefaultThinkingLevel,
-  retryInfo, onAbortRetry, routedModel, branchSummaryPending = false, onAbortBranchSummary, automation, onSetAutomation, queuedMessages, onQueuedMessageAction, inputHistory = [], onRecallQueue,
+  retryInfo, onAbortRetry, routedModel, branchSummaryPending = false, onAbortBranchSummary, automation, onSetAutomation, queuedMessages, onQueuedMessageAction, inputHistory = [], onPromptSubmitted, onRecallQueue,
   slashCommands, slashCommandsLoading, onLoadSlashCommands,
   extensionUiOpen = false,
   onBuiltinCommand,
@@ -1699,6 +1705,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       // 界面渲染时用 stripAgentTeamRequest 剥掉（见 lib/agent-team-request.ts）。
       const messageForModel = agentTeamsEnabled ? withAgentTeamRequest(resolvedMessage) : resolvedMessage;
       onSend(messageForModel, images);
+      // ISSUE-11：提交即记一条跨会话 prompt 历史（用户输入的展示文本，未解析提及）。
+      if (msg) onPromptSubmitted?.(msg);
       // 发出去即复位（对齐 cc-haha 发送调用之后的 `disarmAgentTeam()`）：团队只作用于这一条，
       // 后续闲聊不再累积建团指令。命令类消息不被包装，也就不消耗这次勾选。
       if (shouldDisarmAgentTeam(agentTeamsEnabled, messageForModel)) disarmAgentTeam(teamScope);
@@ -1717,7 +1725,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         });
       }
     });
-  }, [value, workspaceUnavailable, isStreaming, runBuiltinCommand, onSend, clearInput, onAudioUnlock, agentTeamsEnabled, teamScope, submitResolvedMessage]);
+  }, [value, workspaceUnavailable, isStreaming, runBuiltinCommand, onSend, onPromptSubmitted, clearInput, onAudioUnlock, agentTeamsEnabled, teamScope, submitResolvedMessage]);
 
   const slashQuery = !compact && value.startsWith("/") && !/\s/.test(value.slice(1))
     ? value.slice(1).toLowerCase()
@@ -2040,6 +2048,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       }
       clearInput();
       restoreTypedDuringSend();
+      // ISSUE-11：队列发送（steer/followup）同样记一条跨会话 prompt 历史。
+      if (msg) onPromptSubmitted?.(msg);
       if (mode === "steer" && onSteer) {
         onSteer(resolvedMessage, submittedImages);
       } else if (mode === "followup" && onFollowUp) {
@@ -2067,7 +2077,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       return;
     }
     void queue();
-  }, [value, onBuiltinCommand, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, runBuiltinCommand, submitResolvedMessage]);
+  }, [value, onBuiltinCommand, onPromptWithStreamingBehavior, onSteer, onFollowUp, onPromptSubmitted, clearInput, onAudioUnlock, runBuiltinCommand, submitResolvedMessage]);
 
   const getNextSlashIndex = useCallback((direction: "up" | "down" | "left" | "right") => {
     const lastIndex = displayedSlashCommands.length - 1;

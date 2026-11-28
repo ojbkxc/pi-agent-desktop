@@ -785,6 +785,7 @@ test("while a run streams, a bare /mcp opens Settings or is queued as before", a
       onPromptWithStreamingBehavior: (message, behavior, attached) => calls.prompts.push([message, behavior, attached?.length ?? 0]),
       onSteer() { throw new Error("slash messages are prompts"); },
       onFollowUp: (message, attached) => calls.prompts.push([message, "followUp", attached?.length ?? 0]),
+      onPromptSubmitted() {},
     });
     sendQueued(mode);
     await new Promise((resolve) => setImmediate(resolve));
@@ -833,6 +834,7 @@ test("while a run streams, a streamable built-in the builtin layer rejects is qu
       onPromptWithStreamingBehavior: (message, behavior, attached) => calls.prompts.push([message, behavior, attached?.length ?? 0]),
       onSteer() { throw new Error("slash messages are prompts"); },
       onFollowUp: (message, attached) => calls.prompts.push([message, "followUp", attached?.length ?? 0]),
+      onPromptSubmitted() {},
     });
     sendQueued(mode);
     await new Promise((resolve) => setImmediate(resolve));
@@ -877,6 +879,7 @@ test("handleSend lets a handled /mcp through while streaming and sends an unowne
         submit(message, images.length ? images : undefined);
       },
       onSend: (message) => calls.sent.push(message),
+      onPromptSubmitted() {},
       // 本用例只关心 /mcp 的路由，Agent Team armed 显式关掉，让发送的就是原文。
       agentTeamsEnabled: false,
       withAgentTeamRequest,
@@ -1135,6 +1138,7 @@ test("handleSend sends exactly once and routes builtin commands through the pend
       resolveSessionReferences: async (msg) => resolved ?? msg,
       sessionMentionTargetsRef: { current: [] },
       onSend(message, images) { sends += 1; handler.sent = { message, images }; },
+      onPromptSubmitted() {},
       clearInput() { cleared += 1; },
       // 单飞闸门桩（上游 c9867eae）：真实实现解析 + 附件定序后交给 submit；本用例解析到闭包里的 resolved。
       async submitResolvedMessage(message, images, submit) {
@@ -1191,6 +1195,46 @@ test("handleSend sends exactly once and routes builtin commands through the pend
   const command = await run({ value: "/compact", agentTeamsEnabled: true, builtinHandled: false });
   assert.equal(command.sent.message, "/compact");
   assert.equal(command.disarms, 0, "commands leave the arming for the next real prompt");
+});
+
+test("ISSUE-11: handleSend records the typed prompt via onPromptSubmitted", async () => {
+  const source = ts.createSourceFile("ChatInput.tsx", readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  function findHandler(node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === "handleSend") {
+      return node.initializer.arguments[0];
+    }
+    return ts.forEachChild(node, findHandler);
+  }
+  const script = new Script(ts.transpileModule(findHandler(source).getText(source), {
+    compilerOptions: { target: ts.ScriptTarget.ES2020 },
+  }).outputText);
+
+  const submitted = [];
+  const handler = script.runInNewContext({
+    value: "  recall me  ", attachedImages: [], isStreaming: false, workspaceUnavailable: null,
+    attachedFilesRef: { current: [] }, composeMessageWithAttachedFiles,
+    attachedImagesRef: { current: [] },
+    pendingTypedSuffix,
+    valueRef: { current: "  recall me  " },
+    onAudioUnlock() {},
+    setBuiltinCommandTimeout() {},
+    runBuiltinCommand: async () => "unhandled",
+    resolveSessionReferences: async (msg) => msg,
+    sessionMentionTargetsRef: { current: new Map() },
+    onSend(message) { handler.sent = message; },
+    onPromptSubmitted(text) { submitted.push(text); },
+    clearInput() {},
+    async submitResolvedMessage(message, images, submit) { submit(message, images.length ? images : undefined); },
+    agentTeamsEnabled: false,
+    teamScope: "session-test",
+    withAgentTeamRequest,
+    shouldDisarmAgentTeam,
+    disarmAgentTeam() {},
+  });
+
+  await handler();
+  assert.equal(handler.sent, "recall me");
+  assert.deepEqual(submitted, ["recall me"], "records the trimmed typed text, not the resolved message");
 });
 
 /**

@@ -65,3 +65,60 @@ export function buildComposerHistory(messages: AgentMessage[], limit = MAX_HISTO
   }
   return history.reverse();
 }
+
+/**
+ * Merge the current session's transcript-derived entries with cross-session
+ * server history into the single newest-first list the composer's ↑/↓ walks
+ * (ISSUE-11).
+ *
+ * Ordering mirrors cc-haha's `mergePromptHistoryEntries`: current-session entries
+ * (transcript, with their images) come first, then persisted current-session
+ * entries not already covered by the transcript, then other sessions in the same
+ * project. Duplicates collapse on trimmed text, so a prompt recalled from the
+ * server never shadows the richer transcript entry (which carries its images).
+ */
+export function mergeComposerHistory(params: {
+  sessionEntries: readonly ComposerHistoryEntry[];
+  serverEntries: readonly { display: string; sessionId?: string }[];
+  sessionId?: string | null;
+  includeProjectHistory?: boolean;
+  limit?: number;
+}): ComposerHistoryEntry[] {
+  const limit = params.limit ?? MAX_HISTORY_ENTRIES;
+  const sessionId = params.sessionId?.trim() || null;
+  const result: ComposerHistoryEntry[] = [];
+  const seen = new Set<string>();
+
+  const push = (entry: ComposerHistoryEntry): boolean => {
+    if (result.length >= limit) return false;
+    const text = entry.text.trim();
+    if (!text) return false;
+    if (seen.has(text)) return false;
+    seen.add(text);
+    result.push({ text, images: entry.images });
+    return true;
+  };
+
+  // Phase 1: current-session transcript entries (newest-first, images kept).
+  for (const entry of params.sessionEntries) push(entry);
+
+  // Phase 2: persisted current-session entries the transcript did not cover
+  // (e.g. older turns beyond the transcript window, or an append that landed
+  // after the transcript was built).
+  if (sessionId) {
+    for (const item of params.serverEntries) {
+      if (item.sessionId !== sessionId) continue;
+      push({ text: item.display, images: [] });
+    }
+  }
+
+  // Phase 3: other sessions in the same project.
+  if (params.includeProjectHistory) {
+    for (const item of params.serverEntries) {
+      if (sessionId && item.sessionId === sessionId) continue;
+      push({ text: item.display, images: [] });
+    }
+  }
+
+  return result;
+}
