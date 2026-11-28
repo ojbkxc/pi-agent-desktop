@@ -80,7 +80,16 @@ export interface PublicAccessView extends PublicAccessStatus {
   enabled: boolean;
 }
 
-/** waitForRoute 的结论：拿到入口 origin / 固定域名绑定超时（null = 已被取代）。 */
+/**
+ * waitForRoute 的结论：拿到入口 origin / 固定域名绑定超时 / null（已被取代）。
+ *
+ * `null` 的语义：waitForRoute 在轮询期间若 `generation` 被更新（用户 stop、
+ * configure 或 restore 竞争），说明本次尝试已过期，返回 null 让 connect 走
+ * 「已取代」分支直接返回当前状态。这是并发不变量的收口点——**不是**「未验证」
+ * 或「验证失败」：验证（verifyWithRetries）是后续独立步骤，返回布尔值，
+ * 不进状态字段（cc-haha 评审遗留 #1：旧设计的 verified=null 字段已被取代，
+ * 验证结论由 diagnostics 的 verifying 事件承载，状态里不再保留 verified 字段）。
+ */
 type RouteDiscovery = { status: "origin"; origin: string } | { status: "timeout" };
 
 export type PublicAccessManagerOptions = {
@@ -567,6 +576,9 @@ export class PublicAccessManager {
       this.status.phase = "checking";
       const verifyStartedAt = Date.now();
       write({ stage: "verifying", outcome: "started" });
+      // cc-haha 评审遗留 #1：旧设计在状态里放 verified 字段（可为 null），
+      // 现已被取代——验证结论只作为局部布尔值消费，不写回状态；失败时由
+      // diagnostics 的 verifying/failed 事件承载，设置页据此展示「卡在哪一步」。
       const verified = await this.verifyWithRetries(publicUrl, generation, controller.signal);
       if (!verified) {
         write({ stage: "verifying", outcome: "failed", reason: "gateway_unreachable", durationMs: Date.now() - verifyStartedAt });
