@@ -133,7 +133,12 @@ try{
   await page.getByRole('button',{name:/更换模型|Change model/}).click();await assertRowGaps(page.getByRole('listbox').locator('.app-option-row'),'actual model choices');
   await assertChoiceGeometry(page.getByRole('listbox'),page.getByRole('listbox').locator('.app-option-row'),'actual models');await page.keyboard.press('Escape');
   const input=page.locator('textarea');await input.fill('');await input.press('ArrowUp');
-  const history=page.locator('.app-suggestion-menu');await history.waitFor();await assertRowGaps(history.locator('button'),'actual input history');await input.press('Escape');
+  // ISSUE-5：↑ 直接把最近一条历史填入输入框（不再弹 .app-suggestion-menu 历史菜单）。
+  // 断言 textarea 被历史直填，再用 ↓ 越过最新一条恢复空草稿。
+  await page.waitForFunction(()=>{const el=document.querySelector('textarea');return el&&el.value.length>0;});
+  assert.equal(await input.inputValue(),'First prompt','↑ fills the most recent history entry');
+  await input.press('ArrowDown');await page.waitForFunction(()=>{const el=document.querySelector('textarea');return el&&el.value==='';});
+  assert.equal(await input.inputValue(),'','↓ past the most recent restores the empty draft');
   await input.fill('/');const commands=page.locator('.app-suggestion-menu .app-menu-items');await commands.waitFor();
   const grid=await commands.evaluate(el=>{const s=getComputedStyle(el);return {row:s.rowGap,column:s.columnGap,rows:[...el.children].map(row=>{const r=row.getBoundingClientRect();return {top:r.top,bottom:r.bottom,margin:getComputedStyle(row).marginTop};})};});
   assert.equal(grid.row,'4px');assert.equal(grid.column,'4px');assert.ok(grid.rows.every(row=>row.margin==='0px'));
