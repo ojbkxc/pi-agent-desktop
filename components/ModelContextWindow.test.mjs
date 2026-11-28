@@ -9,7 +9,7 @@ const { ModelContextWindow } = await jiti.import("./ModelContextWindow.tsx");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 
 function render(value) {
-  return renderToStaticMarkup(createElement(I18nProvider, null,
+  return renderToStaticMarkup(createElement(I18nProvider, { initialLocale: "en" },
     createElement(ModelContextWindow, { modelName: "GPT Example", effective: 272000, value, onChange() {} })));
 }
 

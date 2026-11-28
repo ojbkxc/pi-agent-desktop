@@ -2,9 +2,18 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { NextRequest } from "next/server.js";
 import { createJiti } from "jiti";
+
+// The route's watch block, asserted structurally by the "every server-side close path"
+// test below; the integration tests drive the live GET handler instead.
+const routeSource = await readFile(new URL("./[...path]/route.ts", import.meta.url), "utf8");
+const watchStart = routeSource.indexOf('if (type === "watch")');
+const watchEnd = routeSource.indexOf('// type === "list"', watchStart);
+assert.notEqual(watchStart, -1, "watch route not found");
+const watchBlock = routeSource.slice(watchStart, watchEnd === -1 ? undefined : watchEnd);
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-watch-route-")));
 process.env.PI_CODING_AGENT_DIR = path.join(root, "agent");
@@ -88,7 +97,9 @@ test("every server-side close path stops the heartbeat and the watcher", () => {
   // (watcher error, fs.watch failure) would tick forever; unref only keeps it
   // from blocking process exit. Both handlers end every path via cleanup(),
   // which only stops timers and closes the watcher — never enqueues.
-  assert.equal((watchBlock.match(/cleanup\(\);\s*try \{ controller\.close\(\);/g) ?? []).length, 4);
+  // Four close paths, each preceded by cleanup(); one also releases the watch count
+  // (releaseWatch?.()) between them, so match cleanup() up to a short gap before close().
+  assert.equal((watchBlock.match(/cleanup\(\);(?:[^{}]*?)try \{ controller\.close\(\);/g) ?? []).length, 4);
   assert.equal((watchBlock.match(/cancel\(\) \{\s*cleanup\(\);/g) ?? []).length, 2);
   assert.doesNotMatch(watchBlock, /controller\.close\(\);\s*\n\s*cleanup\(\);/);
   assert.match(watchBlock, /const cleanup = \(\) => \{\s*if \(heartbeat\) clearInterval\(heartbeat\);/);

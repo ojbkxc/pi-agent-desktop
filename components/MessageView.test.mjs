@@ -186,7 +186,7 @@ test("shows every flat argument as a row when the file-text view does not apply,
   for (const [index, fields] of rowsCases.entries()) {
     const block = { type: "toolCall", toolCallId: `call-write-fallback-${index}`, toolName: "write", ...fields };
     clearExpandedToolCalls();
-    setToolCallExpanded(id, true);
+    setToolCallExpanded(block.toolCallId, true);
     try {
       const html = renderMessage({ role: "assistant", content: [block] });
       assert.ok(html.includes("<table"), String(index));

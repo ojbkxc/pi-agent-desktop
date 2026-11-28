@@ -165,7 +165,35 @@ const DEFAULT_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 const BUILTIN_TOOLS = new Set(DEFAULT_TOOLS);
 // `powershell` is platform-added by resolveShellTools and therefore is absent from
 // profile parsing's portable allow-list, but valid historical snapshots may contain it.
-const SNAPSHOT_BUILTIN_TOOLS = new Set([...BUILTIN_TOOLS, "powershell"]);
+// The fork writes `memberBuiltins.toolNames` into the snapshot unconditionally (see
+// lib/subagent-runtime.ts), so the built-in extension tools are valid snapshot entries
+// regardless of `loadExtensions` (which only gates filesystem extensions). `codemode` keeps
+// its own switch check below; `mcp__*` is matched by prefix; these mirror
+// MEMBER_TEAM_TOOL_NAMES + tool_search/lsp in lib/builtin-extensions.ts. Kept inline rather
+// than imported because builtin-extensions → mcp-read-only-policy → subagents would cycle.
+const SNAPSHOT_BUILTIN_TOOLS = new Set([
+  ...BUILTIN_TOOLS,
+  "powershell",
+  // The fork writes `codemode` into activeTools whenever it is enabled for the run, and
+  // records the `codemode` switch separately; a snapshot may name the tool even when the
+  // switch field is absent (older writer), so accept it here rather than gating on the switch.
+  "codemode",
+  "tool_search",
+  "lsp",
+  "team_message",
+  "team_status",
+  "team_wait",
+  "team_result",
+  "team_accept",
+  "team_cancel",
+  "team_list",
+  "team_ticket",
+  "team_permission_update",
+]);
+/** MCP tools register as `mcp__<server>__<tool>`; the fork's snapshot may name the bare `mcp__*`. */
+function isSnapshotMcpTool(item: string): boolean {
+  return item === "mcp__*" || item.startsWith("mcp__");
+}
 const SUBAGENT_CONTROL_TOOLS = new Set<string>(SUBAGENT_CONTROL_TOOL_NAMES);
 const TEAM_LIFECYCLE_TOOLS = new Set<string>(TEAM_LIFECYCLE_TOOL_NAMES);
 const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -724,7 +752,7 @@ export function readSubagentSessionResources(
       typeof item === "string"
       && item.length > 0
       && !SUBAGENT_CONTROL_TOOLS.has(item)
-      && ((item === "codemode" && codemode) || SNAPSHOT_BUILTIN_TOOLS.has(item) || loadExtensions)
+      && ((item === "codemode" && codemode) || SNAPSHOT_BUILTIN_TOOLS.has(item) || isSnapshotMcpTool(item) || loadExtensions)
     )
   ) {
     return {
