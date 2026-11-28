@@ -73,6 +73,9 @@ import type { ChatAccessControls } from "@/hooks/useChatAccess";
 import { ComposerProjectChip, getProjectLabel } from "./ComposerProjectChip";
 import { ComposerOutbox, type ComposerQueueAction } from "./ComposerOutbox";
 import { useSessionMentionPalette } from "@/hooks/useSessionMentionPalette";
+import { usePromptOptimize } from "@/hooks/usePromptOptimize";
+import { PromptOptimizeButton } from "./PromptOptimizeButton";
+import { isOptimizablePrompt } from "@/lib/prompt-optimize";
 
 
 export interface AttachedImage {
@@ -210,6 +213,8 @@ interface Props {
   sessionStats?: SessionStatsInfo | null;
   /** Open the top-bar session-stats panel when the usage ring is clicked */
   onSessionStatsPanelOpen?: () => void;
+  /** Real session id (null for a new session with no id yet); enables prompt optimization. */
+  sessionId?: string | null;
 }
 
 export interface ChatInputHandle {
@@ -944,6 +949,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   onSessionStatsPanelOpen,
   compactionLimits,
   compact = false,
+  sessionId = null,
 }: Props, ref) {
   const { t } = useI18n();
   const { fontSize } = useChatAppearance();
@@ -1037,6 +1043,12 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   // 它的值现在已经是「这一条消息是否带团队」，不再是旧的「全局开关」。
   const agentTeamsEnabled = teamEnabled && armed;
   const [value, setValue] = useState(() => (draftKey ? getDraft(draftKey)?.value ?? "" : ""));
+  const promptOptimize = usePromptOptimize({
+    sessionId,
+    disabled: !sessionId || isStreaming || Boolean(workspaceUnavailable),
+    getDraft: () => ({ text: value }),
+    applyDraft: (text: string) => setValue(text),
+  });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [automationDropdownOpen, setAutomationDropdownOpen] = useState(false);
   const [toolDropdownOpen, setToolDropdownOpen] = useState(false);
@@ -3159,6 +3171,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
             onChange={(e) => {
               valueRef.current = e.target.value;
               setValue(e.target.value);
+              promptOptimize.notifyDraftChanged();
               updateAtQuery(e.target.value, e.target.selectionStart);
               updateHashQuery(e.target.value, e.target.selectionStart);
             }}
@@ -3230,6 +3243,12 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 <path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7" />
               </svg>
             </button>
+          )}
+          {!compact && sessionId && (
+            <PromptOptimizeButton
+              controller={promptOptimize}
+              canOptimize={isOptimizablePrompt(value) && !isStreaming}
+            />
           )}
           <button
             type="button"

@@ -1394,6 +1394,7 @@ export function ChatWindow({ session, workspaceKind, searchTarget, onSearchTarge
       contextUsage={contextUsage}
       compactionLimits={compactionLimits}
       sessionStats={sessionStats}
+      sessionId={session?.id ?? null}
     />
   );
 
