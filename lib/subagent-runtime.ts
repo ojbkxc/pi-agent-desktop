@@ -492,7 +492,9 @@ export function createSubagentController(
         isolatedWorktree = await addWorktree(parent.cwd, `pi-web-agent-${randomUUID()}`);
       }
       const childCwd = isolatedWorktree?.path ?? parent.cwd;
-      const inheritContext = profile.inheritContext;
+      // A caller (e.g. the ralph loop's inheritContext:false) overrides the profile default;
+      // the merge had collapsed this to profile-only, silently re-enabling inheritance.
+      const inheritContext = request.inheritContext ?? profile.inheritContext;
       // `parseProfileFile` already floors a positive profile `max_turns`, so it is an integer or absent.
       const turnLimit = profile.maxTurns;
 
@@ -584,7 +586,6 @@ export function createSubagentController(
         modelRuntime: parentModelRuntime,
         settingsManager,
         resourceLoaderOptions: {
-          noExtensions: !profile.loadExtensions,
           noSkills: !profile.loadSkills,
           // 团队成员与普通会话加载同一批技能：额外接上 cc-haha 的用户级技能根。技能被 profile
           // 关掉时（含极简档 lean）不传，避免绕过 noSkills 反而多加载。

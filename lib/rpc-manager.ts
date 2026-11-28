@@ -15,7 +15,6 @@ import { invalidateModelsCache } from "./models-cache";
 import { invalidateModelRuntimeWithExtensions } from "./model-runtime";
 import { resolveVisibleModels, selectInitialModelScope } from "./model-scope";
 import { findDeferredModel, findDeferredStartupModel, rememberProviderModels } from "./deferred-provider-models";
-import { isBlockingExtensionUiRequest } from "./extension-ui-queue";
 import {
   createProjectCommandBashExtension,
   createProjectCommandBashOperations,
@@ -121,7 +120,6 @@ import {
 } from "./chat-workspace";
 import { appendChatUnlock, readChatUnlocked } from "./chat-unlock";
 import { saveAttachedFilesToFolder } from "./chat-attachment-files";
-import { splitAttachedFiles } from "./chat-attachments";
 import { deriveSessionPolicy, type SessionPolicy } from "./session-policy";
 import { chatInstructionsSection, readChatSettings, resolveChatStartDefaults } from "./chat-settings";
 import { ChatFileGrants, isNetworkExposedServer } from "./chat-file-access";
@@ -214,30 +212,6 @@ function agentRunOutcome(event: AgentEvent): AgentRunOutcome {
   }
   return { status: "done" };
 }
-
-/**
- * A prompt parked while a manual compaction runs. pi's SDK refuses prompts then
- * ("Cannot submit a prompt while compaction is in progress"), so the wrapper
- * holds the submission and flushes it FIFO at compaction end, as pi's TUI
- * `compactionQueuedMessages` does (interactive-mode.js).
- */
-type ParkedPrompt = {
-  message: string;
-  images?: Array<{ type: "image"; data: string; mimeType: string }>;
-  /** The composer's steer / followUp; undefined: sent as a fresh prompt, parked as steer (the TUI's Enter). */
-  streamingBehavior?: "steer" | "followUp";
-  /** Settles the admission's `pendingPromptCount` (idempotent): on delivery, recall, Stop or a failed send. */
-  settle: () => void;
-  /** A flush is waiting for its admission; it stays a queue row (Recall, Stop) until then. */
-  delivering?: boolean;
-};
-
-/** What Recall and Stop hand back to the composer: the texts by queue, and the parked prompts' images. */
-type RecalledPrompts = {
-  steering: string[];
-  followUp: string[];
-  images?: Array<{ data: string; mimeType: string }>;
-};
 
 type PendingUiResponse = {
   resolve: (response: ExtensionUiResponse) => void;
@@ -489,11 +463,6 @@ function isCompactionInProgressError(error: unknown): boolean {
   return error instanceof Error && /compaction is in progress/i.test(error.message);
 }
 
-/** pi's "Cannot submit a prompt while compaction is in progress" rejection. */
-function isCompactionInProgressError(error: unknown): boolean {
-  return error instanceof Error && /compaction is in progress/i.test(error.message);
-}
-
 // ============================================================================
 // AgentSessionWrapper
 // Wraps AgentSession with the same interface the rest of the app expects
@@ -518,8 +487,6 @@ export class AgentSessionWrapper {
   // Prompts waiting for the running compaction to finish (ParkedPrompt above).
   private parkedDuringCompaction: ParkedPrompt[] = [];
   private pendingPromptPreview: { text: string; timestamp: number } | null = null;
-  // Prompts waiting for the running compaction to finish (ParkedPrompt above).
-  private parkedDuringCompaction: ParkedPrompt[] = [];
   private activeMutatingCommands = 0;
   private sessionReplacement: "fork" | "clone" | null = null;
   private agentRunNeedsCompletion = false;

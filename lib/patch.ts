@@ -43,9 +43,6 @@ export function parseUnifiedPatch(text: string): SplitDiffFile[] | null {
   // file header — checking for headers there splits one file into bogus extras.
   let hunkOldRemaining = 0;
   let hunkNewRemaining = 0;
-  // Where the current file's previous hunk ends, from its @@ header: a hunk
-  // starting further on leaves out the unchanged lines in between.
-  let prevHunkEnd: { old: number; new: number } | null = null;
   let removed: PendingChangeLine[] = [];
   let added: PendingChangeLine[] = [];
 

@@ -153,7 +153,12 @@ export async function searchSessionContents(
     // title hit is a fallback only when the transcript has no match.
     if (!found && !signal.aborted && Date.now() < deadline) {
       const title = session.name || session.firstMessage || "";
-      const titleHit = matcher.exec(title);
+      let titleHit: RegExpExecArray | null = null;
+      for (const matcher of matchers) {
+        const candidate = matcher.exec(title);
+        if (!candidate) { titleHit = null; break; }
+        if (!titleHit || candidate.index < titleHit.index) titleHit = candidate;
+      }
       if (titleHit) {
         response.results.push({
           session,
