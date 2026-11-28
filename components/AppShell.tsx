@@ -3578,6 +3578,12 @@ export function AppShell() {
         projectTrust={projectTrust}
         onOpenTrustDialog={openProjectTrustDialog}
         onProjectTrustChanged={handleProjectTrustChanged}
+        onOpenSession={(sessionId) => {
+          // 点 Keepalive 详情里的会话 id：先关设置弹窗，再打开该会话。
+          setSettingsSection(null);
+          setModelsRefreshKey((key) => key + 1);
+          void handleOpenSession(sessionId);
+        }}
       />
     )}
     {/* After Settings, so it opens above it (z-index 1100 over 1000) when Settings › MCP asks for it. */}

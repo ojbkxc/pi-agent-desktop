@@ -8390,6 +8390,70 @@ span.linenumber {
   color: var(--text-muted);
 }
 
+/* Keepalive settings: the collapsible running / interrupted / history detail
+   block (Settings › General › Keepalive). Reuses the autofix-rounds list chrome
+   above; only the toggle, section titles, session links and history rows are new. */
+.keepalive-detail {
+  margin-top: 12px;
+}
+
+.keepalive-detail > summary {
+  cursor: pointer;
+  font-size: var(--fs-small);
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.keepalive-detail-body {
+  margin-top: 6px;
+}
+
+.keepalive-detail-section + .keepalive-detail-section {
+  margin-top: 12px;
+}
+
+.keepalive-detail-title {
+  margin: 0 0 4px;
+  font-size: var(--fs-small);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.keepalive-session-link {
+  display: block;
+  width: 100%;
+  padding: 2px 4px;
+  margin: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--accent);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.keepalive-session-link:hover {
+  text-decoration: underline;
+}
+
+.keepalive-history-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.keepalive-history-kind {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.keepalive-history-detail {
+  color: var(--text);
+  word-break: break-word;
+}
+
 .autofix-last-error {
   margin: 6px 0 0;
   overflow: hidden;

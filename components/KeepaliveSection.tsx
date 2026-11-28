@@ -5,6 +5,7 @@ import { useI18n } from "@/hooks/useI18n";
 import type { KeepaliveStatus } from "@/lib/keepalive/types";
 import { ConfigButton, ConfigSwitch } from "./SettingsUi";
 import { formatDurationHuman } from "@/lib/format-units";
+import { formatRelativeTime } from "@/lib/i18n/format";
 
 /**
  * Settings › General › 挂机保活。
@@ -35,8 +36,8 @@ function formatDuration(ms: number | null): string | null {
   return formatDurationHuman(ms);
 }
 
-export function KeepaliveSection() {
-  const { t } = useI18n();
+export function KeepaliveSection({ onOpenSession }: { onOpenSession?: (sessionId: string) => void }) {
+  const { t, locale } = useI18n();
   const [status, setStatus] = useState<KeepaliveStatus | null>(null);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -129,6 +130,12 @@ export function KeepaliveSection() {
   const interrupted = status?.interrupted?.sessionIds?.length ?? 0;
   const resumeCount = status?.resume?.resumed?.length ?? 0;
   const resumeAt = status?.resume?.lastAt ?? null;
+  // 展开详情用的原始列表：接口缺字段一律兜底成空数组，绝不在可选链后深访
+  // status 子对象（KeepaliveSection.shape.test.mjs 钉住这条防 TypeError 整页崩）。
+  const interruptedSnapshot = status?.interrupted;
+  const interruptedSessionIds = interruptedSnapshot?.sessionIds ?? [];
+  const runningSessionIds = status?.runningSessionIds ?? [];
+  const history = status?.history ?? [];
 
   const statusHint = (() => {
     if (!status) return t("settings.keepaliveLoading");
@@ -260,6 +267,70 @@ export function KeepaliveSection() {
           </span>
         </div>
       </div>
+
+      {(runningSessionIds.length > 0 || interruptedSessionIds.length > 0 || history.length > 0) && (
+        <details className="keepalive-detail">
+          <summary className="scheduled-inline">{t("settings.keepaliveDetailToggle")}</summary>
+          <div className="keepalive-detail-body">
+            {runningSessionIds.length > 0 && (
+              <section className="keepalive-detail-section">
+                <h4 className="keepalive-detail-title">
+                  {t("settings.keepaliveRunningTitle", { count: String(runningSessionIds.length) })}
+                </h4>
+                <ul className="autofix-rounds">
+                  {runningSessionIds.map((sessionId) => (
+                    <li key={sessionId} className="autofix-round">
+                      <button
+                        type="button"
+                        className="keepalive-session-link"
+                        onClick={() => onOpenSession?.(sessionId)}
+                      >
+                        <span className="scheduled-mono">{sessionId}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            {interruptedSessionIds.length > 0 && (
+              <section className="keepalive-detail-section">
+                <h4 className="keepalive-detail-title">
+                  {t("settings.keepaliveInterruptedTitle", { count: String(interruptedSessionIds.length) })}
+                </h4>
+                <ul className="autofix-rounds">
+                  {interruptedSessionIds.map((sessionId) => (
+                    <li key={sessionId} className="autofix-round">
+                      <button
+                        type="button"
+                        className="keepalive-session-link"
+                        onClick={() => onOpenSession?.(sessionId)}
+                      >
+                        <span className="scheduled-mono">{sessionId}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            {history.length > 0 && (
+              <section className="keepalive-detail-section">
+                <h4 className="keepalive-detail-title">
+                  {t("settings.keepaliveHistoryTitle", { count: String(history.length) })}
+                </h4>
+                <ul className="autofix-rounds">
+                  {history.map((event, index) => (
+                    <li key={`${event.kind}-${event.at}-${index}`} className="autofix-round keepalive-history-row">
+                      <span className="scheduled-mono keepalive-history-kind">{event.kind}</span>
+                      <span className="scheduled-inline">{formatRelativeTime(event.at, locale)}</span>
+                      <span className="scheduled-inline keepalive-history-detail">{event.detail}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+          </div>
+        </details>
+      )}
 
       {outcome && (
         <p

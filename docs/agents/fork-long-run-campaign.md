@@ -1,8 +1,10 @@
 # 长时自主「项目战役」runner（fork-long-run-campaign）
 
-> **状态：设计（未实现）。** 本文是「自动帮我做项目、几天几夜」诉求的**第一阶段落地设计**，
+> **状态：已实现。** 本文是「自动帮我做项目、几天几夜」诉求的**实现说明**，
 > 在现有「自动修 Bug」引擎（`lib/autofix/**`）之上扩展，**不是**新造一套调度框架。
-> 文中标「新增」的文件/字段尚不存在，标「复用」的均为当前已实现代码（带 file:line）。
+> 文中标「已落地」的文件/字段均已实现（`lib/campaign/**`、`app/api/campaigns/**`、
+> `components/Campaign*.tsx`、`instrumentation-node.ts` 的 `startCampaignSweep()`），
+> 标「复用」的均为当前已实现代码（带 file:line）。
 > 实现时以代码为准；若与本文冲突，改本文，不改已验证的行为。
 
 ## 0. 目标与非目标
@@ -22,7 +24,7 @@ acceptance、跑完一项落下检查点再跑下一项」。autofix 今天已�
 **明确不做**（见 §11）：dsh 的 Source/Trigger/Eval/Mandate 事件驱动域（需先补入站鉴权，全仓
 无 webhook，见 `docs/agents/fork-super-agent.md:130-133`）；跨 provider 自动换模型；进程内沙箱。
 
-## 1. 数据模型（新增 `lib/campaign/types.ts`）
+## 1. 数据模型（已落地 `lib/campaign/types.ts`）
 
 纯类型 + 纯判定，客户端可 import（不含 `node:fs`），照 `lib/autofix/types.ts:1-14` 的约定。
 
@@ -96,7 +98,7 @@ interface CampaignItem {
 可执行的 `verifyCommand`（例如 `npm test -- items/foo` 或专项脚本）。`acceptance` 仅作展示
 与未来裁判兜底（复用 `lib/goal/goal-judge.ts` 的独立模型思路，P2+）。
 
-## 2. runner 循环与终态（新增 `lib/campaign/runner.ts`；复用 `lib/autofix/verify.ts`）
+## 2. runner 循环与终态（已落地 `lib/campaign/runner.ts`；复用 `lib/autofix/verify.ts`）
 
 驱动结构与 `lib/autofix/runner.ts:220-372` 同形，差异只在「逐项」：
 
@@ -154,7 +156,7 @@ Stop / abort）、`paused`（成本闸 / 跨天间隔到点后主动让出 / 用
 **防双驱动**（本仓踩过多次）：与 goal 同口径——「跑完立刻续」由 runner 自己负责；「到点续」由
 repeat tick 在投递前先把 `nextRunAt` 推到下一档（`goal-repeat.ts:84-92`），两边只留一个驱动者。
 
-## 5. 成本闸（新增 `lib/campaign/gate.ts`）
+## 5. 成本闸（已落地 `lib/campaign/gate.ts`）
 
 **这是当前最大的缺口**：全仓只有 usage **统计**（`lib/usage-breakdown.ts` 的
 `getUsageCostBreakdown`），没有任何强制闸；goal 的 `budget` 字段只落不下闸
@@ -166,7 +168,7 @@ repeat tick 在投递前先把 `nextRunAt` 推到下一档（`goal-repeat.ts:84-
   session usage），超 `maxTotalCostUsd` → `paused` + Needs You 通知（§8），**不静默继续烧钱**。
 - **默认值**：建议默认 `maxTotalCostUsd` 由创建 UI 必填（无默认），避免用户无感开跑。
 
-## 6. 安全闸（新增 `lib/campaign/gate.ts` + 路由校验）
+## 6. 安全闸（已落地 `lib/campaign/gate.ts` + 路由校验）
 
 与 autofix 的**现状差异**（必须收紧，见差距 #8）：autofix 修复会话以 `skipToolApproval:true`
 运行（`lib/autofix/runner.ts:778-790`），无人值守 shell 全开、无沙箱。campaign 改为：
@@ -209,7 +211,7 @@ P1–P3 单会话逐项推进即可覆盖大多数「单线程也能干」的项
 
 ## 10. 分阶段落地（P1 → P4）
 
-| 阶段 | 内容 | 落点（新增除注明外） | 验证 |
+| 阶段 | 内容 | 落点（P1 已落地，其余为规划） | 验证 |
 |---|---|---|---|
 | **P1** | Campaign/CampaignItem 类型、有序 backlog、逐项 verify、成本闸前置、git 校验、store、sweep 续跑、最简 UI | `lib/campaign/{types,store,runner,prompt,gate}.ts`；`app/api/campaigns/route.ts` + `[id]/route.ts`；`components/CampaignView.tsx`；i18n 进 `lib/i18n/locale-plugins.ts` | 纯 reducer 单测（availableItems/gate/resume 选 K）；store 原子写测试；路由校验（拒无成本闸/非 git）；runner 注入假会话+假 verify；真仓跑 2 项手动验收 |
 | **P2** | 跨天间隔唤醒、每项 git checkpoint、记忆文件、恢复读 `git log` | `lib/campaign/repeat.ts`；`instrumentation-node.ts` 接线；checkpoint 用 `lib/worktree.ts` | kill 进程→重启从第 K 项续而非第 0 项；间隔到点自动推进 |
@@ -255,7 +257,7 @@ P1–P3 单会话逐项推进即可覆盖大多数「单线程也能干」的项
 
 ## 14. 文件级落点小结
 
-- **新增**：`lib/campaign/{types,store,runner,prompt,gate,repeat}.ts`、
+- **已落地（P1）**：`lib/campaign/{types,store,runner,prompt,gate}.ts`、
   `app/api/campaigns/route.ts`、`app/api/campaigns/[id]/route.ts`、
   `components/CampaignView.tsx`、`components/CampaignSidebarRow.tsx`。
 - **复用（不改或最小改）**：`lib/autofix/verify.ts`（`runVerifyCommand`）、

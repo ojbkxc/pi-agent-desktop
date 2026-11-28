@@ -76,6 +76,8 @@ interface Props {
   onOpenTrustDialog?: () => void;
   /** Settings › MCP added a project server, which changed `cwd`'s trust (and may have trusted a fresh folder). */
   onProjectTrustChanged?: (cwd: string, status: ProjectTrustStatus) => void;
+  /** Keepalive › 挂机保活 的会话 id 可点击：关掉设置弹窗并打开该会话。 */
+  onOpenSession?: (sessionId: string) => void;
 }
 
 export function SettingsSectionIcon({ section, size = 16, strokeWidth = 1.8 }: { section: SettingsSection; size?: number; strokeWidth?: number }) {
@@ -395,7 +397,7 @@ function GeneralSettings({
 
           <PinnedSessionsSettings />
 
-          <KeepaliveSection />
+          <KeepaliveSection onOpenSession={onOpenSession} />
 
           <TerminalSettingsSection />
 
@@ -459,6 +461,7 @@ export function SettingsPanel({
   projectTrust,
   onOpenTrustDialog,
   onProjectTrustChanged,
+  onOpenSession,
 }: Props) {
   const { t } = useI18n();
   const [section, setSection] = useState<SettingsSection>(initialSection);
