@@ -1373,30 +1373,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
       });
     },
-    insertQuote(text: string) {
-      const ta = textareaRef.current;
-      if (!ta) {
-        setValue((v) => v + quoteSeparator(v) + text);
-        return;
-      }
-      const start = ta.selectionStart ?? ta.value.length;
-      const end = ta.selectionEnd ?? ta.value.length;
-      const before = ta.value.slice(0, start);
-      const inserted = quoteSeparator(before) + text;
-      const newVal = before + inserted + ta.value.slice(end);
-      valueRef.current = newVal;
-      setValue(newVal);
-      setAtQuery(null);
-      setHashQuery(null);
-      requestAnimationFrame(() => {
-        if (!ta) return;
-        const pos = start + inserted.length;
-        ta.setSelectionRange(pos, pos);
-        ta.focus();
-        ta.style.height = "auto";
-        ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
-      });
-    },
     addImages(files: File[]) {
       processImageFiles(files);
     },
@@ -3318,7 +3294,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 <path d="M21 12a8 8 0 0 1-8 8H5.5a2 2 0 0 1-1.4-3.4A8 8 0 1 1 21 12z" /><path d="M13 8.5v7M9.5 12h7" />
               </svg>
             </button>
-          )}
           )}
           <button
             type="button"
