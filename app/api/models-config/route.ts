@@ -69,6 +69,11 @@ export async function PUT(req: Request) {
     }
     if (error instanceof ModelsConfigReadError) {
       console.error(`[models-config] ${error.message}`);
+      // A dangling symlink is a safe, path-free reason to surface; the raw message
+      // carries the absolute path and stays in the server log.
+      if (error.reason === "dangling-symlink") {
+        return NextResponse.json({ error: "Refused to write a dangling symbolic link." }, { status: 409 });
+      }
       return readErrorResponse(409);
     }
     return NextResponse.json({ error: "Could not save the models configuration.", code: "models-config-write-failed" }, { status: 500 });

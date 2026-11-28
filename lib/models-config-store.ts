@@ -148,9 +148,12 @@ export function getModelsConfigPath(): string {
 
 /** models.json exists but its contents cannot be used, so it must not be replaced. */
 export class ModelsConfigReadError extends Error {
-  constructor(message: string) {
+  /** A machine-readable cause the route may surface without leaking a path (e.g. a dangling link). */
+  readonly reason?: "dangling-symlink";
+  constructor(message: string, reason?: "dangling-symlink") {
     super(message);
     this.name = "ModelsConfigReadError";
+    this.reason = reason;
   }
 }
 
@@ -205,7 +208,7 @@ export function writeModelsConfig(
     try {
       writePath = realpathSync(modelsPath);
     } catch {
-      throw new ModelsConfigReadError(`Failed to write ${modelsPath}: dangling symbolic link`);
+      throw new ModelsConfigReadError(`Failed to write ${modelsPath}: dangling symbolic link`, "dangling-symlink");
     }
   }
   writePrivateFileAtomicSync(writePath, JSON.stringify(normalized, null, 2));

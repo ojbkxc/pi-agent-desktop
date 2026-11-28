@@ -16048,33 +16048,6 @@ html.dark .artifacts-thumb[data-tone="data"] { --tone: #4fc1d6; }
    grow to 44px; the "…" in a session row follows --session-row-height. */
 /* Scoped under .app-sidebar so they outrank the base rules further up. */
 @media (pointer: coarse) {
-  .app-sidebar .session-item { --session-row-height: 44px; }
-  .app-sidebar .sidebar-header-row { height: 44px; }
-  .app-sidebar .sidebar-project-tree-row,
-  .app-sidebar .sidebar-project-tree-row-main,
-  .app-sidebar .sidebar-project-tree-show-more { min-height: 44px; }
-  .app-sidebar .sidebar-project-tree-action,
-  .app-sidebar .sidebar-project-tree-add,
-  .app-sidebar .sidebar-project-tree-menu,
-  .app-sidebar .sidebar-chrome-button {
-    width: 44px;
-    height: 44px;
-  }
-  /* Room for the two 44px project actions that stay visible without hover. */
-  .app-sidebar .sidebar-project-tree-row .sidebar-project-tree-row-main { padding-right: 92px; }
-  .app-topbar .native-toolbar-button { min-width: 44px; min-height: 44px; }
-  /* Fixed over the 48px topbar: 44px tall, still centred on it. */
-  .right-panel-toggle-button {
-    top: 2px;
-    right: 6px;
-    width: 44px !important;
-    min-width: 44px !important;
-    max-width: 44px !important;
-    height: 44px;
-    min-height: 44px;
-  }
-}
-
 /* ==========================================================================
    Public access · phone pairing (components/ServerSection.tsx, app/pair).
    The QR block reuses .relay-qr (dark modules on a white plate); only the
