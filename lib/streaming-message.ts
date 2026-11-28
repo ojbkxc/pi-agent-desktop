@@ -103,8 +103,12 @@ export const FINAL_RATE_TTL_MS = 8_000;
  *
  * `usage.output` is the token count the provider actually billed, and `streamingMs` is
  * the wall clock the stream took — dividing them gives the same number DeepSeek Harness
- * prints as `{tps} tok/s`. Only produced when both are usable: a zero/absurd duration
- * would otherwise turn into an infinite rate.
+ * prints as `{tps} tok/s`. Only produced when both are usable: a zero duration would
+ * otherwise turn into an infinite rate. The gate is `seconds > 0`, the same one dsh's
+ * `SessionStats` uses (`decodeMs > 0 ? … : null`) — no 0.2 s floor. This file once added
+ * a 0.2 s floor here only, while `sessionTotals` accumulated on `stepDecodeMs > 0`; a
+ * sub-200 ms turn then entered the cumulative average but produced no `finalRate`, so
+ * the two readouts disagreed. Aligning both on dsh's `> 0` removes the self-invented gap.
  */
 function finishedTurnRate(
   state: StreamingState,
@@ -114,7 +118,10 @@ function finishedTurnRate(
   // 分母优先用 decode 段（首 token → 末 token），与 DeepSeek Harness 同口径；
   // 老路径/重连没有首 token 时刻时退回整段墙钟（宁可略低，也不要凭空编）。
   const seconds = ((state.decodeMs ?? 0) > 0 ? state.decodeMs! : state.streamingMs) / 1000;
-  if (output <= 0 || !Number.isFinite(seconds) || seconds < 0.2) return undefined;
+  // 与 dsh 的 `decodeMs > 0` 同闸门：只挡「分母为零/不可用」，不设 0.2s 下限。
+  // `sessionTotals` 累计用同样的 `stepDecodeMs > 0`，两处口径一致，<200ms 的快速
+  // 回答既产生 finalRate 也进累计，不再一个有一个没有。
+  if (output <= 0 || !Number.isFinite(seconds) || seconds <= 0) return undefined;
   const tps = output / seconds;
   if (!Number.isFinite(tps) || tps <= 0) return undefined;
   return { tps, at: Date.now() };

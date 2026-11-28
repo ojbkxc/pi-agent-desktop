@@ -233,9 +233,12 @@ export async function runRalphLoop(options: RalphLoopOptions): Promise<RalphResu
       stopReason = "complete";
       break;
     }
-    // worker 说 `STATUS: blocked` 但没给理由（契约允许 `BLOCKER: none`）：那是它的结论，
-    // 不该当成「继续」一路空转到上限。旧实现只认 blocker 文本，实测 5 轮全在空转。
-    if (report.blocked && !report.blocker) {
+    // worker 写了 `STATUS: blocked` 就是它的结论，直接早停——不管 BLOCKER 有没有给理由
+    // （契约允许 `BLOCKER: none`）。旧实现要求 `blocked && !blocker` 才早停，于是 worker
+    // 同时写 `STATUS: blocked` 和 `BLOCKER: <reason>` 时落进下面的「连续同 blocker 重复
+    // 计数」分支，还要再跑 2 轮同 blocker 才停，与「blocked 是 worker 的结论」这一定位
+    // 矛盾。改后：声明 blocked 即停；只有「说 continue 但留了 blocker」才走重复计数。
+    if (report.blocked) {
       stopReason = "blocked";
       break;
     }
